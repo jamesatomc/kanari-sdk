@@ -141,3 +141,19 @@ pub fn get_network_stats() -> NetworkStats {
         Err(_) => NetworkStats::default(),
     }
 }
+
+/// Calculate deployment gas fee with special handling for new accounts
+pub fn calculate_deployment_gas_fee(has_balance: bool) -> u64 {
+    if has_balance {
+        // Normal deployment gas for accounts with balance
+        BASE_GAS_FEE
+    } else {
+        // Free deployment for new accounts (minimal gas)
+        10_000 // 0.00001 KARI
+    }
+}
+
+/// Check if an account qualifies for free deployment
+pub fn qualifies_for_free_deployment(balance: u64) -> bool {
+    balance == 0
+}

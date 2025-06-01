@@ -68,7 +68,7 @@ impl Transaction {
     pub fn is_vm_transaction(&self) -> bool {
         if let Some(data) = &self.data {
             if let Ok(data_str) = std::str::from_utf8(data) {
-                return data_str.starts_with("VM:") || data_str.contains("::");
+                return data_str.starts_with("VM:") || data_str.starts_with("VM_MODULE");
             }
         }
         false
@@ -78,7 +78,7 @@ impl Transaction {
     pub fn is_vm_module_deployment(&self) -> bool {
         if let Some(data) = &self.data {
             if let Ok(data_str) = std::str::from_utf8(data) {
-                return data_str.starts_with("VM_MODULE:");
+                return data_str.starts_with("VM_MODULE");
             }
         }
         false
@@ -95,6 +95,36 @@ impl Transaction {
         } else {
             "TOKEN_TRANSFER"
         }
+    }
+    
+    // Extract VM module information from deployment transaction
+    pub fn get_vm_module_info(&self) -> Option<(String, String)> {
+        if let Some(data) = &self.data {
+            if let Ok(data_str) = std::str::from_utf8(data) {
+                if data_str.starts_with("VM_MODULE_DEPLOYMENT:") {
+                    let parts: Vec<&str> = data_str.split(':').collect();
+                    if parts.len() >= 3 {
+                        return Some((parts[1].to_string(), parts[2].to_string())); // (address, module_name)
+                    }
+                }
+            }
+        }
+        None
+    }
+    
+    // Extract VM function call information
+    pub fn get_vm_function_info(&self) -> Option<(String, String)> {
+        if let Some(data) = &self.data {
+            if let Ok(data_str) = std::str::from_utf8(data) {
+                if data_str.starts_with("VM:") {
+                    let parts: Vec<&str> = data_str.split(':').collect();
+                    if parts.len() >= 3 {
+                        return Some((parts[1].to_string(), parts[2].to_string())); // (module_id, function)
+                    }
+                }
+            }
+        }
+        None
     }
 }
 

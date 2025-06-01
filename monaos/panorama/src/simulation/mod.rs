@@ -7,6 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::str::FromStr;
+use sha3::Digest; // Add this import
+use common::get_main_wallet; // Add this import
 
 use mona_blockchain::block::{Block, Transaction};
 use mona_blockchain::blockchain::{save_blockchain, BALANCES, BLOCKCHAIN_DATA, normalize_address};
@@ -16,6 +18,7 @@ use mona_types::kari::{KARI, KA_PER_KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_R
 use crate::utils::{update_pending_transaction_count, update_last_block_time, calculate_gas_fee, format_gas_fee_display};
 use crate::staking::{load_staking_state, process_rewards, is_validator};
 use crate::node::{NodeConfig, start_node, stop_node, propagate_block, get_peer_count};
+use mona_vm::{execute_vm_transaction, convert_to_vm_transaction}; // Remove VM_STATE as it's unused
 
 pub mod create_genesis_block;
 use create_genesis_block::create_genesis_block;
@@ -45,15 +48,147 @@ pub fn add_pending_transaction(transaction: Transaction) -> bool {
     }
 }
 
-// Improved function to ensure transactions are committed properly
+// Enhanced function to handle VM transactions
+pub fn process_vm_transaction(
+    module_id: &str,
+    function: &str,
+    args: Vec<Vec<u8>>,
+    sender_address: &str,
+    gas_budget: u64,
+    password: Option<&str>,
+    tx: &mpsc::Sender<String>
+) -> Result<Transaction, String> {
+    // Create VM transaction
+    let vm_tx = mona_vm::VMTransaction::new(
+        sender_address.to_string(),
+        module_id.to_string(),
+        function.to_string(),
+        args,
+        gas_budget
+    );
+    
+    // Sign if password provided
+    let vm_tx = if let Some(pwd) = password {
+        // Create payload for signing
+        let mut hasher = sha3::Sha3_256::new();
+        hasher.update(sender_address.as_bytes());
+        hasher.update(module_id.as_bytes());
+        hasher.update(function.as_bytes());
+        hasher.update(gas_budget.to_le_bytes());
+        let payload = hasher.finalize();
+        
+        // Sign with wallet if available
+        if let Some(wallet_addr) = get_main_wallet() {
+            if let Ok(wallet) = mona_crypto::load_wallet(&wallet_addr, pwd) {
+                if let Ok(signature) = wallet.sign(&payload, pwd) {
+                    vm_tx.with_signature(signature, wallet_addr.to_string()) // Fix: convert to String
+                } else {
+                    vm_tx
+                }
+            } else {
+                vm_tx
+            }
+        } else {
+            vm_tx
+        }
+    } else {
+        vm_tx
+    };
+    
+    // Execute VM transaction
+    match execute_vm_transaction(&vm_tx) {
+        Ok(result) => {
+            // Create blockchain transaction for VM call
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+                
+            let vm_data = format!("VM:{}:{}:{}", module_id, function, gas_budget);
+            
+            let blockchain_tx = Transaction {
+                transaction_id: vm_tx.tx_id.clone(),
+                sender: parse_address(sender_address).map_err(|e| e.to_string())?,
+                receiver: parse_address(sender_address).map_err(|e| e.to_string())?, // VM calls are self-transactions
+                amount: 1, // Set minimal amount of 1 KA for VM transactions
+                gas_fee: result["gas_used"].as_u64().unwrap_or(gas_budget),
+                timestamp,
+                signature: vm_tx.signature.unwrap_or_default(),
+                data: Some(vm_data.into_bytes()),
+            };
+            
+            // Add to pending transactions
+            if add_pending_transaction(blockchain_tx.clone()) {
+                let tx_json = json!({
+                    "event": "vm_transaction_created",
+                    "transaction": {
+                        "id": blockchain_tx.transaction_id,
+                        "type": "VM_FUNCTION_CALL",
+                        "module_id": module_id,
+                        "function": function,
+                        "sender": sender_address,
+                        "gas_used": blockchain_tx.gas_fee,
+                        "gas_display": format_gas_fee_display(blockchain_tx.gas_fee),
+                        "timestamp": timestamp,
+                        "result": result
+                    },
+                    "status": "pending"
+                }).to_string();
+                
+                let _ = tx.try_send(tx_json);
+                Ok(blockchain_tx)
+            } else {
+                Err("Failed to add VM transaction to blockchain".to_string())
+            }
+        },
+        Err(e) => {
+            let error_json = json!({
+                "event": "vm_transaction_error",
+                "error": e,
+                "details": {
+                    "module_id": module_id,
+                    "function": function,
+                    "sender": sender_address,
+                    "gas_budget": gas_budget
+                }
+            }).to_string();
+            
+            let _ = tx.try_send(error_json);
+            Err(e)
+        }
+    }
+}
+
+// Enhanced process_transfer to handle VM transactions
 pub fn process_transfer(
     from_address: &str,
     to_address: &str,
     amount: u64,
     password: &str,
-    priority_boost: Option<u64>,  // Add optional priority boost
+    priority_boost: Option<u64>,
     tx: &mpsc::Sender<String>
 ) -> Result<Transaction, String> {
+    // Check if this is a VM transaction (contains :: in the address)
+    if to_address.contains("::") {
+        // This is a VM function call
+        let parts: Vec<&str> = to_address.split("::").collect();
+        if parts.len() >= 2 {
+            let module_id = format!("{}::{}", parts[0], parts[1]);
+            let function = parts.get(2).unwrap_or(&"main").to_string();
+            
+            return process_vm_transaction(
+                &module_id,
+                &function,
+                vec![], // No args for simple calls
+                from_address,
+                amount, // Use amount as gas budget
+                Some(password),
+                tx
+            );
+        }
+    }
+    
+    // Regular token transfer logic
     // Parse addresses
     let from = match normalize_address(from_address) {
         Ok(addr) => addr,
@@ -458,16 +593,51 @@ pub fn run_blockchain(
         let transactions = {
             match PENDING_TRANSACTIONS.write() {
                 Ok(mut queue) => {
-                    // Take up to 100000 transactions for this block
                     let mut block_txs = Vec::new();
                     
-                    // Log transaction queue status
                     info!("Processing transaction queue with {} pending transactions", queue.len());
                     
-                    while let Some(tx) = queue.pop_front() {
-                        info!("Including transaction: {} -> {}, amount: {}", 
-                            tx.sender, tx.receiver, tx.amount);
-                        block_txs.push(tx);
+                    while let Some(tx_item) = queue.pop_front() {
+                        // Check if this is a VM transaction and execute it
+                        if tx_item.is_vm_transaction() {
+                            if let Some(vm_tx) = convert_to_vm_transaction(&tx_item) {
+                                match execute_vm_transaction(&vm_tx) {
+                                    Ok(result) => {
+                                        info!("VM transaction executed: {} -> result: {}", 
+                                            vm_tx.tx_id, result["status"]);
+                                        
+                                        // Send VM execution result
+                                        let vm_result_json = json!({
+                                            "event": "vm_transaction_executed",
+                                            "transaction_id": vm_tx.tx_id,
+                                            "module_id": vm_tx.module_id,
+                                            "function": vm_tx.function,
+                                            "result": result,
+                                            "block_index": prev_block.index + 1
+                                        }).to_string();
+                                        
+                                        let _ = tx.try_send(vm_result_json);
+                                    },
+                                    Err(e) => {
+                                        warn!("VM transaction failed: {} - {}", vm_tx.tx_id, e);
+                                        
+                                        let vm_error_json = json!({
+                                            "event": "vm_transaction_failed",
+                                            "transaction_id": vm_tx.tx_id,
+                                            "error": e,
+                                            "block_index": prev_block.index + 1
+                                        }).to_string();
+                                        
+                                        let _ = tx.try_send(vm_error_json);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        info!("Including transaction: {} -> {}, amount: {}, type: {}", 
+                            tx_item.sender, tx_item.receiver, tx_item.amount, tx_item.get_transaction_type());
+                        block_txs.push(tx_item);
+                        
                         if block_txs.len() >= 100000 {
                             break;
                         }
@@ -477,14 +647,12 @@ pub fn run_blockchain(
                         info!("Added {} transactions to current block", block_txs.len());
                     }
                     
-                    // Update the pending transaction count for gas fee calculation
                     update_pending_transaction_count(queue.len());
-                    
                     block_txs
                 },
                 Err(_) => {
                     error!("Failed to lock pending transactions queue");
-                    Vec::new() // Empty vector on error
+                    Vec::new()
                 }
             }
         };

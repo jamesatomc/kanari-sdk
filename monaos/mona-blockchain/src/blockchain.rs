@@ -331,22 +331,42 @@ pub fn get_address_balance(address: &Address) -> Result<u64, BlockchainError> {
 
 // Improved submit_transaction function with better logging
 pub fn submit_transaction(transaction: block::Transaction) -> Result<(), BlockchainError> {
-    // Validate transaction first
-    if transaction.amount == 0 && transaction.get_transaction_type() != "VM_FUNCTION_CALL" && transaction.get_transaction_type() != "VM_MODULE" {
+    // Validate transaction first - Allow VM transactions with amount = 0
+    let tx_type = transaction.get_transaction_type();
+    
+    if transaction.amount == 0 && 
+       tx_type != "VM_FUNCTION_CALL" && 
+       tx_type != "VM_MODULE_DEPLOYMENT" && 
+       tx_type != "MINING" {
         return Err(BlockchainError::Transaction("Invalid transaction amount".to_string()));
     }
 
-    // Check for sufficient balance for non-mining transactions
-    if transaction.get_transaction_type() != "MINING" {
+    // Check for sufficient balance for non-mining and non-VM transactions
+    if tx_type != "MINING" && tx_type != "VM_MODULE_DEPLOYMENT" && tx_type != "VM_FUNCTION_CALL" {
         let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
-        if sender_balance < transaction.amount {
+        let total_cost = transaction.amount + transaction.gas_fee;
+        if sender_balance < total_cost {
             return Err(BlockchainError::InsufficientFunds(
-                format!("Insufficient balance: {} < {}", sender_balance, transaction.amount)
+                format!("Insufficient balance: {} < {} (amount: {} + gas: {})", 
+                    sender_balance, total_cost, transaction.amount, transaction.gas_fee)
+            ));
+        }
+    } else if tx_type == "VM_MODULE_DEPLOYMENT" {
+        // For VM module deployment, allow even with zero balance but warn
+        let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
+        if sender_balance < transaction.gas_fee {
+            log::warn!("VM module deployment proceeding with insufficient balance: {} < {}", sender_balance, transaction.gas_fee);
+            // Don't return error - allow deployment to proceed
+        }
+    } else if tx_type == "VM_FUNCTION_CALL" {
+        // For VM function calls, only check gas fee
+        let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
+        if sender_balance < transaction.gas_fee {
+            return Err(BlockchainError::InsufficientFunds(
+                format!("Insufficient balance for gas: {} < {}", sender_balance, transaction.gas_fee)
             ));
         }
     }
-
-    let tx_type = transaction.get_transaction_type();
     
     log::info!(
         "Submitting transaction: {} (type: {}, id: {})",
@@ -370,6 +390,10 @@ pub fn submit_transaction(transaction: block::Transaction) -> Result<(), Blockch
                     }
                 }
             }
+        } else if tx_type == "VM_MODULE_DEPLOYMENT" {
+            if let Some((address, module_name)) = transaction.get_vm_module_info() {
+                log::info!("VM module deployment: {} at address: {}", module_name, address);
+            }
         }
     }
     
@@ -390,42 +414,38 @@ pub fn submit_transaction(transaction: block::Transaction) -> Result<(), Blockch
     Ok(())
 }
 
-// Enhanced function to prioritize VM function calls
+// Enhanced function to prioritize VM function calls and deployments
 pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> {
     let mut result = Vec::new();
     
-    // Try to get pending transactions
     if let Ok(mut queue) = PENDING_TRANSACTIONS.lock() {
-        // Log queue size for debugging
         info!("Processing pending transaction queue, size: {}", queue.len());
         
-        // First pass: prioritize modules, then VM function calls
         let mut vm_module_deployments = VecDeque::new();
         let mut vm_function_calls = VecDeque::new();
         let mut regular_txs = VecDeque::new();
         
-        // Scan through all transactions to sort by priority
+        // Sort transactions by priority
         while let Some(tx) = queue.pop_front() {
-            // Check transaction type and prioritize accordingly
-            if let Some(data) = &tx.data {
-                if let Ok(data_str) = std::str::from_utf8(data) {
-                    // Highest priority - module deployments
-                    if data_str.starts_with("VM_MODULE:") {
-                        info!("Found VM module deployment transaction: {}", tx.transaction_id);
-                        vm_module_deployments.push_back(tx);
-                        continue;
+            match tx.get_transaction_type() {
+                "VM_MODULE_DEPLOYMENT" => {
+                    info!("Found VM module deployment transaction: {}", tx.transaction_id);
+                    if let Some((address, module_name)) = tx.get_vm_module_info() {
+                        info!("  Module: {} at address: {}", module_name, address);
                     }
-                    // Medium priority - VM function calls
-                    else if data_str.starts_with("VM:") || data_str.contains("::") {
-                        info!("Found VM function call transaction: {}", tx.transaction_id);
-                        vm_function_calls.push_back(tx);
-                        continue;
+                    vm_module_deployments.push_back(tx);
+                },
+                "VM_FUNCTION_CALL" => {
+                    info!("Found VM function call transaction: {}", tx.transaction_id);
+                    if let Some((module_id, function)) = tx.get_vm_function_info() {
+                        info!("  Calling: {}::{}", module_id, function);
                     }
+                    vm_function_calls.push_back(tx);
+                },
+                _ => {
+                    regular_txs.push_back(tx);
                 }
             }
-            
-            // Lowest priority - regular transactions
-            regular_txs.push_back(tx);
         }
         
         // Add VM module deployments first (highest priority)
@@ -446,22 +466,18 @@ pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> 
         
         // Finally add regular transactions (lowest priority)
         while !regular_txs.is_empty() && result.len() < max_count {
-            if let Some(tx) = regular_txs.pop_front() {
-                result.push(tx);
-            }
+            result.push(regular_txs.pop_front().unwrap());
         }
         
-        // Return any unused transactions back to the queue in order of priority
+        // Return unused transactions to queue in priority order
         for tx in vm_module_deployments {
-            queue.push_front(tx); // Add back to front for highest priority
+            queue.push_front(tx);
         }
-        
         for tx in vm_function_calls {
-            queue.push_back(tx); // Medium priority
+            queue.push_back(tx);
         }
-        
         for tx in regular_txs {
-            queue.push_back(tx); // Lowest priority
+            queue.push_back(tx);
         }
         
         info!("Selected {} transactions for next block ({} remain in queue)", 
