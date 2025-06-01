@@ -312,9 +312,7 @@ pub fn handle_move_command() {
 
             // ดึงค่า password
             let password = get_param_value(&args, "--password");
-            
-            // Check for .mvsm file path if provided
-            let mvsm_path = get_param_value(&args, "--mvsm-file");
+    
 
             Command::Call(Call {
                 module_id,
@@ -323,7 +321,6 @@ pub fn handle_move_command() {
                 gas_budget,
                 address,
                 password,
-                mvsm_file: mvsm_path,
             })
         },
         Some("sandbox") => Command::Sandbox {

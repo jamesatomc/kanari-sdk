@@ -45,9 +45,14 @@ impl RocksDBStorage {
         let mut backoff = Duration::from_millis(100);
         
         info!("Initializing RocksDB at: {:?}", path);
+        
+        // Create parent directories if they don't exist
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        
         let mut attempts = 0;
         while attempts < MAX_RETRIES {
-            // Cleanup any stale lock files
             let lock_path = path.join("LOCK");
             if lock_path.exists() {
                 debug!("Found stale lock file, attempting to remove");
@@ -55,20 +60,22 @@ impl RocksDBStorage {
                     Ok(_) => info!("Successfully removed stale lock file"),
                     Err(e) => {
                         warn!("Failed to remove lock file: {}", e);
-                        // Continue anyway, the DB open might succeed
                     }
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
 
-            // Configure and open DB with optimized settings
             let mut opts = Options::default();
             opts.create_if_missing(true);
             opts.set_keep_log_file_num(1);
             opts.set_max_open_files(10);
             opts.set_use_fsync(true);
-            opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB
+            opts.set_write_buffer_size(64 * 1024 * 1024);
             opts.set_compaction_style(rocksdb::DBCompactionStyle::Level);
+            
+            // Add error recovery options
+            opts.set_paranoid_checks(true);
+            opts.set_error_if_exists(false);
             
             match DB::open(&opts, &path) {
                 Ok(db) => {
@@ -80,7 +87,7 @@ impl RocksDBStorage {
                     warn!("Failed to open DB (attempt {}/{}): {}", attempts, MAX_RETRIES, e);
                     if attempts < MAX_RETRIES {
                         std::thread::sleep(backoff);
-                        backoff *= 2; // Exponential backoff
+                        backoff = backoff.saturating_mul(2); // Prevent overflow
                     }
                 }
             }
@@ -107,6 +114,13 @@ impl Drop for RocksDBStorage {
 
 impl BlockchainStorage for RocksDBStorage {
     fn save_data(&self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {
+        if key.is_empty() {
+            return Err(StorageError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Key cannot be empty"
+            )));
+        }
+        
         debug!("Saving data with key of {} bytes", key.len());
         match self.db.put(key, value) {
             Ok(_) => {
@@ -121,6 +135,13 @@ impl BlockchainStorage for RocksDBStorage {
     }
 
     fn load_data(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
+        if key.is_empty() {
+            return Err(StorageError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Key cannot be empty"
+            )));
+        }
+        
         debug!("Loading data with key of {} bytes", key.len());
         match self.db.get(key) {
             Ok(Some(data)) => {
@@ -171,10 +192,22 @@ impl BlockchainStorage for RocksDBStorage {
         let mut result = Vec::new();
         
         let iter = self.db.prefix_iterator(prefix);
+        let mut count = 0;
+        const MAX_KEYS: usize = 10000; // Prevent memory exhaustion
+        
         for item in iter {
+            if count >= MAX_KEYS {
+                warn!("Reached maximum key limit ({}), truncating results", MAX_KEYS);
+                break;
+            }
+            
             match item {
                 Ok((key, _)) => {
-                    result.push(key.to_vec());
+                    // Ensure the key actually starts with the prefix
+                    if key.starts_with(prefix) {
+                        result.push(key.to_vec());
+                        count += 1;
+                    }
                 },
                 Err(e) => {
                     error!("Error iterating over keys: {}", e);

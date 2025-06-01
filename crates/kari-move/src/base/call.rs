@@ -62,7 +62,6 @@ pub struct Call {
     /// Password for wallet to sign transaction
     #[clap(long, help = "Password for wallet to sign transaction")]
     pub password: Option<String>,
-    pub mvsm_file: Option<String>,
 }
 
 impl Call {

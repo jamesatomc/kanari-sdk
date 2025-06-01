@@ -28,6 +28,10 @@ use mona_blockchain::blockchain::{BLOCKCHAIN_DATA, submit_transaction};
 use lazy_static::lazy_static;
 use mona_crypto::verify_signature;
 
+// Add imports for secure storage
+use mona_storage::{BlockchainStorage, RocksDBStorage, StorageError};
+use common::get_kari_dir;
+
 // VM Transaction State Manager - Make it public so it can be accessed by the RPC API
 lazy_static! {
     pub static ref VM_STATE: Arc<RwLock<VMState>> = {
@@ -160,99 +164,72 @@ impl VMTransaction {
     }
 }
 
-// Add new function to load module from .mvsm file
-fn load_module_from_mvsm(module_id: &str, mvsm_path: Option<&str>) -> Result<VMModule, String> {
-    // Find .mvsm file - either from provided path or by searching in standard locations
-    let mvsm_file_path = match mvsm_path {
-        Some(path) => PathBuf::from(path),
-        None => {
-            // Extract address and module name from module_id
-            let parts: Vec<&str> = module_id.split("::").collect();
-            if parts.len() != 2 {
-                return Err(format!("Invalid module ID format: {}", module_id));
-            }
-            
-            let address = parts[0].trim_start_matches("0x");
-            let module_name = parts[1];
-            
-            // Check in current directory first
-            let mut paths_to_try = vec![
-                // Current project build/mvsm directory
-                PathBuf::from(format!("./build/mvsm/{}_{}.mvsm", address, module_name)),
-                
-                // Absolute path in case module was published from different directory
-                PathBuf::from(format!("D:/Work/kanari-sdk/example_move/token/build/mvsm/{}_{}.mvsm", address, module_name)),
-                
-                // Global mvsm directory (common location)
-                PathBuf::from(format!("D:/Work/kanari-sdk/build/mvsm/{}_{}.mvsm", address, module_name))
-            ];
-            
-            // Also try with just last 16 chars of address (shortened form)
-            if address.len() > 16 {
-                let short_addr = &address[address.len() - 16..];
-                paths_to_try.push(PathBuf::from(format!("./build/mvsm/{}_{}.mvsm", short_addr, module_name)));
-                paths_to_try.push(PathBuf::from(format!("D:/Work/kanari-sdk/example_move/token/build/mvsm/{}_{}.mvsm", short_addr, module_name)));
-                paths_to_try.push(PathBuf::from(format!("D:/Work/kanari-sdk/build/mvsm/{}_{}.mvsm", short_addr, module_name)));
-            }
-            
-            // Find first path that exists
-            match paths_to_try.into_iter().find(|p| p.exists()) {
-                Some(path) => path,
-                None => return Err(format!("MVSM file not found for module: {}", module_id)),
-            }
+// Remove duplicate load_module_from_mvsm function and keep only the secure storage version
+fn load_module_from_mvsm(module_id: &str, _mvsm_path: Option<&str>) -> Result<VMModule, String> {
+    let kari_dir = get_kari_dir();
+    let db_path = kari_dir.join("storage").join("mvsm_db");
+    let storage = RocksDBStorage::new(db_path)
+        .map_err(|e| format!("Failed to initialize MVSM storage: {}", e))?;
+    
+    let parts: Vec<&str> = module_id.split("::").collect();
+    if parts.len() != 2 {
+        return Err(format!("Invalid module ID format: {}", module_id));
+    }
+    
+    let address = parts[0].trim_start_matches("0x");
+    let module_name = parts[1];
+    
+    let storage_keys = vec![
+        format!("{}_{}", address, module_name),
+        format!("0x{}_{}", address, module_name),
+        module_id.to_string(),
+    ];
+    
+    log::info!("Loading MVSM module from secure storage: {}", module_id);
+    
+    let mut module_data = None;
+    for key in storage_keys {
+        if let Ok(Some(data)) = storage.load_data(key.as_bytes()) {
+            module_data = Some(data);
+            log::debug!("Found module data with key: {}", key);
+            break;
         }
-    };
+    }
     
-    println!("Trying to load MVSM file from: {}", mvsm_file_path.display());
+    let file_content = module_data
+        .ok_or_else(|| format!("MVSM module not found in storage: {}", module_id))?;
     
-    // Read file content
-    let file_content = match std::fs::read(&mvsm_file_path) {
-        Ok(content) => content,
-        Err(e) => return Err(format!("Failed to read MVSM file: {}", e)),
-    };
-    
-    // Split metadata and bytecode
     let content_str = String::from_utf8_lossy(&file_content);
     let parts: Vec<&str> = content_str.split("\n===BYTECODE===\n").collect();
     
     if parts.len() != 2 {
-        return Err("Invalid MVSM file format".to_string());
+        return Err("Invalid MVSM data format in storage".to_string());
     }
     
-    // Parse metadata
-    let metadata: serde_json::Value = match serde_json::from_str(parts[0]) {
-        Ok(json) => json,
-        Err(e) => return Err(format!("Failed to parse MVSM metadata: {}", e)),
-    };
+    let metadata: serde_json::Value = serde_json::from_str(parts[0])
+        .map_err(|e| format!("Failed to parse MVSM metadata: {}", e))?;
     
-    // Extract address
     let address_str = metadata["address"].as_str()
         .ok_or_else(|| "Missing address in MVSM metadata".to_string())?;
     let address = AccountAddress::from_hex_literal(address_str)
         .or_else(|_| AccountAddress::from_hex(address_str.trim_start_matches("0x")))
         .map_err(|e| format!("Invalid address format: {}", e))?;
     
-    // Extract module name
     let name = metadata["name"].as_str()
         .ok_or_else(|| "Missing module name in MVSM metadata".to_string())?
         .to_string();
     
-    // Extract public functions
     let public_functions = metadata["public_functions"].as_array()
         .map(|funcs| funcs.iter()
             .filter_map(|f| f.as_str().map(|s| s.to_string()))
             .collect())
         .unwrap_or_default();
     
-    // Extract bytecode
     let bytecode = parts[1].as_bytes().to_vec();
-    
-    // Extract deploy block height
     let deploy_block_height = metadata["deploy_block_height"]
         .as_u64()
         .unwrap_or(0) as u32;
     
-    // Create VMModule
     let vm_module = VMModule::new(
         address,
         name,
@@ -261,8 +238,7 @@ fn load_module_from_mvsm(module_id: &str, mvsm_path: Option<&str>) -> Result<VMM
         deploy_block_height,
     );
     
-    println!("Successfully loaded module {} from MVSM file", vm_module.module_id);
-    
+    log::info!("Successfully loaded module {} from secure storage", vm_module.module_id);
     Ok(vm_module)
 }
 
@@ -451,32 +427,16 @@ pub struct Publish {
     pub signer_address: Option<String>,
 }
 
-// Add new function to serialize module to .mvsm file
+// Simplified serialize_module_to_mvsm function
 fn serialize_module_to_mvsm(
     module: &VMModule,
     package_name: &str,
-    output_path: Option<&PathBuf>
-) -> anyhow::Result<PathBuf> {
-    // Create output directory structure
-    let mut output_dir = match output_path {
-        Some(path) => path.clone(),
-        None => {
-            let mut path = std::env::current_dir()?;
-            path.push("build");
-            path.push("mvsm");
-            path
-        }
-    };
+    _output_path: Option<&PathBuf>
+) -> anyhow::Result<String> {
+    let kari_dir = get_kari_dir();
+    let db_path = kari_dir.join("storage").join("mvsm_db");
+    let storage = RocksDBStorage::new(db_path)?;
     
-    if !output_dir.exists() {
-        std::fs::create_dir_all(&output_dir)?;
-    }
-    
-    // Create filename using address and module name
-    let filename = format!("{}_{}.mvsm", module.address.to_hex(), module.name);
-    output_dir.push(&filename);
-    
-    // Prepare module metadata for serialization
     let module_data = serde_json::json!({
         "module_id": module.module_id.clone(),
         "address": format!("0x{}", module.address.to_hex()),
@@ -492,16 +452,18 @@ fn serialize_module_to_mvsm(
             .as_secs(),
     });
     
-    // Combine metadata JSON with bytecode in a simple format
     let mut file_content = module_data.to_string().into_bytes();
-    // Add separator between JSON metadata and bytecode
     file_content.extend_from_slice(b"\n===BYTECODE===\n");
     file_content.extend_from_slice(&module.bytecode);
     
-    // Write to file
-    std::fs::write(&output_dir, file_content)?;
+    let storage_key = format!("{}_{}", module.address.to_hex(), module.name);
+    storage.save_data(storage_key.as_bytes(), &file_content)?;
+    storage.flush()?;
     
-    Ok(output_dir)
+    let storage_location = format!("secure_storage://{}", storage_key);
+    log::info!("Stored .mvsm module in secure storage: {}", storage_location);
+    
+    Ok(storage_location)
 }
 
 fn generate_object_id() -> String {
@@ -910,7 +872,7 @@ impl Publish {
         }
         
         let mut blockchain_transactions = Vec::new();
-        let mut mvsm_paths = Vec::new();
+        let mut mvsm_storage_keys = Vec::new();
         
         let _gas_collector = match AccountAddress::from_hex_literal(
             "0x47621776628ba3a5b9baaab38e61f4c98e893e124204bc4dad52e702e2b24ea1") {
@@ -951,19 +913,19 @@ impl Publish {
                 block_height,
             );
             
-            // Generate .mvsm file for the module
-            let mvsm_path = match serialize_module_to_mvsm(
+            // Store module in secure storage instead of file system
+            let storage_key = match serialize_module_to_mvsm(
                 &vm_module, 
                 &package.compiled_package_info.package_name.to_string(),
                 None
             ) {
-                Ok(path) => {
-                    println!("Generated .mvsm file: {}", path.display());
-                    mvsm_paths.push(path.clone()); // Clone the path before pushing
-                    Some(path)
+                Ok(key) => {
+                    println!("Stored .mvsm module in secure storage: {}", key);
+                    mvsm_storage_keys.push(key.clone());
+                    Some(key)
                 },
                 Err(e) => {
-                    eprintln!("Warning: Failed to generate .mvsm file: {}", e);
+                    eprintln!("Warning: Failed to store .mvsm module in secure storage: {}", e);
                     None
                 }
             };
@@ -984,13 +946,13 @@ impl Publish {
                 hex::encode(hasher.finalize())
             };
             
-            // Include mvsm path in transaction data if available
-            let data_str = if let Some(path) = mvsm_path {
+            // Include storage key in transaction data if available
+            let data_str = if let Some(key) = storage_key {
                 format!("VM_MODULE:{}:{}:{}:{}", 
                     module_name, 
                     bytecode.len(), 
                     module_hash,
-                    path.to_string_lossy()
+                    key
                 )
             } else {
                 format!("VM_MODULE:{}:{}:{}", module_name, bytecode.len(), module_hash)
@@ -1050,7 +1012,7 @@ impl Publish {
             execution_time_ms: execution_time as u64,
             block_height: block_height as u64,
             modules_deployed,
-            mvsm_files: mvsm_paths.iter().map(|p| p.to_string_lossy().to_string()).collect(),
+            mvsm_files: mvsm_storage_keys,
         };
     
         Ok(result)
@@ -1150,4 +1112,74 @@ impl Clone for VMModule {
             deploy_block_height: self.deploy_block_height,
         }
     }
+}
+
+// Add a standalone VM state save function
+pub fn save_vm_state() -> Result<(), StorageError> {
+    let kari_dir = get_kari_dir();
+    let db_path = kari_dir.join("storage").join("mvsm_db");
+    let storage = RocksDBStorage::new(db_path)?;
+    
+    match VM_STATE.try_read() {
+        Ok(vm_state) => {
+            let modules_count = vm_state.modules.len();
+            
+            // Save comprehensive VM state metadata
+            let vm_metadata = serde_json::json!({
+                "modules_count": modules_count,
+                "last_execution": vm_state.last_execution,
+                "execution_count": vm_state.execution_count,
+                "last_signature": vm_state.last_signature.clone(),
+                "last_signer": vm_state.last_signer.clone(),
+                "modules": vm_state.modules.keys().collect::<Vec<_>>(),
+                "system_info": {
+                    "version": "2.0",
+                    "save_timestamp": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                }
+            });
+            
+            let metadata_bytes = vm_metadata.to_string().into_bytes();
+            storage.save_data(b"vm_state_metadata", &metadata_bytes)?;
+            
+            // Save individual module summaries for quick lookup
+            for (module_id, module) in vm_state.modules.iter() {
+                let module_summary = serde_json::json!({
+                    "module_id": module_id,
+                    "address": format!("0x{}", module.address.to_hex()),
+                    "name": module.name,
+                    "deploy_block_height": module.deploy_block_height,
+                    "bytecode_size": module.bytecode.len(),
+                    "function_count": module.public_functions.len(),
+                });
+                
+                let summary_key = format!("module_summary_{}", module_id);
+                storage.save_data(summary_key.as_bytes(), &module_summary.to_string().into_bytes())?;
+            }
+            
+            log::info!("Saved VM state with {} modules", modules_count);
+        }
+        Err(e) => {
+            log::warn!("Could not access VM state for save: {}", e);
+            
+            // Save fallback metadata
+            let fallback_metadata = serde_json::json!({
+                "status": "fallback_save",
+                "timestamp": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                "error": format!("{}", e),
+            });
+            
+            storage.save_data(b"vm_state_metadata", &fallback_metadata.to_string().into_bytes())?;
+        }
+    }
+    
+    storage.flush()?;
+    log::debug!("VM state saved successfully to secure storage");
+    
+    Ok(())
 }

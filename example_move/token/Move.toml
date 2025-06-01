@@ -10,7 +10,7 @@ MoveStdlib = { git = "https://github.com/kanari-network/kanari-sdk.git", subdir 
 
 
 [addresses]
-token = "0x28e442c54d872cea9415382e61559dde126da6d6aee8c70855bd6c8cbdeb40d8"
+token = "0xf8c99c4469e663c75af71f3f728eff988309f87ce95259a7f9ba91c4787e0d0b"
 std = "0x1"
 kanari_framework = "0x2"
 

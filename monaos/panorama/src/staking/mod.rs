@@ -59,7 +59,11 @@ pub fn stake_tokens(
     amount: u64,
     wants_to_validate: bool
 ) -> Result<StakedNode, BlockchainError> {
-    // Check minimum staking requirements
+    // Validate input parameters
+    if amount == 0 {
+        return Err(BlockchainError::Transaction("Staking amount cannot be zero".to_string()));
+    }
+    
     if amount < NODE_STAKING_MINIMUM_KA {
         return Err(BlockchainError::Transaction(
             format!("Staking amount {} is below minimum required ({})",
@@ -69,6 +73,16 @@ pub fn stake_tokens(
 
     let address_str = address.to_hex_literal();
     
+    // Check if already staking
+    {
+        let staking_nodes = STAKING_NODES.read().unwrap();
+        if staking_nodes.contains_key(&address_str) {
+            return Err(BlockchainError::Transaction(
+                format!("Address {} is already staking", address_str)
+            ));
+        }
+    }
+    
     // Verify user has enough balance
     let balance = mona_blockchain::blockchain::get_balance(&address_str)?;
     if balance < amount {
@@ -77,13 +91,13 @@ pub fn stake_tokens(
         ));
     }
     
-    // Calculate lock period
+    // Calculate lock period with overflow protection
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     
-    let unlock_time = current_time + STAKING_LOCK_PERIOD_SECONDS;
+    let unlock_time = current_time.saturating_add(STAKING_LOCK_PERIOD_SECONDS);
     
     // Determine if can be validator
     let is_validator = wants_to_validate && amount >= VALIDATOR_STAKING_MINIMUM_KA;
@@ -104,9 +118,8 @@ pub fn stake_tokens(
         security_hash: node_hash.clone(),
     };
     
-    // Update staking pool
+    // Update balances first to ensure atomic operation
     {
-        // Lock balances and deduct staked amount
         let mut balances = BALANCES.lock().unwrap();
         if let Some(user_balance) = balances.get_mut(&address_str) {
             if *user_balance < amount {
@@ -114,7 +127,7 @@ pub fn stake_tokens(
                     format!("Insufficient balance during staking lock")
                 ));
             }
-            *user_balance -= amount;
+            *user_balance = user_balance.saturating_sub(amount);
         } else {
             return Err(BlockchainError::InsufficientFunds(
                 format!("User balance not found during staking process")
@@ -122,19 +135,19 @@ pub fn stake_tokens(
         }
     }
     
-    // Update staking data with security hash
+    // Update staking data with overflow protection
     {
         let mut staking_nodes = STAKING_NODES.write().unwrap();
         let mut staking_pool = STAKING_POOL.lock().unwrap();
         let mut active_validators = ACTIVE_VALIDATORS.write().unwrap();
         let mut hash_cache = NODE_HASH_CACHE.write().unwrap();
         
-        // Update staking stats
-        staking_pool.total_staked += amount;
-        staking_pool.nodes_count += 1;
+        // Update staking stats with overflow protection
+        staking_pool.total_staked = staking_pool.total_staked.saturating_add(amount);
+        staking_pool.nodes_count = staking_pool.nodes_count.saturating_add(1);
         
         if is_validator {
-            staking_pool.validators_count += 1;
+            staking_pool.validators_count = staking_pool.validators_count.saturating_add(1);
             active_validators.insert(address_str.clone());
         }
         
@@ -180,6 +193,13 @@ pub fn unstake_tokens(
         }
     };
     
+    // Validate staked amount
+    if staked_amount == 0 {
+        return Err(BlockchainError::Transaction(
+            format!("Invalid staked amount for address {}", address_str)
+        ));
+    }
+    
     // Calculate current time and check if within lock period
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -191,9 +211,9 @@ pub fn unstake_tokens(
     let mut early_unlock_penalty = 0;
     
     if current_time < unlock_time {
-        // Calculate penalty (10% of staked amount)
+        // Calculate penalty (10% of staked amount) with overflow protection
         early_unlock_penalty = staked_amount / 10;
-        withdrawal_amount -= early_unlock_penalty;
+        withdrawal_amount = withdrawal_amount.saturating_sub(early_unlock_penalty);
         
         warn!(
             "Early unstaking by {}. Penalty: {} KARI ({} KA)",
@@ -203,17 +223,17 @@ pub fn unstake_tokens(
         );
     }
     
-    // Update staking data
+    // Update staking data with underflow protection
     {
         let mut staking_nodes = STAKING_NODES.write().unwrap();
         let mut staking_pool = STAKING_POOL.lock().unwrap();
         let mut active_validators = ACTIVE_VALIDATORS.write().unwrap();
         
-        staking_pool.total_staked -= staked_amount;
-        staking_pool.nodes_count -= 1;
+        staking_pool.total_staked = staking_pool.total_staked.saturating_sub(staked_amount);
+        staking_pool.nodes_count = staking_pool.nodes_count.saturating_sub(1);
         
         if is_validator {
-            staking_pool.validators_count -= 1;
+            staking_pool.validators_count = staking_pool.validators_count.saturating_sub(1);
             active_validators.remove(&address_str);
         }
         
@@ -221,10 +241,11 @@ pub fn unstake_tokens(
         staking_nodes.remove(&address_str);
     }
     
-    // Return tokens to user's balance (minus penalty if applicable)
+    // Return tokens to user's balance with overflow protection
     {
         let mut balances = BALANCES.lock().unwrap();
-        *balances.entry(address_str.clone()).or_insert(0) += withdrawal_amount + accumulated_rewards;
+        let user_balance = balances.entry(address_str.clone()).or_insert(0);
+        *user_balance = user_balance.saturating_add(withdrawal_amount).saturating_add(accumulated_rewards);
     }
     
     info!(
@@ -267,7 +288,11 @@ pub fn verify_node_integrity(address: &Address) -> bool {
 
 // Calculate and distribute staking rewards
 pub fn process_rewards(block_height: u32) -> Result<u64, BlockchainError> {
-    let mut total_rewards = 0;
+    // Validate block height
+    if block_height == 0 {
+        return Ok(0);
+    }
+    
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -297,53 +322,82 @@ pub fn process_rewards(block_height: u32) -> Result<u64, BlockchainError> {
     
     // Get list of nodes to process and calculate rewards
     let mut nodes_to_update: Vec<(String, u64)> = Vec::new();
-    let mut total_reward_calculation = 0;
+    let mut total_reward_calculation = 0u64;
     
     {
-        let mut staking_nodes = STAKING_NODES.write().unwrap();
+        let staking_nodes = STAKING_NODES.read().unwrap();
         
-        for (address, node) in staking_nodes.iter_mut() {
+        for (address, node) in staking_nodes.iter() {
             // Skip if not a validator
             if !node.is_validator {
                 continue;
             }
             
-            // Calculate time since last reward
-            let time_since_last_reward = current_time - node.last_reward_time;
+            // Validate node data
+            if node.staked_amount == 0 || node.last_reward_time > current_time {
+                warn!("Invalid node data for validator {}", address);
+                continue;
+            }
+            
+            // Calculate time since last reward with overflow protection
+            let time_since_last_reward = current_time.saturating_sub(node.last_reward_time);
             
             // Skip if less than an hour has passed
             if time_since_last_reward < 3600 {
                 continue;
             }
             
+            // Prevent division by zero and validate percentage
+            if STAKING_REWARD_PERCENTAGE <= 0.0 {
+                warn!("Invalid staking reward percentage: {}", STAKING_REWARD_PERCENTAGE);
+                continue;
+            }
+            
             // Calculate reward based on staked amount and time passed
-            // Daily reward rate = annual rate / 365
             let daily_reward_rate = STAKING_REWARD_PERCENTAGE / 365.0;
             
-            // Convert time to days
-            let days_passed = time_since_last_reward as f64 / 86400.0;
+            // Convert time to days with bounds checking
+            let days_passed = (time_since_last_reward as f64 / 86400.0).min(365.0); // Cap at 1 year
             
-            // Calculate rewards: amount * daily_rate * days
-            let reward = (node.staked_amount as f64 * daily_reward_rate * days_passed).round() as u64;
+            // Calculate rewards with overflow protection
+            let reward_f64 = node.staked_amount as f64 * daily_reward_rate * days_passed;
+            let reward = if reward_f64.is_finite() && reward_f64 >= 0.0 {
+                reward_f64.round() as u64
+            } else {
+                0
+            };
             
-            // Add to total calculated rewards
-            total_reward_calculation += reward;
+            // Skip if reward is 0
+            if reward == 0 {
+                continue;
+            }
+            
+            // Add to total calculated rewards with overflow protection
+            total_reward_calculation = total_reward_calculation.saturating_add(reward);
             
             // Save address and reward for later processing
             nodes_to_update.push((address.clone(), reward));
         }
     }
     
+    // If no rewards to calculate, return early
+    if total_reward_calculation == 0 || nodes_to_update.is_empty() {
+        return Ok(0);
+    }
+    
+    let mut total_rewards = total_reward_calculation;
+    
     // Check if pool has sufficient funds
     if total_reward_calculation > pool_balance {
         // Scale down rewards proportionally
         let scale_factor = pool_balance as f64 / total_reward_calculation as f64;
         let mut scaled_nodes_to_update: Vec<(String, u64)> = Vec::new();
+        total_rewards = 0;
         
         for (address, reward) in nodes_to_update {
             let scaled_reward = (reward as f64 * scale_factor).round() as u64;
             scaled_nodes_to_update.push((address, scaled_reward));
-            total_rewards += scaled_reward;
+            total_rewards = total_rewards.saturating_add(scaled_reward);
         }
         
         nodes_to_update = scaled_nodes_to_update;
@@ -352,8 +406,6 @@ pub fn process_rewards(block_height: u32) -> Result<u64, BlockchainError> {
             "Insufficient funds in reward pool. Rewards scaled down to {}% of calculated value.",
             (scale_factor * 100.0).round()
         );
-    } else {
-        total_rewards = total_reward_calculation;
     }
     
     // If there are no rewards to distribute, return
@@ -366,18 +418,18 @@ pub fn process_rewards(block_height: u32) -> Result<u64, BlockchainError> {
         let mut balances = BALANCES.lock().unwrap();
         
         // Decrease pool balance
-        if let Some(pool_balance) = balances.get_mut(&pool_addr_str) {
-            if *pool_balance < total_rewards {
-                warn!("Pool has insufficient balance for rewards. Expected: {}, Actual: {}", total_rewards, *pool_balance);
+        if let Some(pool_balance_ref) = balances.get_mut(&pool_addr_str) {
+            if *pool_balance_ref < total_rewards {
+                warn!("Pool has insufficient balance for rewards. Expected: {}, Actual: {}", total_rewards, *pool_balance_ref);
                 return Err(BlockchainError::InsufficientFunds(
-                    format!("Insufficient funds in reward pool")
+                    "Insufficient funds in reward pool".to_string()
                 ));
             }
-            *pool_balance -= total_rewards;
+            *pool_balance_ref = pool_balance_ref.saturating_sub(total_rewards);
         } else {
             warn!("Pool address not found in balances");
             return Err(BlockchainError::Transaction(
-                format!("Pool address not found in balances")
+                "Pool address not found in balances".to_string()
             ));
         }
         
@@ -385,13 +437,13 @@ pub fn process_rewards(block_height: u32) -> Result<u64, BlockchainError> {
         let mut staking_nodes = STAKING_NODES.write().unwrap();
         let mut staking_pool = STAKING_POOL.lock().unwrap();
         
-        // Update total rewards distributed statistic
-        staking_pool.total_rewards_distributed += total_rewards;
+        // Update total rewards distributed statistic with overflow protection
+        staking_pool.total_rewards_distributed = staking_pool.total_rewards_distributed.saturating_add(total_rewards);
         
         for (address, reward) in &nodes_to_update {
             // Update node accumulated rewards
             if let Some(node) = staking_nodes.get_mut(address) {
-                node.accumulated_rewards += *reward;
+                node.accumulated_rewards = node.accumulated_rewards.saturating_add(*reward);
                 node.last_reward_time = current_time;
                 
                 debug!(
@@ -412,15 +464,19 @@ pub fn process_rewards(block_height: u32) -> Result<u64, BlockchainError> {
 
 // Get a list of active validators for consensus
 pub fn get_active_validators() -> Vec<Address> {
-    let validators = ACTIVE_VALIDATORS.read().unwrap();
-    let nodes = STAKING_NODES.read().unwrap();
-    
-    validators.iter()
-        .filter_map(|addr| {
-            // Use proper filter_map to only collect the Some values
-            nodes.get(addr).map(|node| node.address.clone())
-        })
-        .collect()
+    match (ACTIVE_VALIDATORS.read(), STAKING_NODES.read()) {
+        (Ok(validators), Ok(nodes)) => {
+            validators.iter()
+                .filter_map(|addr| {
+                    nodes.get(addr).map(|node| node.address.clone())
+                })
+                .collect()
+        },
+        _ => {
+            warn!("Failed to acquire locks for getting active validators");
+            Vec::new()
+        }
+    }
 }
 
 // Check if an address is a validator
@@ -471,154 +527,99 @@ pub fn get_pool_remaining_balance() -> Result<u64, BlockchainError> {
 
 // Save staking state to storage
 fn save_staking_state() -> Result<(), BlockchainError> {
-    // Get data
-    let nodes = match STAKING_NODES.read() {
-        Ok(nodes) => nodes.clone(),
-        Err(_) => {
-            return Err(BlockchainError::Storage("Failed to read staking nodes".to_string()));
-        }
-    };
+    // Get data with proper error handling
+    let nodes = STAKING_NODES.read()
+        .map_err(|_| BlockchainError::Storage("Failed to read staking nodes".to_string()))?
+        .clone();
     
-    let pool = match STAKING_POOL.lock() {
-        Ok(pool) => pool.clone(),
-        Err(_) => {
-            return Err(BlockchainError::Storage("Failed to read staking pool".to_string()));
-        }
-    };
+    let pool = STAKING_POOL.lock()
+        .map_err(|_| BlockchainError::Storage("Failed to read staking pool".to_string()))?
+        .clone();
     
-    let validators = match ACTIVE_VALIDATORS.read() {
-        Ok(validators) => validators.clone(),
-        Err(_) => {
-            return Err(BlockchainError::Storage("Failed to read active validators".to_string()));
-        }
-    };
+    let validators = ACTIVE_VALIDATORS.read()
+        .map_err(|_| BlockchainError::Storage("Failed to read active validators".to_string()))?
+        .clone();
     
-    let hashes = match NODE_HASH_CACHE.read() {
-        Ok(hashes) => hashes.clone(),
-        Err(_) => {
-            return Err(BlockchainError::Storage("Failed to read node hash cache".to_string()));
-        }
-    };
+    let hashes = NODE_HASH_CACHE.read()
+        .map_err(|_| BlockchainError::Storage("Failed to read node hash cache".to_string()))?
+        .clone();
     
-    // Serialize data
-    let nodes_data = match bincode::serialize(&nodes) {
-        Ok(data) => data,
-        Err(e) => {
-            return Err(BlockchainError::Storage(
-                format!("Failed to serialize staking nodes: {}", e)
-            ));
-        }
-    };
+    // Serialize data with error handling
+    let nodes_data = bincode::serialize(&nodes)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to serialize staking nodes: {}", e)))?;
     
-    let pool_data = match bincode::serialize(&pool) {
-        Ok(data) => data,
-        Err(e) => {
-            return Err(BlockchainError::Storage(
-                format!("Failed to serialize staking pool: {}", e)
-            ));
-        }
-    };
+    let pool_data = bincode::serialize(&pool)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to serialize staking pool: {}", e)))?;
     
-    let validators_data = match bincode::serialize(&validators) {
-        Ok(data) => data,
-        Err(e) => {
-            return Err(BlockchainError::Storage(
-                format!("Failed to serialize active validators: {}", e)
-            ));
-        }
-    };
+    let validators_data = bincode::serialize(&validators)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to serialize active validators: {}", e)))?;
     
-    let hashes_data = match bincode::serialize(&hashes) {
-        Ok(data) => data,
-        Err(e) => {
-            return Err(BlockchainError::Storage(
-                format!("Failed to serialize node hash cache: {}", e)
-            ));
-        }
-    };
+    let hashes_data = bincode::serialize(&hashes)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to serialize node hash cache: {}", e)))?;
     
-    // Save data
+    // Save data with proper error handling
     let kari_dir = common::get_kari_dir();
-    let db_path = kari_dir.join("blockchain_db");
-    let storage = match mona_storage::RocksDBStorage::new(db_path) {
-        Ok(storage) => storage,
-        Err(e) => {
-            return Err(BlockchainError::Storage(
-                format!("Failed to open storage: {}", e)
-            ));
-        }
-    };
+    let db_path = kari_dir.join("storage").join("blockchain_db");
+    let storage = mona_storage::RocksDBStorage::new(db_path)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to open storage: {}", e)))?;
     
-    if let Err(e) = storage.save_data(b"staking_nodes", &nodes_data) {
-        return Err(BlockchainError::Storage(
-            format!("Failed to save staking nodes: {}", e)
-        ));
-    }
+    storage.save_data(b"staking_nodes", &nodes_data)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to save staking nodes: {}", e)))?;
     
-    if let Err(e) = storage.save_data(b"staking_pool", &pool_data) {
-        return Err(BlockchainError::Storage(
-            format!("Failed to save staking pool: {}", e)
-        ));
-    }
+    storage.save_data(b"staking_pool", &pool_data)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to save staking pool: {}", e)))?;
     
-    if let Err(e) = storage.save_data(b"active_validators", &validators_data) {
-        return Err(BlockchainError::Storage(
-            format!("Failed to save active validators: {}", e)
-        ));
-    }
+    storage.save_data(b"active_validators", &validators_data)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to save active validators: {}", e)))?;
     
-    if let Err(e) = storage.save_data(b"node_hash_cache", &hashes_data) {
-        return Err(BlockchainError::Storage(
-            format!("Failed to save node hash cache: {}", e)
-        ));
-    }
+    storage.save_data(b"node_hash_cache", &hashes_data)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to save node hash cache: {}", e)))?;
+    
+    storage.flush()
+        .map_err(|e| BlockchainError::Storage(format!("Failed to flush storage: {}", e)))?;
     
     Ok(())
 }
 
-// Load staking state from storage
 pub fn load_staking_state() -> Result<(), BlockchainError> {
     let kari_dir = common::get_kari_dir();
-    let db_path = kari_dir.join("blockchain_db");
-    let storage = match mona_storage::RocksDBStorage::new(db_path) {
-        Ok(storage) => storage,
-        Err(e) => {
-            return Err(BlockchainError::Storage(
-                format!("Failed to open storage: {}", e)
-            ));
-        }
-    };
+    let db_path = kari_dir.join("storage").join("blockchain_db");
+    let storage = mona_storage::RocksDBStorage::new(db_path)
+        .map_err(|e| BlockchainError::Storage(format!("Failed to open storage: {}", e)))?;
     
-    // Load nodes
+    // Load nodes with error handling
     if let Ok(Some(nodes_data)) = storage.load_data(b"staking_nodes") {
         if let Ok(nodes) = bincode::deserialize::<HashMap<String, StakedNode>>(&nodes_data) {
-            *STAKING_NODES.write().unwrap() = nodes;
+            *STAKING_NODES.write()
+                .map_err(|_| BlockchainError::Storage("Failed to write staking nodes".to_string()))? = nodes;
             debug!("Loaded {} staked nodes", STAKING_NODES.read().unwrap().len());
         }
     }
     
-    // Load pool
+    // Load pool with error handling
     if let Ok(Some(pool_data)) = storage.load_data(b"staking_pool") {
         if let Ok(pool) = bincode::deserialize::<StakingPool>(&pool_data) {
-            // Clone pool before moving it to avoid the borrow error
-            *STAKING_POOL.lock().unwrap() = pool.clone();
+            *STAKING_POOL.lock()
+                .map_err(|_| BlockchainError::Storage("Failed to write staking pool".to_string()))? = pool.clone();
             debug!("Loaded staking pool: {} total staked, {} rewards distributed", 
                    pool.total_staked, pool.total_rewards_distributed);
         }
     }
     
-    // Load validators
+    // Load validators with error handling
     if let Ok(Some(validators_data)) = storage.load_data(b"active_validators") {
         if let Ok(validators) = bincode::deserialize::<HashSet<String>>(&validators_data) {
-            *ACTIVE_VALIDATORS.write().unwrap() = validators;
+            *ACTIVE_VALIDATORS.write()
+                .map_err(|_| BlockchainError::Storage("Failed to write active validators".to_string()))? = validators;
             debug!("Loaded {} active validators", ACTIVE_VALIDATORS.read().unwrap().len());
         }
     }
     
-    // Load node hash cache
+    // Load node hash cache with error handling
     if let Ok(Some(hashes_data)) = storage.load_data(b"node_hash_cache") {
         if let Ok(hashes) = bincode::deserialize::<HashMap<String, String>>(&hashes_data) {
-            *NODE_HASH_CACHE.write().unwrap() = hashes;
+            *NODE_HASH_CACHE.write()
+                .map_err(|_| BlockchainError::Storage("Failed to write node hash cache".to_string()))? = hashes;
             debug!("Loaded {} node hashes", NODE_HASH_CACHE.read().unwrap().len());
         }
     }

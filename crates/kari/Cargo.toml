@@ -16,8 +16,4 @@ colored.workspace = true
 chrono.workspace = true
 tokio.workspace = true
 
-# This is a workspace crate, so we need to include the following dependencies
-mona-crypto.workspace = true
-mona-blockchain.workspace = true
-panorama.workspace = true 
 command.workspace = true

@@ -64,6 +64,12 @@ impl BlockchainData {
     
     // Modified to return bool indicating success
     pub fn add_block(&self, mut block: Block<Blake3Algorithm>) -> bool {
+        // Validate block first
+        if block.hash.is_empty() {
+            log::error!("Cannot add block with empty hash");
+            return false;
+        }
+
         let mut chain = self.chain.write().unwrap();
         let height = chain.len();
         
@@ -81,14 +87,19 @@ impl BlockchainData {
 
         // Check if block already exists
         if self.has_block_with_hash(&block.hash) {
+            log::warn!("Block with hash {} already exists", block.hash);
             return false;
         }
         
-        // Update token count
-        self.total_tokens.fetch_add(block.tokens, Ordering::Relaxed);
+        // Use saturating_add to prevent overflow
+        self.total_tokens.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_add(block.tokens))
+        }).unwrap();
         
-        // Update cache
-        self.block_height_cache.write().unwrap().insert(block.hash.clone(), height);
+        {
+            let mut cache = self.block_height_cache.write().unwrap();
+            cache.insert(block.hash.clone(), height);
+        }
         
         // Add block to chain
         chain.push_back(block);
@@ -132,7 +143,7 @@ pub fn load_blockchain_with_retry() -> Result<(), StorageError> {
 // Improved save function that ensures balances are saved
 pub fn save_blockchain() -> Result<(), StorageError> {
     let kari_dir = get_kari_dir();
-    let db_path = kari_dir.join("blockchain_db");
+    let db_path = kari_dir.join("storage").join("blockchain_db");
     let storage = RocksDBStorage::new(db_path)?;
 
     // Save blockchain data
@@ -146,6 +157,57 @@ pub fn save_blockchain() -> Result<(), StorageError> {
     
     storage.flush()?;
     log::debug!("Blockchain and balances saved successfully");
+    
+    Ok(())
+}
+
+pub fn save_mvsm() -> Result<(), StorageError> {
+    let kari_dir = get_kari_dir();
+    let db_path = kari_dir.join("storage").join("mvsm_db");
+    let storage = RocksDBStorage::new(db_path)?;
+    
+    // Save basic system state without accessing VM directly to avoid circular dependency
+    let system_metadata = serde_json::json!({
+        "status": "system_save",
+        "blockchain_height": BLOCKCHAIN_DATA.len(),
+        "total_tokens": BLOCKCHAIN_DATA.get_total_tokens(),
+        "pending_transactions": {
+            "count": match PENDING_TRANSACTIONS.lock() {
+                Ok(queue) => queue.len(),
+                Err(_) => 0
+            }
+        },
+        "system_info": {
+            "version": "2.0",
+            "save_timestamp": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        },
+        "note": "VM state will be saved separately by mona-vm to avoid circular dependencies"
+    });
+    
+    let metadata_bytes = system_metadata.to_string().into_bytes();
+    storage.save_data(b"blockchain_metadata", &metadata_bytes)?;
+    
+    // Save blockchain transaction statistics
+    let blockchain_stats = serde_json::json!({
+        "total_blocks": BLOCKCHAIN_DATA.len(),
+        "total_tokens": BLOCKCHAIN_DATA.get_total_tokens(),
+        "account_count": match BALANCES.lock() {
+            Ok(balances) => balances.len(),
+            Err(_) => 0
+        },
+        "last_saved": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    });
+    
+    storage.save_data(b"blockchain_stats", &blockchain_stats.to_string().into_bytes())?;
+    
+    storage.flush()?;
+    log::debug!("Blockchain metadata saved successfully to secure storage");
     
     Ok(())
 }
@@ -218,20 +280,25 @@ pub fn get_balance(address: &str) -> Result<u64, BlockchainError> {
     let max_retries = 3;
     let mut attempts = 0;
 
-    // Normalize address format to ensure consistent lookup
-    let normalized_address = if !address.starts_with("0x") {
+    // Validate address format first
+    let normalized_address = if address.trim().is_empty() {
+        return Err(BlockchainError::InvalidAddress("Empty address provided".to_string()));
+    } else if !address.starts_with("0x") {
         format!("0x{}", address)
     } else {
         address.to_string()
     };
 
-    // Debug log the address we're checking
+    // Validate hex format
+    if normalized_address.len() < 3 || !normalized_address[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(BlockchainError::InvalidAddress(format!("Invalid hex address: {}", address)));
+    }
+
     log::debug!("Getting balance for normalized address: {}", normalized_address);
 
     while attempts < max_retries {
         match BALANCES.lock() {
             Ok(guard) => {
-                // Try both with and without 0x prefix to ensure we find the balance
                 let balance = guard.get(&normalized_address)
                     .or_else(|| {
                         let no_prefix = normalized_address.trim_start_matches("0x");
@@ -249,10 +316,9 @@ pub fn get_balance(address: &str) -> Result<u64, BlockchainError> {
         }
     }
 
-    // Add error handling for the case where all attempts fail
     Err(BlockchainError::Balance(
         "Failed to acquire balance lock after multiple attempts".into(),
-     ))
+    ))
 }
 
 // Add a new function that accepts Address directly
@@ -260,16 +326,33 @@ pub fn get_address_balance(address: &Address) -> Result<u64, BlockchainError> {
     get_balance(&address.to_hex_literal())
 }
 
+
+
+
 // Improved submit_transaction function with better logging
 pub fn submit_transaction(transaction: block::Transaction) -> Result<(), BlockchainError> {
-    // Get transaction type for better logging
+    // Validate transaction first
+    if transaction.amount == 0 && transaction.get_transaction_type() != "VM_FUNCTION_CALL" && transaction.get_transaction_type() != "VM_MODULE" {
+        return Err(BlockchainError::Transaction("Invalid transaction amount".to_string()));
+    }
+
+    // Check for sufficient balance for non-mining transactions
+    if transaction.get_transaction_type() != "MINING" {
+        let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
+        if sender_balance < transaction.amount {
+            return Err(BlockchainError::InsufficientFunds(
+                format!("Insufficient balance: {} < {}", sender_balance, transaction.amount)
+            ));
+        }
+    }
+
     let tx_type = transaction.get_transaction_type();
     
     log::info!(
         "Submitting transaction: {} (type: {}, id: {})",
         tx_type,
         transaction.transaction_id,
-        hex::encode(&transaction.transaction_id.as_bytes()[..8])
+        hex::encode(&transaction.transaction_id.as_bytes()[..8.min(transaction.transaction_id.len())])
     );
     
     // Provide detailed VM transaction info if applicable
@@ -295,6 +378,11 @@ pub fn submit_transaction(transaction: block::Transaction) -> Result<(), Blockch
         Ok(t) => t,
         Err(_) => return Err(BlockchainError::Transaction("Failed to lock pending transactions".to_string()))
     };
+    
+    // Check for duplicate transactions
+    if transactions.iter().any(|tx| tx.transaction_id == transaction.transaction_id) {
+        return Err(BlockchainError::Transaction("Duplicate transaction ID".to_string()));
+    }
     
     transactions.push_back(transaction);
     log::info!("Transaction added to pending queue. Queue size: {}", transactions.len());
@@ -404,11 +492,10 @@ pub fn get_pending_transactions(max_count: usize) -> Vec<block::Transaction> {
 // Modified load method to ensure balances are properly loaded
 pub fn load_blockchain() -> Result<(), StorageError> {
     let kari_dir = get_kari_dir();
-    let db_path = kari_dir.join("blockchain_db");
+    let db_path = kari_dir.join("storage").join("blockchain_db");
     let storage = RocksDBStorage::new(db_path)?;
     init_blockchain_state();
     
-    // First, try to load dedicated balances if they exist
     let mut loaded_balances = HashMap::new();
     if let Ok(Some(balances_data)) = storage.load_data(b"balances") {
         if let Ok(balances) = bincode::deserialize::<HashMap<String, u64>>(&balances_data) {
@@ -417,59 +504,67 @@ pub fn load_blockchain() -> Result<(), StorageError> {
         }
     }
 
-    // Then load blockchain data and calculate balances as a fallback
     match storage.load_data(b"blockchain")? {
         Some(value) => {
             let loaded_chain: VecDeque<Block<Blake3Algorithm>> = bincode::deserialize(&value)?;
             
-            // Calculate balances and total tokens if we didn't load from dedicated storage
             let mut balances = if loaded_balances.is_empty() {
                 HashMap::new()
             } else {
                 loaded_balances.clone()
             };
             
-            let mut total_tokens = 0;
+            let mut total_tokens = 0u64;
             let mut block_height_cache = HashMap::new();
             
-            // Update blockchain data
             let mut chain = BLOCKCHAIN_DATA.chain.write().unwrap();
             *chain = loaded_chain;
             
-            // Process blocks for balances and caching
             if loaded_balances.is_empty() {
                 for (height, block) in chain.iter().enumerate() {
-                    total_tokens += block.tokens;
+                    // Prevent overflow
+                    total_tokens = total_tokens.saturating_add(block.tokens);
                     
-                    // Ensure addresses are always stored with 0x prefix
-                    let miner_address = normalize_address(&block.address).unwrap().to_hex_literal();
+                    let miner_address = match normalize_address(&block.address) {
+                        Ok(addr) => addr.to_hex_literal(),
+                        Err(_) => {
+                            log::warn!("Invalid miner address in block {}: {}", height, block.address);
+                            continue;
+                        }
+                    };
                     
-                    *balances.entry(miner_address).or_insert(0) += block.tokens;
+                    let current_balance = balances.entry(miner_address).or_insert(0);
+                    *current_balance = current_balance.saturating_add(block.tokens);
                     block_height_cache.insert(block.hash.clone(), height);
 
                     for tx in &block.transactions {
-                        // Get hex string directly from Address
                         let tx_sender = tx.sender.to_hex_literal();
                         let tx_receiver = tx.receiver.to_hex_literal();
                         
-                        *balances.entry(tx_sender).or_insert(0) -= tx.amount;
-                        *balances.entry(tx_receiver).or_insert(0) += tx.amount;
+                        // Prevent underflow on sender balance
+                        let sender_balance = balances.entry(tx_sender).or_insert(0);
+                        *sender_balance = sender_balance.saturating_sub(tx.amount);
+                        
+                        // Prevent overflow on receiver balance
+                        let receiver_balance = balances.entry(tx_receiver).or_insert(0);
+                        *receiver_balance = receiver_balance.saturating_add(tx.amount);
                     }
                 }
             } else {
-                // Just calculate total tokens and build cache
                 for (height, block) in chain.iter().enumerate() {
-                    total_tokens += block.tokens;
+                    total_tokens = total_tokens.saturating_add(block.tokens);
                     block_height_cache.insert(block.hash.clone(), height);
                 }
             }
 
-            // Update BLOCKCHAIN_DATA
             BLOCKCHAIN_DATA.total_tokens.store(total_tokens, Ordering::Relaxed);
             *BLOCKCHAIN_DATA.block_height_cache.write().unwrap() = block_height_cache;
             
-            // Update balances
-            *BALANCES.lock().unwrap() = balances;
+            // Use scope to ensure lock is released quickly
+            {
+                let mut global_balances = BALANCES.lock().unwrap();
+                *global_balances = balances;
+            }
 
             log::info!("Blockchain loaded successfully with {} blocks and {} accounts", 
                 chain.len(), BALANCES.lock().unwrap().len());

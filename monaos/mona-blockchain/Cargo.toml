@@ -49,6 +49,7 @@ env_logger.workspace = true
 colored.workspace = true
 thiserror.workspace = true
 
+# Internal dependencies
 key.workspace = true
 mona-crypto = { workspace = true, features = ["blake3"] }  # Add blake3 feature
 mona-types.workspace = true
