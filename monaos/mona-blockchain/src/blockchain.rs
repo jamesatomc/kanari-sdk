@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::block::{self, Block};
 use bincode;
 use consensus_pos::Blake3Algorithm;
@@ -10,13 +13,17 @@ use serde::{Deserialize, Serialize};
 
 use lazy_static::lazy_static;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, RwLock, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Mutex, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 
 // Define improved thread-safe blockchain globals
 lazy_static! {
     pub static ref BLOCKCHAIN_DATA: BlockchainData = BlockchainData::new();
     pub static ref BALANCES: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
-    pub static ref PENDING_TRANSACTIONS: Mutex<VecDeque<block::Transaction>> = Mutex::new(VecDeque::new());
+    pub static ref PENDING_TRANSACTIONS: Mutex<VecDeque<block::Transaction>> =
+        Mutex::new(VecDeque::new());
 }
 
 /// Improved blockchain data container with thread-safety and performance features
@@ -35,24 +42,24 @@ impl BlockchainData {
             block_height_cache: RwLock::new(HashMap::new()),
         }
     }
-    
+
     pub fn get_total_tokens(&self) -> u64 {
         self.total_tokens.load(Ordering::Relaxed)
     }
-    
+
     pub fn add_tokens(&self, amount: u64) {
         self.total_tokens.fetch_add(amount, Ordering::Relaxed);
     }
-    
+
     pub fn get_block(&self, index: usize) -> Option<Block<Blake3Algorithm>> {
         self.chain.read().unwrap().get(index).cloned()
     }
-    
+
     // Add method to check if a block with given hash exists
     pub fn has_block_with_hash(&self, hash: &str) -> bool {
         self.block_height_cache.read().unwrap().contains_key(hash)
     }
-    
+
     // Add method to get a block by its hash
     pub fn get_block_by_hash(&self, hash: &str) -> Option<Block<Blake3Algorithm>> {
         let cache = self.block_height_cache.read().unwrap();
@@ -61,7 +68,7 @@ impl BlockchainData {
         }
         None
     }
-    
+
     // Modified to return bool indicating success
     pub fn add_block(&self, mut block: Block<Blake3Algorithm>) -> bool {
         // Validate block first
@@ -72,14 +79,18 @@ impl BlockchainData {
 
         let mut chain = self.chain.write().unwrap();
         let height = chain.len();
-        
+
         // If block has no transactions, check if there are any pending
         if block.transactions.is_empty() {
             let pending_txs = get_next_block_transactions(100);
             if !pending_txs.is_empty() {
-                log::info!("Adding {} pending transactions to block {}", pending_txs.len(), block.index);
+                log::info!(
+                    "Adding {} pending transactions to block {}",
+                    pending_txs.len(),
+                    block.index
+                );
                 block.transactions = pending_txs;
-                
+
                 // Recalculate block hash since we modified it
                 block.hash = block.calculate_hash();
             }
@@ -90,31 +101,33 @@ impl BlockchainData {
             log::warn!("Block with hash {} already exists", block.hash);
             return false;
         }
-        
+
         // Use saturating_add to prevent overflow
-        self.total_tokens.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            Some(current.saturating_add(block.tokens))
-        }).unwrap();
-        
+        self.total_tokens
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(block.tokens))
+            })
+            .unwrap();
+
         {
             let mut cache = self.block_height_cache.write().unwrap();
             cache.insert(block.hash.clone(), height);
         }
-        
+
         // Add block to chain
         chain.push_back(block);
-        
+
         true
     }
-    
+
     pub fn len(&self) -> usize {
         self.chain.read().unwrap().len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.chain.read().unwrap().is_empty()
     }
-    
+
     pub fn iter(&self) -> Vec<Block<Blake3Algorithm>> {
         self.chain.read().unwrap().iter().cloned().collect()
     }
@@ -128,13 +141,13 @@ pub fn load_blockchain_with_retry() -> Result<(), StorageError> {
     if result.is_ok() {
         return result;
     }
-    
+
     // Second attempt after cleanup
     let result = load_blockchain();
     if result.is_ok() {
         return result;
     }
-    
+
     // One more attempt with delay
     std::thread::sleep(std::time::Duration::from_millis(500));
     load_blockchain()
@@ -154,10 +167,10 @@ pub fn save_blockchain() -> Result<(), StorageError> {
     let balances = BALANCES.lock().unwrap().clone();
     let balances_data = bincode::serialize(&balances)?;
     storage.save_data(b"balances", &balances_data)?;
-    
+
     storage.flush()?;
     log::debug!("Blockchain and balances saved successfully");
-    
+
     Ok(())
 }
 
@@ -165,7 +178,7 @@ pub fn save_mvsm() -> Result<(), StorageError> {
     let kari_dir = get_kari_dir();
     let db_path = kari_dir.join("storage").join("mvsm_db");
     let storage = RocksDBStorage::new(db_path)?;
-    
+
     // Save basic system state without accessing VM directly to avoid circular dependency
     let system_metadata = serde_json::json!({
         "status": "system_save",
@@ -186,10 +199,10 @@ pub fn save_mvsm() -> Result<(), StorageError> {
         },
         "note": "VM state will be saved separately by mona-vm to avoid circular dependencies"
     });
-    
+
     let metadata_bytes = system_metadata.to_string().into_bytes();
     storage.save_data(b"blockchain_metadata", &metadata_bytes)?;
-    
+
     // Save blockchain transaction statistics
     let blockchain_stats = serde_json::json!({
         "total_blocks": BLOCKCHAIN_DATA.len(),
@@ -203,12 +216,15 @@ pub fn save_mvsm() -> Result<(), StorageError> {
             .unwrap_or_default()
             .as_secs(),
     });
-    
-    storage.save_data(b"blockchain_stats", &blockchain_stats.to_string().into_bytes())?;
-    
+
+    storage.save_data(
+        b"blockchain_stats",
+        &blockchain_stats.to_string().into_bytes(),
+    )?;
+
     storage.flush()?;
     log::debug!("Blockchain metadata saved successfully to secure storage");
-    
+
     Ok(())
 }
 
@@ -218,14 +234,14 @@ pub fn init_blockchain_state() {
     if balances.is_empty() {
         // Add any initial balances here if needed
     }
-    
+
     // No need to initialize BLOCKCHAIN_DATA as it's created by lazy_static
 }
 
 // Modified BlockchainError to store StorageError as a string
 #[derive(Debug, Serialize, Deserialize)]
 pub enum BlockchainError {
-    Storage(String), 
+    Storage(String),
     Balance(String),
     Initialization(String),
     Transaction(String),
@@ -234,7 +250,6 @@ pub enum BlockchainError {
     IO(String), // Changed from std::io::Error to String to support serialization
     NotFound(String),
     Network(String),
-    
 }
 
 impl From<StorageError> for BlockchainError {
@@ -267,8 +282,9 @@ impl std::fmt::Display for BlockchainError {
 
 // Helper function to normalize addresses
 pub fn normalize_address(address: &str) -> Result<Address, BlockchainError> {
-    Address::from_hex_literal(address)
-        .map_err(|_| BlockchainError::InvalidAddress(format!("Invalid address format: {}", address)))
+    Address::from_hex_literal(address).map_err(|_| {
+        BlockchainError::InvalidAddress(format!("Invalid address format: {}", address))
+    })
 }
 
 // Add a function to handle Address directly
@@ -282,7 +298,9 @@ pub fn get_balance(address: &str) -> Result<u64, BlockchainError> {
 
     // Validate address format first
     let normalized_address = if address.trim().is_empty() {
-        return Err(BlockchainError::InvalidAddress("Empty address provided".to_string()));
+        return Err(BlockchainError::InvalidAddress(
+            "Empty address provided".to_string(),
+        ));
     } else if !address.starts_with("0x") {
         format!("0x{}", address)
     } else {
@@ -290,22 +308,33 @@ pub fn get_balance(address: &str) -> Result<u64, BlockchainError> {
     };
 
     // Validate hex format
-    if normalized_address.len() < 3 || !normalized_address[2..].chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(BlockchainError::InvalidAddress(format!("Invalid hex address: {}", address)));
+    if normalized_address.len() < 3
+        || !normalized_address[2..]
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(BlockchainError::InvalidAddress(format!(
+            "Invalid hex address: {}",
+            address
+        )));
     }
 
-    log::debug!("Getting balance for normalized address: {}", normalized_address);
+    log::debug!(
+        "Getting balance for normalized address: {}",
+        normalized_address
+    );
 
     while attempts < max_retries {
         match BALANCES.lock() {
             Ok(guard) => {
-                let balance = guard.get(&normalized_address)
+                let balance = guard
+                    .get(&normalized_address)
                     .or_else(|| {
                         let no_prefix = normalized_address.trim_start_matches("0x");
                         guard.get(no_prefix)
                     })
                     .unwrap_or(&0);
-                
+
                 return Ok(*balance);
             }
             Err(_) => {
@@ -326,19 +355,19 @@ pub fn get_address_balance(address: &Address) -> Result<u64, BlockchainError> {
     get_balance(&address.to_hex_literal())
 }
 
-
-
-
 // Improved submit_transaction function with better logging
 pub fn submit_transaction(transaction: block::Transaction) -> Result<(), BlockchainError> {
     // Validate transaction first - Allow VM transactions with amount = 0
     let tx_type = transaction.get_transaction_type();
-    
-    if transaction.amount == 0 && 
-       tx_type != "VM_FUNCTION_CALL" && 
-       tx_type != "VM_MODULE_DEPLOYMENT" && 
-       tx_type != "MINING" {
-        return Err(BlockchainError::Transaction("Invalid transaction amount".to_string()));
+
+    if transaction.amount == 0
+        && tx_type != "VM_FUNCTION_CALL"
+        && tx_type != "VM_MODULE_DEPLOYMENT"
+        && tx_type != "MINING"
+    {
+        return Err(BlockchainError::Transaction(
+            "Invalid transaction amount".to_string(),
+        ));
     }
 
     // Check for sufficient balance for non-mining and non-VM transactions
@@ -346,35 +375,42 @@ pub fn submit_transaction(transaction: block::Transaction) -> Result<(), Blockch
         let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
         let total_cost = transaction.amount + transaction.gas_fee;
         if sender_balance < total_cost {
-            return Err(BlockchainError::InsufficientFunds(
-                format!("Insufficient balance: {} < {} (amount: {} + gas: {})", 
-                    sender_balance, total_cost, transaction.amount, transaction.gas_fee)
-            ));
+            return Err(BlockchainError::InsufficientFunds(format!(
+                "Insufficient balance: {} < {} (amount: {} + gas: {})",
+                sender_balance, total_cost, transaction.amount, transaction.gas_fee
+            )));
         }
     } else if tx_type == "VM_MODULE_DEPLOYMENT" {
         // For VM module deployment, allow even with zero balance but warn
         let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
         if sender_balance < transaction.gas_fee {
-            log::warn!("VM module deployment proceeding with insufficient balance: {} < {}", sender_balance, transaction.gas_fee);
+            log::warn!(
+                "VM module deployment proceeding with insufficient balance: {} < {}",
+                sender_balance,
+                transaction.gas_fee
+            );
             // Don't return error - allow deployment to proceed
         }
     } else if tx_type == "VM_FUNCTION_CALL" {
         // For VM function calls, only check gas fee
         let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
         if sender_balance < transaction.gas_fee {
-            return Err(BlockchainError::InsufficientFunds(
-                format!("Insufficient balance for gas: {} < {}", sender_balance, transaction.gas_fee)
-            ));
+            return Err(BlockchainError::InsufficientFunds(format!(
+                "Insufficient balance for gas: {} < {}",
+                sender_balance, transaction.gas_fee
+            )));
         }
     }
-    
+
     log::info!(
         "Submitting transaction: {} (type: {}, id: {})",
         tx_type,
         transaction.transaction_id,
-        hex::encode(&transaction.transaction_id.as_bytes()[..8.min(transaction.transaction_id.len())])
+        hex::encode(
+            &transaction.transaction_id.as_bytes()[..8.min(transaction.transaction_id.len())]
+        )
     );
-    
+
     // Provide detailed VM transaction info if applicable
     if tx_type == "VM_FUNCTION_CALL" {
         if let Some(data) = &transaction.data {
@@ -383,8 +419,8 @@ pub fn submit_transaction(transaction: block::Transaction) -> Result<(), Blockch
                     let parts: Vec<&str> = data_str.split(':').collect();
                     if parts.len() >= 3 {
                         log::info!(
-                            "VM function call: module={}, function={}", 
-                            parts.get(1).unwrap_or(&"unknown"), 
+                            "VM function call: module={}, function={}",
+                            parts.get(1).unwrap_or(&"unknown"),
                             parts.get(2).unwrap_or(&"unknown")
                         );
                     }
@@ -392,62 +428,84 @@ pub fn submit_transaction(transaction: block::Transaction) -> Result<(), Blockch
             }
         } else if tx_type == "VM_MODULE_DEPLOYMENT" {
             if let Some((address, module_name)) = transaction.get_vm_module_info() {
-                log::info!("VM module deployment: {} at address: {}", module_name, address);
+                log::info!(
+                    "VM module deployment: {} at address: {}",
+                    module_name,
+                    address
+                );
             }
         }
     }
-    
+
     // Add to pending transaction queue
     let mut transactions = match PENDING_TRANSACTIONS.lock() {
         Ok(t) => t,
-        Err(_) => return Err(BlockchainError::Transaction("Failed to lock pending transactions".to_string()))
+        Err(_) => {
+            return Err(BlockchainError::Transaction(
+                "Failed to lock pending transactions".to_string(),
+            ));
+        }
     };
-    
+
     // Check for duplicate transactions
-    if transactions.iter().any(|tx| tx.transaction_id == transaction.transaction_id) {
-        return Err(BlockchainError::Transaction("Duplicate transaction ID".to_string()));
+    if transactions
+        .iter()
+        .any(|tx| tx.transaction_id == transaction.transaction_id)
+    {
+        return Err(BlockchainError::Transaction(
+            "Duplicate transaction ID".to_string(),
+        ));
     }
-    
+
     transactions.push_back(transaction);
-    log::info!("Transaction added to pending queue. Queue size: {}", transactions.len());
-    
+    log::info!(
+        "Transaction added to pending queue. Queue size: {}",
+        transactions.len()
+    );
+
     Ok(())
 }
 
 // Enhanced function to prioritize VM function calls and deployments
 pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> {
     let mut result = Vec::new();
-    
+
     if let Ok(mut queue) = PENDING_TRANSACTIONS.lock() {
-        info!("Processing pending transaction queue, size: {}", queue.len());
-        
+        info!(
+            "Processing pending transaction queue, size: {}",
+            queue.len()
+        );
+
         let mut vm_module_deployments = VecDeque::new();
         let mut vm_function_calls = VecDeque::new();
         let mut regular_txs = VecDeque::new();
-        
+
         // Sort transactions by priority
         while let Some(tx) = queue.pop_front() {
             match tx.get_transaction_type() {
                 "VM_MODULE_DEPLOYMENT" => {
-                    info!("Found VM module deployment transaction: {}", tx.transaction_id);
+                    info!(
+                        "Found VM module deployment transaction: {}",
+                        tx.transaction_id
+                    );
                     if let Some((address, module_name)) = tx.get_vm_module_info() {
                         info!("  Module: {} at address: {}", module_name, address);
                     }
                     vm_module_deployments.push_back(tx);
-                },
+                }
                 "VM_FUNCTION_CALL" => {
                     info!("Found VM function call transaction: {}", tx.transaction_id);
                     if let Some((module_id, function)) = tx.get_vm_function_info() {
                         info!("  Calling: {}::{}", module_id, function);
                     }
                     vm_function_calls.push_back(tx);
-                },
+                }
                 _ => {
                     regular_txs.push_back(tx);
                 }
             }
         }
-        
+
         // Add VM module deployments first (highest priority)
         while !vm_module_deployments.is_empty() && result.len() < max_count {
             if let Some(tx) = vm_module_deployments.pop_front() {
@@ -455,7 +513,7 @@ pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> 
                 result.push(tx);
             }
         }
-        
+
         // Add VM function calls next (medium priority)
         while !vm_function_calls.is_empty() && result.len() < max_count {
             if let Some(tx) = vm_function_calls.pop_front() {
@@ -463,12 +521,12 @@ pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> 
                 result.push(tx);
             }
         }
-        
+
         // Finally add regular transactions (lowest priority)
         while !regular_txs.is_empty() && result.len() < max_count {
             result.push(regular_txs.pop_front().unwrap());
         }
-        
+
         // Return unused transactions to queue in priority order
         for tx in vm_module_deployments {
             queue.push_front(tx);
@@ -479,20 +537,23 @@ pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> 
         for tx in regular_txs {
             queue.push_back(tx);
         }
-        
-        info!("Selected {} transactions for next block ({} remain in queue)", 
-             result.len(), queue.len());
+
+        info!(
+            "Selected {} transactions for next block ({} remain in queue)",
+            result.len(),
+            queue.len()
+        );
     } else {
         warn!("Failed to lock transaction queue, creating empty block");
     }
-    
+
     result
 }
 
 // Make sure PENDING_TRANSACTIONS is properly exposed to be processed
 pub fn get_pending_transactions(max_count: usize) -> Vec<block::Transaction> {
     let mut result = Vec::new();
-    
+
     if let Ok(mut queue) = PENDING_TRANSACTIONS.lock() {
         while let Some(tx) = queue.pop_front() {
             result.push(tx);
@@ -501,7 +562,7 @@ pub fn get_pending_transactions(max_count: usize) -> Vec<block::Transaction> {
             }
         }
     }
-    
+
     result
 }
 
@@ -511,44 +572,51 @@ pub fn load_blockchain() -> Result<(), StorageError> {
     let db_path = kari_dir.join("storage").join("blockchain_db");
     let storage = RocksDBStorage::new(db_path)?;
     init_blockchain_state();
-    
+
     let mut loaded_balances = HashMap::new();
     if let Ok(Some(balances_data)) = storage.load_data(b"balances") {
         if let Ok(balances) = bincode::deserialize::<HashMap<String, u64>>(&balances_data) {
             loaded_balances = balances;
-            log::info!("Loaded {} balances from dedicated storage", loaded_balances.len());
+            log::info!(
+                "Loaded {} balances from dedicated storage",
+                loaded_balances.len()
+            );
         }
     }
 
     match storage.load_data(b"blockchain")? {
         Some(value) => {
             let loaded_chain: VecDeque<Block<Blake3Algorithm>> = bincode::deserialize(&value)?;
-            
+
             let mut balances = if loaded_balances.is_empty() {
                 HashMap::new()
             } else {
                 loaded_balances.clone()
             };
-            
+
             let mut total_tokens = 0u64;
             let mut block_height_cache = HashMap::new();
-            
+
             let mut chain = BLOCKCHAIN_DATA.chain.write().unwrap();
             *chain = loaded_chain;
-            
+
             if loaded_balances.is_empty() {
                 for (height, block) in chain.iter().enumerate() {
                     // Prevent overflow
                     total_tokens = total_tokens.saturating_add(block.tokens);
-                    
+
                     let miner_address = match normalize_address(&block.address) {
                         Ok(addr) => addr.to_hex_literal(),
                         Err(_) => {
-                            log::warn!("Invalid miner address in block {}: {}", height, block.address);
+                            log::warn!(
+                                "Invalid miner address in block {}: {}",
+                                height,
+                                block.address
+                            );
                             continue;
                         }
                     };
-                    
+
                     let current_balance = balances.entry(miner_address).or_insert(0);
                     *current_balance = current_balance.saturating_add(block.tokens);
                     block_height_cache.insert(block.hash.clone(), height);
@@ -556,11 +624,11 @@ pub fn load_blockchain() -> Result<(), StorageError> {
                     for tx in &block.transactions {
                         let tx_sender = tx.sender.to_hex_literal();
                         let tx_receiver = tx.receiver.to_hex_literal();
-                        
+
                         // Prevent underflow on sender balance
                         let sender_balance = balances.entry(tx_sender).or_insert(0);
                         *sender_balance = sender_balance.saturating_sub(tx.amount);
-                        
+
                         // Prevent overflow on receiver balance
                         let receiver_balance = balances.entry(tx_receiver).or_insert(0);
                         *receiver_balance = receiver_balance.saturating_add(tx.amount);
@@ -573,17 +641,22 @@ pub fn load_blockchain() -> Result<(), StorageError> {
                 }
             }
 
-            BLOCKCHAIN_DATA.total_tokens.store(total_tokens, Ordering::Relaxed);
+            BLOCKCHAIN_DATA
+                .total_tokens
+                .store(total_tokens, Ordering::Relaxed);
             *BLOCKCHAIN_DATA.block_height_cache.write().unwrap() = block_height_cache;
-            
+
             // Use scope to ensure lock is released quickly
             {
                 let mut global_balances = BALANCES.lock().unwrap();
                 *global_balances = balances;
             }
 
-            log::info!("Blockchain loaded successfully with {} blocks and {} accounts", 
-                chain.len(), BALANCES.lock().unwrap().len());
+            log::info!(
+                "Blockchain loaded successfully with {} blocks and {} accounts",
+                chain.len(),
+                BALANCES.lock().unwrap().len()
+            );
         }
         None => {
             log::info!("No blockchain data found, initializing new chain");

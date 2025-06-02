@@ -1,14 +1,18 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
+use lazy_static::lazy_static;
 use log::debug;
 use std::sync::RwLock;
-use lazy_static::lazy_static;
 
 // Gas fee collector address remains constant
-pub const GAS_FEE_COLLECTOR: &str = "0x47621776628ba3a5b9baaab38e61f4c98e893e124204bc4dad52e702e2b24ea1";
+pub const GAS_FEE_COLLECTOR: &str =
+    "0x47621776628ba3a5b9baaab38e61f4c98e893e124204bc4dad52e702e2b24ea1";
 
 // Gas fee configuration
-pub const MIN_GAS_FEE: u64 = 20_000;     // Minimum gas fee (0.00002 KA)
-pub const BASE_GAS_FEE: u64 = 50_000;    // Base gas fee (0.00005 KA)
-pub const MAX_GAS_FEE: u64 = 3_000_000;  // Maximum gas fee (0.003 KA)
+pub const MIN_GAS_FEE: u64 = 20_000; // Minimum gas fee (0.00002 KA)
+pub const BASE_GAS_FEE: u64 = 50_000; // Base gas fee (0.00005 KA)
+pub const MAX_GAS_FEE: u64 = 3_000_000; // Maximum gas fee (0.003 KA)
 pub const CONGESTION_MULTIPLIER: f64 = 1.5; // How much each pending tx affects fee
 
 // Store network statistics for gas calculation
@@ -65,13 +69,13 @@ pub fn update_transaction_count_24h(count: usize) {
 }
 
 /// Calculate gas fee dynamically based on network conditions
-/// 
+///
 /// # Parameters
 /// * `priority_boost`: Optional priority boost in gas units. Higher values will result in faster processing.
 ///
 /// # Returns
 /// The calculated gas fee in KA units, bounded between MIN_GAS_FEE and MAX_GAS_FEE.
-/// 
+///
 /// # Algorithm
 /// The gas calculation uses several factors:
 /// 1. Base gas fee (constant)
@@ -83,7 +87,7 @@ pub fn calculate_gas_fee(priority_boost: Option<u64>) -> u64 {
         Ok(stats) => stats,
         Err(_) => return BASE_GAS_FEE, // Default to base fee if can't read stats
     };
-    
+
     // Calculate congestion component based on pending transactions with exponential scaling
     // This creates a more responsive fee market that scales with network demand
     let pending_tx_count = network_stats.pending_transactions as f64;
@@ -93,7 +97,7 @@ pub fn calculate_gas_fee(priority_boost: Option<u64>) -> u64 {
     } else {
         1.0
     };
-    
+
     // Factor in 24h transaction volume for longer-term fee adjustment
     let volume_factor = if network_stats.transaction_count_24h > 1000 {
         // Slight increase based on 24h volume
@@ -101,19 +105,26 @@ pub fn calculate_gas_fee(priority_boost: Option<u64>) -> u64 {
     } else {
         1.0
     };
-    
+
     // Apply user's priority boost if provided
     let priority = priority_boost.unwrap_or(0);
-    
+
     // Calculate total gas fee: start with BASE_FEE and apply multipliers
     let gas_fee = ((BASE_GAS_FEE as f64) * tx_multiplier * volume_factor) as u64 + priority;
-    
+
     // Ensure gas fee is within allowed range
     let gas_fee = gas_fee.clamp(MIN_GAS_FEE, MAX_GAS_FEE);
-    
-    debug!("Calculated gas fee: {} (base: {}, tx_multiplier: {:.2}, volume_factor: {:.2}, priority: {}, pending txs: {})",
-           gas_fee, BASE_GAS_FEE, tx_multiplier, volume_factor, priority, network_stats.pending_transactions);
-    
+
+    debug!(
+        "Calculated gas fee: {} (base: {}, tx_multiplier: {:.2}, volume_factor: {:.2}, priority: {}, pending txs: {})",
+        gas_fee,
+        BASE_GAS_FEE,
+        tx_multiplier,
+        volume_factor,
+        priority,
+        network_stats.pending_transactions
+    );
+
     gas_fee
 }
 

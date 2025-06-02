@@ -1,17 +1,19 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use consensus_pos::Blake3Algorithm;
 use log::{error, info};
 use mona_types::address::Address;
 
-
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::json;
-
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mona_blockchain::block::{Block, Transaction};
 use mona_blockchain::blockchain::normalize_address;
 
-use mona_types::kari::{KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KARI};
-
+use mona_types::kari::{
+    KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KARI,
+};
 
 /// Create a genesis block containing the total supply of Kari tokens
 pub(crate) fn create_genesis_block(address: &Address, coin: &KARI) -> Block<Blake3Algorithm> {
@@ -26,20 +28,20 @@ pub(crate) fn create_genesis_block(address: &Address, coin: &KARI) -> Block<Blak
         Err(e) => {
             error!("Invalid pool address: {}, using genesis address instead", e);
             address.clone()
-        },
+        }
     };
-    
+
     let pool_transaction = Transaction {
         transaction_id: format!("genesis_pool_reserve_{}", timestamp),
         sender: address.clone(),
         receiver: pool_address,
         amount: POOL_RESERVED_KA,
         timestamp,
-        gas_fee: 0, // No gas fee for genesis transaction
+        gas_fee: 0,            // No gas fee for genesis transaction
         signature: Vec::new(), // No signature needed for genesis transaction
-        data: None, // Add missing data field
+        data: None,            // Add missing data field
     };
-    
+
     // Create transactions list with pool transaction
     let mut transactions = Vec::new();
     transactions.push(pool_transaction);
@@ -73,18 +75,25 @@ pub(crate) fn create_genesis_block(address: &Address, coin: &KARI) -> Block<Blak
                 .unwrap_or_else(|| "Unknown time".to_string())
         },
         "genesis_address": address.to_hex_literal()
-    }).to_string().into_bytes();
+    })
+    .to_string()
+    .into_bytes();
 
-    info!("Creating genesis block for {} with {} total supply", coin.name, coin.total_supply);
-    info!("Reserving {} {} ({} {}A) for pool address: {}", 
-        POOL_RESERVED_KARI, coin.symbol, POOL_RESERVED_KA, coin.symbol, POOL_ADDRESS);
-    
+    info!(
+        "Creating genesis block for {} with {} total supply",
+        coin.name, coin.total_supply
+    );
+    info!(
+        "Reserving {} {} ({} {}A) for pool address: {}",
+        POOL_RESERVED_KARI, coin.symbol, POOL_RESERVED_KA, coin.symbol, POOL_ADDRESS
+    );
+
     Block::new(
         0,
         genesis_data,
         "0".repeat(64),
         coin.total_supply,
-        transactions,  // Include the pool allocation transaction
+        transactions, // Include the pool allocation transaction
         address.to_hex_literal(),
         Blake3Algorithm::new(),
     )

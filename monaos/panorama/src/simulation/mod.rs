@@ -1,33 +1,40 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
+use common::get_main_wallet;
 use consensus_pos::Blake3Algorithm;
-use log::{error, info, warn, debug};
-use tokio::sync::mpsc;
+use log::{debug, error, info, warn};
+use serde_json::{Value, json};
+use sha3::Digest; // Add this import
+use std::collections::VecDeque;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use serde_json::{json, Value};
-use std::collections::VecDeque;
-use std::str::FromStr;
-use sha3::Digest; // Add this import
-use common::get_main_wallet; // Add this import
+use tokio::sync::mpsc; // Add this import
 
-use mona_blockchain::block::{Block, Transaction};
-use mona_blockchain::blockchain::{save_blockchain, BALANCES, BLOCKCHAIN_DATA, normalize_address};
+use crate::node::{NodeConfig, get_peer_count, propagate_block, start_node, stop_node};
+use crate::staking::{is_validator, load_staking_state, process_rewards};
 use crate::transfer_tokens::transfer_tokens;
+use crate::utils::{
+    calculate_gas_fee, format_gas_fee_display, update_last_block_time,
+    update_pending_transaction_count,
+};
+use mona_blockchain::block::{Block, Transaction};
+use mona_blockchain::blockchain::{BALANCES, BLOCKCHAIN_DATA, normalize_address, save_blockchain};
 use mona_types::address::Address;
-use mona_types::kari::{KARI, KA_PER_KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KA, TOTAL_SUPPLY_KARI, VALIDATOR_STAKING_MINIMUM_KARI, NODE_STAKING_MINIMUM_KARI};
-use crate::utils::{update_pending_transaction_count, update_last_block_time, calculate_gas_fee, format_gas_fee_display};
-use crate::staking::{load_staking_state, process_rewards, is_validator};
-use crate::node::{NodeConfig, start_node, stop_node, propagate_block, get_peer_count};
-use mona_vm::{execute_vm_transaction, convert_to_vm_transaction}; // Remove VM_STATE as it's unused
+use mona_types::kari::{
+    KA_PER_KARI, KARI, NODE_STAKING_MINIMUM_KARI, POOL_ADDRESS, POOL_RESERVED_KA,
+    POOL_RESERVED_KARI, TOTAL_SUPPLY_KA, TOTAL_SUPPLY_KARI, VALIDATOR_STAKING_MINIMUM_KARI,
+};
+use mona_vm::{convert_to_vm_transaction, execute_vm_transaction}; // Remove VM_STATE as it's unused
 
 pub mod create_genesis_block;
 use create_genesis_block::create_genesis_block;
 
-
 // Function to parse and normalize address
 fn parse_address(address: &str) -> Result<Address, String> {
-    Address::from_str(address)
-        .map_err(|_| format!("Invalid address format: {}", address))
+    Address::from_str(address).map_err(|_| format!("Invalid address format: {}", address))
 }
 
 // Add pending transactions queue
@@ -43,8 +50,8 @@ pub fn add_pending_transaction(transaction: Transaction) -> bool {
             // Update pending transaction count for gas calculation
             update_pending_transaction_count(queue.len());
             true
-        },
-        Err(_) => false
+        }
+        Err(_) => false,
     }
 }
 
@@ -56,7 +63,7 @@ pub fn process_vm_transaction(
     sender_address: &str,
     gas_budget: u64,
     password: Option<&str>,
-    tx: &mpsc::Sender<String>
+    tx: &mpsc::Sender<String>,
 ) -> Result<Transaction, String> {
     // Create VM transaction
     let vm_tx = mona_vm::VMTransaction::new(
@@ -64,9 +71,9 @@ pub fn process_vm_transaction(
         module_id.to_string(),
         function.to_string(),
         args,
-        gas_budget
+        gas_budget,
     );
-    
+
     // Sign if password provided
     let vm_tx = if let Some(pwd) = password {
         // Create payload for signing
@@ -76,7 +83,7 @@ pub fn process_vm_transaction(
         hasher.update(function.as_bytes());
         hasher.update(gas_budget.to_le_bytes());
         let payload = hasher.finalize();
-        
+
         // Sign with wallet if available
         if let Some(wallet_addr) = get_main_wallet() {
             if let Ok(wallet) = mona_crypto::load_wallet(&wallet_addr, pwd) {
@@ -94,7 +101,7 @@ pub fn process_vm_transaction(
     } else {
         vm_tx
     };
-    
+
     // Execute VM transaction
     match execute_vm_transaction(&vm_tx) {
         Ok(result) => {
@@ -103,9 +110,9 @@ pub fn process_vm_transaction(
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-                
+
             let vm_data = format!("VM:{}:{}:{}", module_id, function, gas_budget);
-            
+
             let blockchain_tx = Transaction {
                 transaction_id: vm_tx.tx_id.clone(),
                 sender: parse_address(sender_address).map_err(|e| e.to_string())?,
@@ -116,7 +123,7 @@ pub fn process_vm_transaction(
                 signature: vm_tx.signature.unwrap_or_default(),
                 data: Some(vm_data.into_bytes()),
             };
-            
+
             // Add to pending transactions
             if add_pending_transaction(blockchain_tx.clone()) {
                 let tx_json = json!({
@@ -133,14 +140,15 @@ pub fn process_vm_transaction(
                         "result": result
                     },
                     "status": "pending"
-                }).to_string();
-                
+                })
+                .to_string();
+
                 let _ = tx.try_send(tx_json);
                 Ok(blockchain_tx)
             } else {
                 Err("Failed to add VM transaction to blockchain".to_string())
             }
-        },
+        }
         Err(e) => {
             let error_json = json!({
                 "event": "vm_transaction_error",
@@ -151,8 +159,9 @@ pub fn process_vm_transaction(
                     "sender": sender_address,
                     "gas_budget": gas_budget
                 }
-            }).to_string();
-            
+            })
+            .to_string();
+
             let _ = tx.try_send(error_json);
             Err(e)
         }
@@ -166,7 +175,7 @@ pub fn process_transfer(
     amount: u64,
     password: &str,
     priority_boost: Option<u64>,
-    tx: &mpsc::Sender<String>
+    tx: &mpsc::Sender<String>,
 ) -> Result<Transaction, String> {
     // Check if this is a VM transaction (contains :: in the address)
     if to_address.contains("::") {
@@ -175,7 +184,7 @@ pub fn process_transfer(
         if parts.len() >= 2 {
             let module_id = format!("{}::{}", parts[0], parts[1]);
             let function = parts.get(2).unwrap_or(&"main").to_string();
-            
+
             return process_vm_transaction(
                 &module_id,
                 &function,
@@ -183,29 +192,35 @@ pub fn process_transfer(
                 from_address,
                 amount, // Use amount as gas budget
                 Some(password),
-                tx
+                tx,
             );
         }
     }
-    
+
     // Regular token transfer logic
     // Parse addresses
     let from = match normalize_address(from_address) {
         Ok(addr) => addr,
         Err(e) => return Err(format!("Invalid sender address: {}", e)),
     };
-    
+
     let to = match normalize_address(to_address) {
-        Ok(addr) => addr, 
+        Ok(addr) => addr,
         Err(e) => return Err(format!("Invalid receiver address: {}", e)),
     };
-    
+
     // Calculate gas fee dynamically
     let gas_fee = calculate_gas_fee(priority_boost);
     let gas_fee_display = format_gas_fee_display(gas_fee);
-    
+
     // Execute transfer using string representation and password for signing
-    match transfer_tokens(&from.to_hex_literal(), &to.to_hex_literal(), amount, password, gas_fee) {
+    match transfer_tokens(
+        &from.to_hex_literal(),
+        &to.to_hex_literal(),
+        amount,
+        password,
+        gas_fee,
+    ) {
         Ok(transaction) => {
             // Verify signature right after creation for better debugging
             let signature_status = if transaction.signature.is_empty() {
@@ -220,7 +235,7 @@ pub fn process_transfer(
                     }
                 }
             };
-            
+
             // Add to pending transactions
             if add_pending_transaction(transaction.clone()) {
                 // Notify about successful transaction submission
@@ -241,15 +256,15 @@ pub fn process_transfer(
                     },
                     "status": "pending"
                 }).to_string();
-                
+
                 let _ = tx.try_send(tx_json);
-                
+
                 // Force save blockchain state to ensure transaction persistence
                 match mona_blockchain::blockchain::save_blockchain() {
                     Ok(_) => info!("Transaction recorded and blockchain state saved"),
                     Err(e) => warn!("Transaction recorded but failed to save state: {}", e),
                 }
-                
+
                 // Return transaction
                 Ok(transaction)
             } else {
@@ -258,11 +273,11 @@ pub fn process_transfer(
                     true => {
                         info!("Transaction bypassed queue and directly included in blockchain");
                         Ok(transaction)
-                    },
-                    false => Err("Failed to add transaction to blockchain".to_string())
+                    }
+                    false => Err("Failed to add transaction to blockchain".to_string()),
                 }
             }
-        },
+        }
         Err(e) => {
             // Update error JSON to use calculated gas fee
             let error_json = json!({
@@ -276,10 +291,11 @@ pub fn process_transfer(
                     "gas_fee_display": gas_fee_display,
                     "total_cost": crate::utils::calculate_total_transaction_cost(amount, gas_fee)
                 }
-            }).to_string();
-            
+            })
+            .to_string();
+
             let _ = tx.try_send(error_json);
-            
+
             // Return error
             Err(format!("{}", e))
         }
@@ -307,7 +323,7 @@ fn force_transaction_inclusion(transaction: &Transaction) -> bool {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-        
+
     // Create block data - properly serialize Address types via serde JSON
     let block_data = json!({
         "block_type": "forced_transaction",
@@ -320,7 +336,9 @@ fn force_transaction_inclusion(transaction: &Transaction) -> bool {
             "gas_fee": transaction.gas_fee, // Fix: Use transaction.gas_fee instead of crate::utils::GAS_FEE_AMOUNT
             "timestamp": transaction.timestamp
         }]
-    }).to_string().into_bytes();
+    })
+    .to_string()
+    .into_bytes();
 
     // Create emergency block to include the transaction
     let emergency_block = Block::new(
@@ -335,13 +353,13 @@ fn force_transaction_inclusion(transaction: &Transaction) -> bool {
 
     // Add block to chain
     BLOCKCHAIN_DATA.add_block(emergency_block);
-    
+
     // Save the blockchain immediately
     match save_blockchain() {
         Ok(_) => {
             info!("Emergency transaction block created and saved");
             true
-        },
+        }
         Err(e) => {
             error!("Failed to save emergency transaction block: {}", e);
             false
@@ -349,11 +367,7 @@ fn force_transaction_inclusion(transaction: &Transaction) -> bool {
     }
 }
 
-pub fn run_blockchain(
-    running: Arc<Mutex<bool>>, 
-    address: String,
-    tx: mpsc::Sender<String>
-) {
+pub fn run_blockchain(running: Arc<Mutex<bool>>, address: String, tx: mpsc::Sender<String>) {
     // System password for automated transactions - could be set via config
     let _system_password = "kanari_system";
 
@@ -394,13 +408,13 @@ pub fn run_blockchain(
     } else {
         info!("Staking system initialized");
     }
-    
+
     // Initialize node networking if multiple nodes are supported
     let node_config = NodeConfig {
         node_id: format!("node-{}", normalized_address[..8].to_string()),
         blockchain_address: normalized_address.clone(),
         listen_ip: "0.0.0.0".to_string(), // Listen on all interfaces, not just localhost
-        listen_port: 51303, // Use fixed default port instead of dynamic calculation
+        listen_port: 51303,               // Use fixed default port instead of dynamic calculation
         discovery_nodes: vec![
             // List of discovery nodes for peer discovery
             "devnet.kanari.site:51303".to_string(),
@@ -410,14 +424,22 @@ pub fn run_blockchain(
         max_peers: 50, // Increased max peers for better network connectivity
         is_validator: is_validator(&node_address), // Dynamically check if this node is a validator
         use_tls: false, // TLS disabled by default
-        cert_path: Some(format!("{}/certs/node.crt", common::get_kari_dir().display())),
-        key_path: Some(format!("{}/certs/node.key", common::get_kari_dir().display())),
+        cert_path: Some(format!(
+            "{}/certs/node.crt",
+            common::get_kari_dir().display()
+        )),
+        key_path: Some(format!(
+            "{}/certs/node.key",
+            common::get_kari_dir().display()
+        )),
     };
-    
+
     // Log node network configuration
-    info!("Node network configuration: {}:{} (validator: {})", 
-          node_config.listen_ip, node_config.listen_port, node_config.is_validator);
-    
+    info!(
+        "Node network configuration: {}:{} (validator: {})",
+        node_config.listen_ip, node_config.listen_port, node_config.is_validator
+    );
+
     // Start node networking
     if let Err(e) = start_node(node_config, tx.clone()) {
         warn!("Failed to start node networking: {}", e);
@@ -441,7 +463,8 @@ pub fn run_blockchain(
             "node_minimum": NODE_STAKING_MINIMUM_KARI,
         },
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
-    }).to_string();
+    })
+    .to_string();
     let _ = tx.try_send(init_status);
 
     // Check if blockchain is already initialized
@@ -454,7 +477,7 @@ pub fn run_blockchain(
         // Enhanced blockchain status
         let blocks = BLOCKCHAIN_DATA.iter();
         let last_block = blocks.last().unwrap();
-        
+
         let status_json = json!({
             "event": "blockchain_loaded",
             "blocks": BLOCKCHAIN_DATA.len(),
@@ -464,8 +487,9 @@ pub fn run_blockchain(
                 "timestamp": last_block.timestamp
             },
             "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
-        }).to_string();
-        
+        })
+        .to_string();
+
         let _ = tx.try_send(status_json);
 
         // Check balance using both original and normalized address for troubleshooting
@@ -477,7 +501,10 @@ pub fn run_blockchain(
                     normalized_address, balance_in_kari, coin.symbol, balance, coin.symbol
                 );
             }
-            Err(e) => warn!("Failed to get balance for address {}: {}", normalized_address, e),
+            Err(e) => warn!(
+                "Failed to get balance for address {}: {}",
+                normalized_address, e
+            ),
         }
 
         // Debug: Also check with original address if they're different
@@ -489,7 +516,10 @@ pub fn run_blockchain(
                         address, balance, coin.symbol
                     );
                 }
-                Err(e) => debug!("Failed to get balance for original address {}: {}", address, e),
+                Err(e) => debug!(
+                    "Failed to get balance for original address {}: {}",
+                    address, e
+                ),
             }
         }
     } else {
@@ -520,14 +550,14 @@ pub fn run_blockchain(
                 "symbol": coin.symbol
             }
         }).to_string();
-        
+
         let _ = tx.try_send(genesis_json);
 
         // Update balances with normalized address
         {
             let mut balances = BALANCES.lock().unwrap();
             balances.insert(normalized_address.clone(), coin.total_supply);
-            
+
             // Update pool balance if exists
             if let Ok(pool_addr) = normalize_address(POOL_ADDRESS) {
                 let pool_addr_str = pool_addr.to_hex_literal();
@@ -536,9 +566,12 @@ pub fn run_blockchain(
                 if let Some(balance) = balances.get_mut(&normalized_address) {
                     *balance -= POOL_RESERVED_KA;
                 }
-                info!("Reserved {} KARI for pool address: {}", POOL_RESERVED_KARI, pool_addr_str);
+                info!(
+                    "Reserved {} KARI for pool address: {}",
+                    POOL_RESERVED_KARI, pool_addr_str
+                );
             }
-            
+
             // Debug: Output all balances
             debug!("Initial balances after genesis:");
             for (addr, bal) in balances.iter() {
@@ -558,18 +591,21 @@ pub fn run_blockchain(
     }
 
     // Start block production loop
-    info!("Starting block production with node address: {}", normalized_address);
-    
+    info!(
+        "Starting block production with node address: {}",
+        normalized_address
+    );
+
     // Block production loop
     loop {
         if !*running.lock().unwrap() {
             info!("Blockchain simulation stopped");
-            
+
             // Stop node networking
             if let Err(e) = stop_node() {
                 warn!("Error stopping node: {}", e);
             }
-            
+
             // Send shutdown notification
             let shutdown_json = json!({
                 "event": "blockchain_stopped",
@@ -594,18 +630,23 @@ pub fn run_blockchain(
             match PENDING_TRANSACTIONS.write() {
                 Ok(mut queue) => {
                     let mut block_txs = Vec::new();
-                    
-                    info!("Processing transaction queue with {} pending transactions", queue.len());
-                    
+
+                    info!(
+                        "Processing transaction queue with {} pending transactions",
+                        queue.len()
+                    );
+
                     while let Some(tx_item) = queue.pop_front() {
                         // Check if this is a VM transaction and execute it
                         if tx_item.is_vm_transaction() {
                             if let Some(vm_tx) = convert_to_vm_transaction(&tx_item) {
                                 match execute_vm_transaction(&vm_tx) {
                                     Ok(result) => {
-                                        info!("VM transaction executed: {} -> result: {}", 
-                                            vm_tx.tx_id, result["status"]);
-                                        
+                                        info!(
+                                            "VM transaction executed: {} -> result: {}",
+                                            vm_tx.tx_id, result["status"]
+                                        );
+
                                         // Send VM execution result
                                         let vm_result_json = json!({
                                             "event": "vm_transaction_executed",
@@ -614,42 +655,49 @@ pub fn run_blockchain(
                                             "function": vm_tx.function,
                                             "result": result,
                                             "block_index": prev_block.index + 1
-                                        }).to_string();
-                                        
+                                        })
+                                        .to_string();
+
                                         let _ = tx.try_send(vm_result_json);
-                                    },
+                                    }
                                     Err(e) => {
                                         warn!("VM transaction failed: {} - {}", vm_tx.tx_id, e);
-                                        
+
                                         let vm_error_json = json!({
                                             "event": "vm_transaction_failed",
                                             "transaction_id": vm_tx.tx_id,
                                             "error": e,
                                             "block_index": prev_block.index + 1
-                                        }).to_string();
-                                        
+                                        })
+                                        .to_string();
+
                                         let _ = tx.try_send(vm_error_json);
                                     }
                                 }
                             }
                         }
-                        
-                        info!("Including transaction: {} -> {}, amount: {}, type: {}", 
-                            tx_item.sender, tx_item.receiver, tx_item.amount, tx_item.get_transaction_type());
+
+                        info!(
+                            "Including transaction: {} -> {}, amount: {}, type: {}",
+                            tx_item.sender,
+                            tx_item.receiver,
+                            tx_item.amount,
+                            tx_item.get_transaction_type()
+                        );
                         block_txs.push(tx_item);
-                        
+
                         if block_txs.len() >= 100000 {
                             break;
                         }
                     }
-                    
+
                     if !block_txs.is_empty() {
                         info!("Added {} transactions to current block", block_txs.len());
                     }
-                    
+
                     update_pending_transaction_count(queue.len());
                     block_txs
-                },
+                }
                 Err(_) => {
                     error!("Failed to lock pending transactions queue");
                     Vec::new()
@@ -658,22 +706,25 @@ pub fn run_blockchain(
         };
 
         // Create JSON representation of transactions for the block data
-        let tx_json: Vec<Value> = transactions.iter().map(|tx| {
-            json!({
-                "id": tx.transaction_id, // Include transaction ID
-                "sender": tx.sender,
-                "receiver": tx.receiver,
-                "amount": tx.amount,
-                "timestamp": tx.timestamp
+        let tx_json: Vec<Value> = transactions
+            .iter()
+            .map(|tx| {
+                json!({
+                    "id": tx.transaction_id, // Include transaction ID
+                    "sender": tx.sender,
+                    "receiver": tx.receiver,
+                    "amount": tx.amount,
+                    "timestamp": tx.timestamp
+                })
             })
-        }).collect();
-        
+            .collect();
+
         // Create new block data with transactions included
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-            
+
         let block_data = json!({
             "block_type": "transaction",
             "index": prev_block.index + 1,
@@ -686,14 +737,16 @@ pub fn run_blockchain(
                 "client_version": env!("CARGO_PKG_VERSION"),
                 "previous_block_hash": prev_block.hash
             }
-        }).to_string().into_bytes();
+        })
+        .to_string()
+        .into_bytes();
 
         // Create new block with transactions
         let new_block = Block::new(
             prev_block.index + 1,
             block_data,
             prev_block.hash.clone(),
-            0,          // No new tokens in regular blocks
+            0,                    // No new tokens in regular blocks
             transactions.clone(), // Include transactions in the block - explicitly clone
             normalized_address.clone(),
             Blake3Algorithm::new(),
@@ -701,16 +754,20 @@ pub fn run_blockchain(
 
         // Add block to chain and ensure we save the state
         BLOCKCHAIN_DATA.add_block(new_block.clone());
-        
+
         // Propagate block to connected peers
         if get_peer_count() > 0 {
             if let Err(e) = propagate_block(&new_block) {
                 warn!("Failed to propagate block to peers: {}", e);
             } else {
-                info!("Block {} propagated to {} peers", new_block.index, get_peer_count());
+                info!(
+                    "Block {} propagated to {} peers",
+                    new_block.index,
+                    get_peer_count()
+                );
             }
         }
-        
+
         // Process staking rewards
         let staking_rewards = match process_rewards(new_block.index) {
             Ok(rewards) => rewards,
@@ -719,22 +776,33 @@ pub fn run_blockchain(
                 0
             }
         };
-        
+
         // Check if the node operator is staking as validator
         let validator_status = is_validator(&node_address);
 
         // If we included transactions, provide detailed logs
         if !transactions.is_empty() {
-            info!("Block {} includes {} transactions:", new_block.index, transactions.len());
+            info!(
+                "Block {} includes {} transactions:",
+                new_block.index,
+                transactions.len()
+            );
             for (i, tx) in transactions.iter().enumerate() {
-                info!("  {}: {} -> {} ({})", i+1, tx.sender, tx.receiver, tx.amount);
+                info!(
+                    "  {}: {} -> {} ({})",
+                    i + 1,
+                    tx.sender,
+                    tx.receiver,
+                    tx.amount
+                );
             }
         }
 
         // Convert timestamp to human-readable format
-        let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp(new_block.timestamp as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "Unknown time".to_string());
+        let datetime =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(new_block.timestamp as i64, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "Unknown time".to_string());
 
         // Enhanced block status update as JSON with staking info and peer info
         let status_json = json!({
@@ -770,8 +838,9 @@ pub fn run_blockchain(
                 "peer_count": get_peer_count(),
                 "node_id": format!("node-{}", normalized_address[..8].to_string()),
             }
-        }).to_string();
-        
+        })
+        .to_string();
+
         let _ = tx.try_send(status_json);
 
         // Save blockchain state - make sure it happens reliably after transaction block
@@ -782,7 +851,7 @@ pub fn run_blockchain(
                     new_block.index,
                     &new_block.hash[..16]
                 );
-            },
+            }
             Err(e) => {
                 error!("Failed to save blockchain: {}", e);
                 // Notify clients of save error
@@ -791,9 +860,10 @@ pub fn run_blockchain(
                     "error": format!("Failed to save blockchain: {}", e),
                     "block_index": new_block.index,
                     "timestamp": current_time
-                }).to_string();
+                })
+                .to_string();
                 let _ = tx.try_send(error_json);
-            },
+            }
         }
 
         // Enhanced balance checking
@@ -813,15 +883,15 @@ pub fn run_blockchain(
                         "block_height": new_block.index,
                         "timestamp": current_time
                     }).to_string();
-                    
+
                     let _ = tx.try_send(balance_json);
-                    
+
                     // Log balance info
                     debug!(
                         "Current balance for {} is {} {}A",
                         normalized_address, balance, coin.symbol
                     );
-                },
+                }
                 Err(e) => {
                     warn!("Failed to get balance: {}", e);
                     // Notify of balance error
@@ -830,24 +900,26 @@ pub fn run_blockchain(
                         "error": format!("Failed to get balance: {}", e),
                         "address": normalized_address,
                         "timestamp": current_time
-                    }).to_string();
+                    })
+                    .to_string();
                     let _ = tx.try_send(error_json);
-                },
+                }
             }
-            
+
             // Debug: Enhanced log of all balances
             if let Ok(balances) = BALANCES.lock() {
                 debug!("Current balances in system ({} accounts):", balances.len());
                 for (addr, bal) in balances.iter() {
                     debug!("  {} => {}", addr, bal);
                 }
-                
+
                 // Send system-wide balance report
                 let balance_report = json!({
                     "event": "system_balances",
                     "account_count": balances.len(),
                     "timestamp": current_time
-                }).to_string();
+                })
+                .to_string();
                 let _ = tx.try_send(balance_report);
             }
         }

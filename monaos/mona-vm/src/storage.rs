@@ -1,17 +1,20 @@
-use mona_storage::{BlockchainStorage, RocksDBStorage, StorageError};
-use common::get_kari_dir;
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::vm_state::VM_STATE;
+use common::get_kari_dir;
+use mona_storage::{BlockchainStorage, RocksDBStorage, StorageError};
 
 // Add a standalone VM state save function
 pub fn save_vm_state() -> Result<(), StorageError> {
     let kari_dir = get_kari_dir();
     let db_path = kari_dir.join("storage").join("mvsm_db");
     let storage = RocksDBStorage::new(db_path)?;
-    
+
     match VM_STATE.try_read() {
         Ok(vm_state) => {
             let modules_count = vm_state.modules.len();
-            
+
             // Save comprehensive VM state metadata
             let vm_metadata = serde_json::json!({
                 "modules_count": modules_count,
@@ -28,10 +31,10 @@ pub fn save_vm_state() -> Result<(), StorageError> {
                         .as_secs(),
                 }
             });
-            
+
             let metadata_bytes = vm_metadata.to_string().into_bytes();
             storage.save_data(b"vm_state_metadata", &metadata_bytes)?;
-            
+
             // Save individual module summaries for quick lookup
             for (module_id, module) in vm_state.modules.iter() {
                 let module_summary = serde_json::json!({
@@ -42,16 +45,19 @@ pub fn save_vm_state() -> Result<(), StorageError> {
                     "bytecode_size": module.bytecode.len(),
                     "function_count": module.public_functions.len(),
                 });
-                
+
                 let summary_key = format!("module_summary_{}", module_id);
-                storage.save_data(summary_key.as_bytes(), &module_summary.to_string().into_bytes())?;
+                storage.save_data(
+                    summary_key.as_bytes(),
+                    &module_summary.to_string().into_bytes(),
+                )?;
             }
-            
+
             log::info!("Saved VM state with {} modules", modules_count);
         }
         Err(e) => {
             log::warn!("Could not access VM state for save: {}", e);
-            
+
             // Save fallback metadata
             let fallback_metadata = serde_json::json!({
                 "status": "fallback_save",
@@ -61,13 +67,16 @@ pub fn save_vm_state() -> Result<(), StorageError> {
                     .as_secs(),
                 "error": format!("{}", e),
             });
-            
-            storage.save_data(b"vm_state_metadata", &fallback_metadata.to_string().into_bytes())?;
+
+            storage.save_data(
+                b"vm_state_metadata",
+                &fallback_metadata.to_string().into_bytes(),
+            )?;
         }
     }
-    
+
     storage.flush()?;
     log::debug!("VM state saved successfully to secure storage");
-    
+
     Ok(())
 }

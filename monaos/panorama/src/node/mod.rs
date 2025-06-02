@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -8,9 +11,9 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
+use consensus_pos::Blake3Algorithm;
 use mona_blockchain::block::Block;
 use mona_blockchain::blockchain::BlockchainError;
-use consensus_pos::Blake3Algorithm;
 use mona_crypto::hash_data_blake3;
 use rand::Rng; // Add Rng trait import
 pub mod coordinator;
@@ -99,18 +102,18 @@ impl Default for NodeConfig {
         // Get the Kari directory for storing certificates
         let kari_dir = common::get_kari_dir();
         let certs_dir = kari_dir.join("certs");
-        
+
         // Create the certs directory if it doesn't exist
         if !certs_dir.exists() {
             if let Err(e) = std::fs::create_dir_all(&certs_dir) {
                 eprintln!("Warning: Could not create certificates directory: {}", e);
             }
         }
-        
+
         // Define certificate paths within the Kari directory
         let cert_path = certs_dir.join("node.crt");
         let key_path = certs_dir.join("node.key");
-        
+
         Self {
             node_id: generate_node_id(),
             blockchain_address: String::new(), // Will be populated from wallet
@@ -119,12 +122,12 @@ impl Default for NodeConfig {
             discovery_nodes: vec![
                 // Default P2P bootstrap nodes
                 "devnet.kanari.site:51303".to_string(),
-                "testnet.kanari.site:51303".to_string(), 
+                "testnet.kanari.site:51303".to_string(),
                 "mainnet.kanari.site:51303".to_string(),
             ],
             max_peers: 50,
             is_validator: false,
-            use_tls: false,      // TLS is disabled by default
+            use_tls: false, // TLS is disabled by default
             cert_path: Some(cert_path.to_string_lossy().to_string()),
             key_path: Some(key_path.to_string_lossy().to_string()),
         }
@@ -178,11 +181,15 @@ pub fn get_local_ip() -> Option<String> {
         Ok(socket) => {
             // Try connecting to multiple public DNS servers for better reliability
             let dns_servers = ["8.8.8.8:80", "1.1.1.1:80", "9.9.9.9:80"];
-            
+
             for server in dns_servers {
                 if socket.connect(server).is_ok() {
                     if let Ok(addr) = socket.local_addr() {
-                        debug!("Local IP determined via UDP socket connect to {}: {}", server, addr.ip());
+                        debug!(
+                            "Local IP determined via UDP socket connect to {}: {}",
+                            server,
+                            addr.ip()
+                        );
                         return Some(addr.ip().to_string());
                     }
                 }
@@ -201,18 +208,29 @@ pub fn get_local_ip() -> Option<String> {
         if hostname.is_empty() {
             warn!("Hostname command returned empty output.");
         } else {
-            match (hostname, 0u16).to_socket_addrs() { // Use a dummy port for resolution
+            match (hostname, 0u16).to_socket_addrs() {
+                // Use a dummy port for resolution
                 Ok(addrs) => {
                     for addr in addrs {
                         if !addr.ip().is_loopback() && !addr.ip().is_unspecified() {
-                            debug!("Local IP determined via hostname ('{}') command: {}", hostname, addr.ip());
+                            debug!(
+                                "Local IP determined via hostname ('{}') command: {}",
+                                hostname,
+                                addr.ip()
+                            );
                             return Some(addr.ip().to_string());
                         }
                     }
-                    warn!("No suitable IP found from hostname ('{}') resolution.", hostname);
+                    warn!(
+                        "No suitable IP found from hostname ('{}') resolution.",
+                        hostname
+                    );
                 }
                 Err(e) => {
-                    warn!("Failed to resolve hostname '{}' to socket addresses: {}", hostname, e);
+                    warn!(
+                        "Failed to resolve hostname '{}' to socket addresses: {}",
+                        hostname, e
+                    );
                 }
             }
         }
@@ -227,22 +245,25 @@ pub fn get_local_ip() -> Option<String> {
 // Add a function to generate self-signed certificates
 pub fn generate_self_signed_certificates() -> Result<(), BlockchainError> {
     info!("Generating self-signed TLS certificates...");
-    
+
     // Get the Kari certificates directory
     let kari_dir = common::get_kari_dir();
     let certs_dir = kari_dir.join("certs");
-    
+
     // Create the directory if it doesn't exist
     if !certs_dir.exists() {
-        std::fs::create_dir_all(&certs_dir)
-            .map_err(|e| BlockchainError::Initialization(
-                format!("Failed to create certificates directory: {}", e)))?;
+        std::fs::create_dir_all(&certs_dir).map_err(|e| {
+            BlockchainError::Initialization(format!(
+                "Failed to create certificates directory: {}",
+                e
+            ))
+        })?;
     }
-    
+
     // Define certificate paths
     let cert_path = certs_dir.join("node.crt");
     let key_path = certs_dir.join("node.key");
-    
+
     // Check if certificates already exist
     if cert_path.exists() && key_path.exists() {
         info!("TLS certificates already exist at:");
@@ -250,17 +271,20 @@ pub fn generate_self_signed_certificates() -> Result<(), BlockchainError> {
         info!("  - Key: {}", key_path.display());
         return Ok(());
     }
-    
+
     // Generate self-signed certificate
     // Note: This is a placeholder - in a production environment, you should use
     // a proper certificate generation library like rcgen or openssl
-    
+
     info!("Note: TLS certificate generation requires the openssl command line tool");
     info!("To enable TLS support, please run the following commands:");
-    info!("  openssl req -x509 -newkey rsa:4096 -keyout {} -out {} -days 365 -nodes", 
-           key_path.display(), cert_path.display());
+    info!(
+        "  openssl req -x509 -newkey rsa:4096 -keyout {} -out {} -days 365 -nodes",
+        key_path.display(),
+        cert_path.display()
+    );
     info!("Then update your configuration to set use_tls: true");
-    
+
     // Return successful even though we didn't actually generate certificates
     // This is just informational for now
     Ok(())
@@ -278,14 +302,14 @@ pub fn start_node(
     if config.use_tls {
         let cert_exists = match &config.cert_path {
             Some(path) => std::path::Path::new(path).exists(),
-            None => false
+            None => false,
         };
-        
+
         let key_exists = match &config.key_path {
             Some(path) => std::path::Path::new(path).exists(),
-            None => false
+            None => false,
         };
-        
+
         if !cert_exists || !key_exists {
             warn!("TLS is enabled but certificates are missing. Disabling TLS.");
             warn!("To enable TLS, run 'kari certificate generate' command.");
@@ -413,14 +437,17 @@ fn run_network_listener(
 ) -> Result<(), BlockchainError> {
     // Bind to the configured address and port
     let addr = format!("0.0.0.0:{}", config.listen_port);
-    
+
     info!("Attempting to bind to {} for P2P connections", addr);
-    
+
     let listener = match TcpListener::bind(&addr) {
         Ok(listener) => listener,
-        Err(e) => return Err(BlockchainError::Initialization(
-            format!("Failed to bind to {}: {}", addr, e)
-        )),
+        Err(e) => {
+            return Err(BlockchainError::Initialization(format!(
+                "Failed to bind to {}: {}",
+                addr, e
+            )));
+        }
     };
 
     // แสดงที่อยู่จริงที่ผูกสำเร็จ
@@ -890,7 +917,8 @@ fn process_peer_message(
             );
 
             // Check if we already have this block
-            let have_block = mona_blockchain::blockchain::BLOCKCHAIN_DATA.has_block_with_hash(&block_hash);
+            let have_block =
+                mona_blockchain::blockchain::BLOCKCHAIN_DATA.has_block_with_hash(&block_hash);
 
             if !have_block {
                 info!("Requesting block {} from peer {}", block_hash, peer_id);
@@ -1097,7 +1125,7 @@ fn send_message_to_peer(peer_id: &str, message: &NodeMessage) -> Result<(), Bloc
 // Enhanced discover_peers with better error handling and retry logic
 fn discover_peers(
     config: NodeConfig,
-    status_tx: mpsc::Sender<String>
+    status_tx: mpsc::Sender<String>,
 ) -> Result<(), BlockchainError> {
     info!(
         "Starting peer discovery with {} known discovery nodes",
@@ -1117,13 +1145,15 @@ fn discover_peers(
                     Ok(_) => {
                         any_connected = true;
                         info!("Successfully connected to discovery node: {}", node_addr);
-                    },
+                    }
                     Err(e) => {
-                        warn!("Failed to connect to discovery node {} (resolved to {}): {}", 
-                              node_addr, resolved_addr, e);
+                        warn!(
+                            "Failed to connect to discovery node {} (resolved to {}): {}",
+                            node_addr, resolved_addr, e
+                        );
                     }
                 }
-            },
+            }
             Err(e) => {
                 warn!("Failed to resolve discovery node {}: {}", node_addr, e);
             }
@@ -1133,7 +1163,7 @@ fn discover_peers(
     // If no connections were made, attempt fallback discovery methods
     if !any_connected && !config.discovery_nodes.is_empty() {
         info!("No connections made to discovery nodes, attempting fallback methods...");
-        
+
         // Try common ports on local network
         let local_subnet = match get_local_ip() {
             Some(ip) => {
@@ -1144,19 +1174,20 @@ fn discover_peers(
                 } else {
                     "192.168.1".to_string() // Default fallback subnet
                 }
-            },
-            None => "192.168.1".to_string() // Default fallback subnet
+            }
+            None => "192.168.1".to_string(), // Default fallback subnet
         };
-        
+
         // Send status update
         let discovery_status = serde_json::json!({
             "event": "peer_discovery_fallback",
             "status": "Attempting local network discovery",
             "subnet": local_subnet
-        }).to_string();
-        
+        })
+        .to_string();
+
         let _ = status_tx.blocking_send(discovery_status);
-        
+
         // This comment indicates we're implementing enhanced peer discovery
         // The actual implementation would scan the local subnet
     }
@@ -1200,9 +1231,12 @@ fn connect_to_peer(peer_addr: &str, config: &NodeConfig) -> Result<(), Blockchai
 
     // Generate a cryptographic nonce to prevent replay attacks
     let nonce = generate_security_nonce();
-    
+
     // Log connection attempt
-    info!("Attempting to connect to peer at {} with secure handshake", peer_addr);
+    info!(
+        "Attempting to connect to peer at {} with secure handshake",
+        peer_addr
+    );
 
     // Connect to the peer with timeout
     let mut stream = match std::net::TcpStream::connect_timeout(
@@ -1349,15 +1383,15 @@ fn generate_security_nonce() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    
+
     let mut rng = rand::thread_rng();
     let random_value: u64 = rng.r#gen();
-    
+
     // Combine timestamp and random data
     let mut data = Vec::with_capacity(16);
     data.extend_from_slice(&timestamp.to_le_bytes());
     data.extend_from_slice(&random_value.to_le_bytes());
-    
+
     // Hash the data using Blake3 for security
     let hash = hash_data_blake3(&data);
     hex::encode(&hash[0..16]) // Use first 16 bytes (32 hex chars)

@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use std::path::Path;
 use std::process::exit;
 
@@ -130,7 +133,7 @@ pub fn handle_public_command() -> Option<String> {
                                 storage.metadata.size,
                                 storage.metadata.content_type
                             )),
-                            Err(e) => Some(format!("Failed to save file: {}", e))
+                            Err(e) => Some(format!("Failed to save file: {}", e)),
                         }
                     }
                     Err(e) => Some(format!("Failed to get file: {}", e)),

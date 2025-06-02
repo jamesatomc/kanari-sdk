@@ -1,5 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
 
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // Constants for Kari token
 /// The amount of KA per Kari token based on the the fact that KA is
@@ -41,13 +43,13 @@ pub struct KARI {
     pub symbol: String,
     pub decimals: u8,
     pub total_supply: u64,
-    pub max_supply: u64,      // Maximum supply that will ever exist
-    pub block_reward: u64,    // Reward per block if applicable
-    pub created_at: u64,      // Timestamp when KARI was created
-    pub pool_address: String, // Address where reserved tokens are stored
-    pub pool_reserved: u64,   // Amount of tokens reserved in the pool
-    pub staking_reward: f64,  // Staking reward percentage
-    pub node_minimum: u64,    // Minimum amount to run a node
+    pub max_supply: u64,        // Maximum supply that will ever exist
+    pub block_reward: u64,      // Reward per block if applicable
+    pub created_at: u64,        // Timestamp when KARI was created
+    pub pool_address: String,   // Address where reserved tokens are stored
+    pub pool_reserved: u64,     // Amount of tokens reserved in the pool
+    pub staking_reward: f64,    // Staking reward percentage
+    pub node_minimum: u64,      // Minimum amount to run a node
     pub validator_minimum: u64, // Minimum amount to be a validator
 }
 
@@ -57,7 +59,7 @@ impl Default for KARI {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-            
+
         KARI {
             name: "Kanari".to_string(),
             symbol: "KARI".to_string(),

@@ -1,21 +1,23 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use colored::Colorize;
 use mona_crypto::{
-    list_wallet_files,
-    load_wallet, save_wallet, set_selected_wallet,
-    save_mnemonic, load_mnemonic, check_mnemonic_exists, remove_mnemonic, get_mnemonic_addresses,
-    save_session_key, load_session_key, remove_session_key, clear_session_keys,
+    check_mnemonic_exists, clear_session_keys, get_mnemonic_addresses, list_wallet_files,
+    load_mnemonic, load_session_key, load_wallet, remove_mnemonic, remove_session_key,
+    save_mnemonic, save_session_key, save_wallet, set_selected_wallet,
 };
 use std::io::{self, Write};
 
 use mona_blockchain::blockchain::{get_balance, load_blockchain_with_retry};
 use rpassword::read_password;
-use std::process::exit;
 use serde_json::json;
 use std::process::Command;
+use std::process::exit;
 // Add the required import for CurveType and key-related functions
-use key::keys::{import_from_private_key, import_from_seed_phrase, generate_karix_address};
-use key::keys::CurveType;
 use common::{load_config, load_kanari_config};
+use key::keys::CurveType;
+use key::keys::{generate_karix_address, import_from_private_key, import_from_seed_phrase};
 
 struct CommandInfo {
     name: &'static str,
@@ -116,13 +118,13 @@ pub fn handle_keytool_command() -> Option<String> {
                                     );
                                     return None;
                                 }
-                                
+
                                 // Add curve type selection with Ed25519 option
                                 println!("Select curve type:");
                                 println!("1. K-256 (secp256k1)");
                                 println!("2. P-256 (secp256r1)");
                                 println!("3. Ed25519");
-                                
+
                                 let mut curve_choice = String::new();
                                 match io::stdin().read_line(&mut curve_choice) {
                                     Ok(_) => {
@@ -131,20 +133,27 @@ pub fn handle_keytool_command() -> Option<String> {
                                             "2" => CurveType::P256,
                                             "3" => CurveType::Ed25519,
                                             _ => {
-                                                println!("{}", "Invalid choice, using secp256k1 as default.".yellow());
+                                                println!(
+                                                    "{}",
+                                                    "Invalid choice, using secp256k1 as default."
+                                                        .yellow()
+                                                );
                                                 CurveType::K256
                                             }
                                         };
-                                        
+
                                         let (private_key, public_address, seed_phrase) =
                                             generate_karix_address(mnemonic_length, curve_type);
-                                            
+
                                         println!("New address generated:");
                                         println!("Private Key: {}", private_key.green());
                                         println!("Public Address: {}", public_address.green());
                                         println!("Seed Phrase: {}", seed_phrase.green());
-                                        println!("Curve Type: {}", format!("{:?}", curve_type).green());
-            
+                                        println!(
+                                            "Curve Type: {}",
+                                            format!("{:?}", curve_type).green()
+                                        );
+
                                         let password = prompt_password(true);
                                         // Convert public_address to Address type
                                         match public_address.parse() {
@@ -163,7 +172,8 @@ pub fn handle_keytool_command() -> Option<String> {
                                                     Err(e) => {
                                                         println!(
                                                             "{}",
-                                                            format!("Failed to save wallet: {}", e).red()
+                                                            format!("Failed to save wallet: {}", e)
+                                                                .red()
                                                         );
                                                         return None;
                                                     }
@@ -172,14 +182,21 @@ pub fn handle_keytool_command() -> Option<String> {
                                             Err(e) => {
                                                 println!(
                                                     "{}",
-                                                    format!("Failed to parse public address: {}", e).red()
+                                                    format!(
+                                                        "Failed to parse public address: {}",
+                                                        e
+                                                    )
+                                                    .red()
                                                 );
                                                 return None;
                                             }
                                         }
-                                    },
+                                    }
                                     Err(e) => {
-                                        println!("{}", format!("Failed to read input: {}", e).red());
+                                        println!(
+                                            "{}",
+                                            format!("Failed to read input: {}", e).red()
+                                        );
                                         return None;
                                     }
                                 }
@@ -203,7 +220,7 @@ pub fn handle_keytool_command() -> Option<String> {
                 match io::stdin().read_line(&mut public_address) {
                     Ok(_) => {
                         let public_address = public_address.trim().to_string();
-                        
+
                         // Use a more reliable approach
                         match load_blockchain_with_retry() {
                             Ok(_) => match get_balance(&public_address) {
@@ -238,7 +255,7 @@ pub fn handle_keytool_command() -> Option<String> {
                     Ok(_) => {
                         // Get RPC endpoint from configuration
                         let rpc_endpoint = get_rpc_endpoint();
-                        
+
                         // Get sender address (current wallet)
                         let wallets = match list_wallet_files() {
                             Ok(w) => w,
@@ -247,30 +264,36 @@ pub fn handle_keytool_command() -> Option<String> {
                                 return None;
                             }
                         };
-                        
+
                         // Find selected wallet
-                        let selected_wallet = wallets.iter()
+                        let selected_wallet = wallets
+                            .iter()
                             .find(|(_, is_selected)| *is_selected)
                             .map(|(name, _)| name.trim_end_matches(".enc").to_string());
-                        
+
                         let sender_address = match selected_wallet {
                             Some(addr) => addr,
                             None => {
                                 // Try to select wallet interactively if none is selected
-                                println!("{}", "No wallet selected. Please select a wallet first.".yellow());
-                                
+                                println!(
+                                    "{}",
+                                    "No wallet selected. Please select a wallet first.".yellow()
+                                );
+
                                 if wallets.is_empty() {
                                     println!("{}", "No wallets found!".red());
                                     return None;
                                 }
-                                
+
                                 println!("\nAvailable wallets:");
                                 for (i, (wallet, _)) in wallets.iter().enumerate() {
                                     let wallet_name = wallet.trim_end_matches(".enc");
                                     println!("{}. {}", i + 1, wallet_name);
                                 }
-                                
-                                println!("\nEnter wallet number to use (or press Enter to cancel):");
+
+                                println!(
+                                    "\nEnter wallet number to use (or press Enter to cancel):"
+                                );
                                 let mut input = String::new();
                                 match io::stdin().read_line(&mut input) {
                                     Ok(_) => {
@@ -278,17 +301,25 @@ pub fn handle_keytool_command() -> Option<String> {
                                             println!("Transfer cancelled.");
                                             return None;
                                         }
-                                        
+
                                         match input.trim().parse::<usize>() {
                                             Ok(index) if index > 0 && index <= wallets.len() => {
-                                                let selected = wallets[index - 1].0.trim_end_matches(".enc");
+                                                let selected =
+                                                    wallets[index - 1].0.trim_end_matches(".enc");
                                                 match set_selected_wallet(selected) {
                                                     Ok(_) => {
-                                                        println!("Using wallet: {}", selected.green());
+                                                        println!(
+                                                            "Using wallet: {}",
+                                                            selected.green()
+                                                        );
                                                         selected.to_string()
                                                     }
                                                     Err(e) => {
-                                                        println!("{}", format!("Error setting wallet: {}", e).red());
+                                                        println!(
+                                                            "{}",
+                                                            format!("Error setting wallet: {}", e)
+                                                                .red()
+                                                        );
                                                         return None;
                                                     }
                                                 }
@@ -306,7 +337,7 @@ pub fn handle_keytool_command() -> Option<String> {
                                 }
                             }
                         };
-                        
+
                         // Check sender balance
                         let balance = match get_balance(&sender_address) {
                             Ok(b) => b,
@@ -315,33 +346,33 @@ pub fn handle_keytool_command() -> Option<String> {
                                 return None;
                             }
                         };
-                        
+
                         let formatted_balance = format_balance(balance);
                         println!("Your balance: {} KARI", formatted_balance.green());
-                        
+
                         // Get recipient address
                         println!("Enter recipient address:");
                         let mut recipient = String::new();
                         match io::stdin().read_line(&mut recipient) {
-                            Ok(_) => {},
+                            Ok(_) => {}
                             Err(e) => {
                                 println!("{}", format!("Error reading input: {}", e).red());
                                 return None;
                             }
                         };
                         let recipient = recipient.trim();
-                        
+
                         // Get amount to send
                         println!("Enter amount to send (in KARI):");
                         let mut amount_str = String::new();
                         match io::stdin().read_line(&mut amount_str) {
-                            Ok(_) => {},
+                            Ok(_) => {}
                             Err(e) => {
                                 println!("{}", format!("Error reading input: {}", e).red());
                                 return None;
                             }
                         };
-                        
+
                         // Parse amount with validation
                         let amount_kari = match amount_str.trim().parse::<f64>() {
                             Ok(a) if a > 0.0 => a,
@@ -354,34 +385,34 @@ pub fn handle_keytool_command() -> Option<String> {
                                 return None;
                             }
                         };
-                        
+
                         // Confirm the transfer
                         println!("\nTransaction details:");
                         println!("  From: {}", sender_address.green());
                         println!("  To:   {}", recipient.green());
                         println!("  Amount: {} KARI", amount_str.trim());
-                        
+
                         println!("\nConfirm transfer? (y/n)");
                         let mut confirm = String::new();
                         match io::stdin().read_line(&mut confirm) {
-                            Ok(_) => {},
+                            Ok(_) => {}
                             Err(e) => {
                                 println!("{}", format!("Error reading input: {}", e).red());
                                 return None;
                             }
                         };
-                        
+
                         if !confirm.trim().eq_ignore_ascii_case("y") {
                             println!("Transfer cancelled.");
                             return None;
                         }
-                        
+
                         // Get password
                         println!("Enter wallet password:");
                         let password = prompt_password(false);
-                        
+
                         println!("Sending transaction...");
-                        
+
                         // Create the JSON payload
                         let json_payload = json!({
                             "jsonrpc": "2.0",
@@ -393,10 +424,15 @@ pub fn handle_keytool_command() -> Option<String> {
                                 "password": password
                             },
                             "id": 1
-                        }).to_string();
-                        
+                        })
+                        .to_string();
+
                         // Use curl if available, otherwise try to implement a simple TCP client
-                        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+                        #[cfg(any(
+                            target_os = "windows",
+                            target_os = "linux",
+                            target_os = "macos"
+                        ))]
                         {
                             // Determine the curl command based on the platform
                             let curl_cmd = if cfg!(target_os = "windows") {
@@ -404,76 +440,122 @@ pub fn handle_keytool_command() -> Option<String> {
                             } else {
                                 "curl"
                             };
-                            
+
                             // Execute curl command to send the request with dynamic endpoint
                             let output = Command::new(curl_cmd)
                                 .arg("-s")
                                 .arg("-X")
                                 .arg("POST")
-                                .arg(&rpc_endpoint)  // Use dynamic endpoint instead of hardcoded
+                                .arg(&rpc_endpoint) // Use dynamic endpoint instead of hardcoded
                                 .arg("-H")
                                 .arg("Content-Type: application/json")
                                 .arg("-d")
                                 .arg(&json_payload)
                                 .output();
-                                
+
                             match output {
                                 Ok(output) => {
                                     if output.status.success() {
                                         // Parse the response JSON
-                                        match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                                        match serde_json::from_slice::<serde_json::Value>(
+                                            &output.stdout,
+                                        ) {
                                             Ok(json_response) => {
                                                 // Check for errors in the response
                                                 if let Some(error) = json_response.get("error") {
-                                                    println!("{}", format!("Transfer failed: {}", error).red());
+                                                    println!(
+                                                        "{}",
+                                                        format!("Transfer failed: {}", error).red()
+                                                    );
                                                     return None;
                                                 }
-                                                
+
                                                 // Success!
-                                                println!("{}", "Transfer initiated successfully!".green());
-                                                println!("Transaction will be included in the next block.");
-                                                
+                                                println!(
+                                                    "{}",
+                                                    "Transfer initiated successfully!".green()
+                                                );
+                                                println!(
+                                                    "Transaction will be included in the next block."
+                                                );
+
                                                 // Show transaction ID if available
                                                 if let Some(result) = json_response.get("result") {
-                                                    if let Some(tx_id) = result.get("transaction_id") {
-                                                        println!("Transaction ID: {}", tx_id.as_str().unwrap_or("unknown").green());
+                                                    if let Some(tx_id) =
+                                                        result.get("transaction_id")
+                                                    {
+                                                        println!(
+                                                            "Transaction ID: {}",
+                                                            tx_id
+                                                                .as_str()
+                                                                .unwrap_or("unknown")
+                                                                .green()
+                                                        );
                                                     }
                                                 }
-                                                
+
                                                 return Some(sender_address);
-                                            },
+                                            }
                                             Err(e) => {
-                                                println!("{}", format!("Failed to parse API response: {}", e).red());
-                                                println!("Raw response: {}", String::from_utf8_lossy(&output.stdout));
+                                                println!(
+                                                    "{}",
+                                                    format!("Failed to parse API response: {}", e)
+                                                        .red()
+                                                );
+                                                println!(
+                                                    "Raw response: {}",
+                                                    String::from_utf8_lossy(&output.stdout)
+                                                );
                                                 return None;
                                             }
                                         }
                                     } else {
-                                        println!("{}", format!("HTTP request failed to {}", rpc_endpoint).red());
-                                        println!("Error: {}", String::from_utf8_lossy(&output.stderr));
+                                        println!(
+                                            "{}",
+                                            format!("HTTP request failed to {}", rpc_endpoint)
+                                                .red()
+                                        );
+                                        println!(
+                                            "Error: {}",
+                                            String::from_utf8_lossy(&output.stderr)
+                                        );
                                         return None;
                                     }
-                                },
+                                }
                                 Err(e) => {
-                                    println!("{}", format!("Failed to execute HTTP request to {}: {}", rpc_endpoint, e).red());
-                                    println!("Make sure curl is installed and the node is running at {}", rpc_endpoint);
+                                    println!(
+                                        "{}",
+                                        format!(
+                                            "Failed to execute HTTP request to {}: {}",
+                                            rpc_endpoint, e
+                                        )
+                                        .red()
+                                    );
+                                    println!(
+                                        "Make sure curl is installed and the node is running at {}",
+                                        rpc_endpoint
+                                    );
                                     return None;
                                 }
                             }
                         }
-                        
-                        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+
+                        #[cfg(not(any(
+                            target_os = "windows",
+                            target_os = "linux",
+                            target_os = "macos"
+                        )))]
                         {
                             println!("{}", "Transfer not supported on this platform".red());
                             return None;
                         }
-                    },
+                    }
                     Err(e) => {
                         println!("{}", format!("Failed to load blockchain: {}", e).red());
                         return None;
                     }
                 }
-            },
+            }
 
             "select" => match list_wallet_files() {
                 Ok(wallets) => {
@@ -486,7 +568,7 @@ pub fn handle_keytool_command() -> Option<String> {
                     println!("{}", "─".repeat(60));
                     println!("{:<5} {:<42} {}", "No.", "Address", "Status");
                     println!("{}", "─".repeat(60));
-                    
+
                     for (i, (wallet, is_selected)) in wallets.iter().enumerate() {
                         let wallet_name = wallet.trim_end_matches(".enc");
                         let display_name = if wallet_name.len() > 38 {
@@ -494,9 +576,10 @@ pub fn handle_keytool_command() -> Option<String> {
                         } else {
                             wallet_name.to_string()
                         };
-                        
+
                         if *is_selected {
-                            println!("{:<5} {:<42} {}", 
+                            println!(
+                                "{:<5} {:<42} {}",
                                 (i + 1).to_string().green().bold(),
                                 display_name.green(),
                                 "ACTIVE".green().bold()
@@ -520,8 +603,9 @@ pub fn handle_keytool_command() -> Option<String> {
                                     let selected = wallets[index - 1].0.trim_end_matches(".enc");
                                     match set_selected_wallet(selected) {
                                         Ok(_) => {
-                                            println!("{} {}", 
-                                                "✓".green().bold(), 
+                                            println!(
+                                                "{} {}",
+                                                "✓".green().bold(),
                                                 format!("Wallet selected: {}", selected).green()
                                             );
                                             Some(selected.to_string())
@@ -565,22 +649,39 @@ pub fn handle_keytool_command() -> Option<String> {
                             Ok(wallet_data) => {
                                 println!("\n{}", "Wallet Information:".bright_yellow().bold());
                                 println!("{}", "─".repeat(60));
-                                println!("{:<15} {}", "Address:".bold(), wallet_data.address.to_string().green());
-                                println!("{:<15} {}", "Curve Type:".bold(), format!("{:?}", wallet_data.curve_type).green());
-                                
+                                println!(
+                                    "{:<15} {}",
+                                    "Address:".bold(),
+                                    wallet_data.address.to_string().green()
+                                );
+                                println!(
+                                    "{:<15} {}",
+                                    "Curve Type:".bold(),
+                                    format!("{:?}", wallet_data.curve_type).green()
+                                );
+
                                 // Show full private key instead of truncated version
-                                println!("{:<15} {}", "Private Key:".bold(), wallet_data.private_key.green());
-                                
+                                println!(
+                                    "{:<15} {}",
+                                    "Private Key:".bold(),
+                                    wallet_data.private_key.green()
+                                );
+
                                 if !wallet_data.seed_phrase.is_empty() {
                                     // Show full seed phrase instead of just word count
-                                    println!("{:<15} {}", "Seed Phrase:".bold(), wallet_data.seed_phrase.green());
+                                    println!(
+                                        "{:<15} {}",
+                                        "Seed Phrase:".bold(),
+                                        wallet_data.seed_phrase.green()
+                                    );
                                 } else {
                                     println!("{:<15} {}", "Seed Phrase:".bold(), "None".yellow());
                                 }
                                 println!("{}", "─".repeat(60));
-                                
-                                println!("\n{} {}", 
-                                    "✓".green().bold(), 
+
+                                println!(
+                                    "\n{} {}",
+                                    "✓".green().bold(),
                                     "Wallet loaded successfully".green()
                                 );
                                 return Some(public_address);
@@ -596,7 +697,7 @@ pub fn handle_keytool_command() -> Option<String> {
                         return None;
                     }
                 }
-            },
+            }
 
             "list" => {
                 match list_wallet_files() {
@@ -605,17 +706,18 @@ pub fn handle_keytool_command() -> Option<String> {
                             println!("{}", "\nNo wallets found!".yellow());
                             return None;
                         }
-                        
+
                         // Store the length before consuming the collection
                         let wallet_count = wallets.len();
-                        
+
                         println!("\n{}", "Available Wallets:".bright_yellow().bold());
                         println!("{}", "─".repeat(70));
-                        
+
                         for (wallet_name, is_selected) in wallets {
                             let wallet_display = wallet_name.trim_end_matches(".enc");
                             if is_selected {
-                                println!("{} {} {}", 
+                                println!(
+                                    "{} {} {}",
                                     "➤".green().bold(),
                                     wallet_display.green().bold(),
                                     "[ACTIVE]".green().bold()
@@ -644,13 +746,13 @@ pub fn handle_keytool_command() -> Option<String> {
                 io::stdin()
                     .read_line(&mut phrase)
                     .expect("Failed to read line");
-            
+
                 // Add curve type selection with Ed25519 option
                 println!("Select curve type:");
                 println!("1. K-256 (secp256k1)");
                 println!("2. P-256 (secp256r1)");
                 println!("3. Ed25519");
-                
+
                 let mut curve_choice = String::new();
                 match io::stdin().read_line(&mut curve_choice) {
                     Ok(_) => {
@@ -659,18 +761,27 @@ pub fn handle_keytool_command() -> Option<String> {
                             "2" => CurveType::P256,
                             "3" => CurveType::Ed25519,
                             _ => {
-                                println!("{}", "Invalid choice, using Secp256k1 as default.".yellow());
+                                println!(
+                                    "{}",
+                                    "Invalid choice, using Secp256k1 as default.".yellow()
+                                );
                                 CurveType::K256
                             }
                         };
-                                
+
                         match import_from_seed_phrase(phrase.trim(), curve_type) {
                             Ok((private_key, _, public_address)) => {
                                 let password = prompt_password(true);
-            
+
                                 match public_address.parse() {
                                     Ok(address) => {
-                                        match save_wallet(&address, &private_key, phrase.trim(), &password, curve_type) {
+                                        match save_wallet(
+                                            &address,
+                                            &private_key,
+                                            phrase.trim(),
+                                            &password,
+                                            curve_type,
+                                        ) {
                                             Ok(_) => match set_selected_wallet(&public_address) {
                                                 Ok(_) => {
                                                     println!(
@@ -682,8 +793,11 @@ pub fn handle_keytool_command() -> Option<String> {
                                                 Err(e) => {
                                                     println!(
                                                         "{}",
-                                                        format!("Failed to set selected wallet: {}", e)
-                                                            .red()
+                                                        format!(
+                                                            "Failed to set selected wallet: {}",
+                                                            e
+                                                        )
+                                                        .red()
                                                     );
                                                     return None;
                                                 }
@@ -707,11 +821,14 @@ pub fn handle_keytool_command() -> Option<String> {
                                 }
                             }
                             Err(e) => {
-                                println!("{}", format!("Failed to import seed phrase: {}", e).red());
+                                println!(
+                                    "{}",
+                                    format!("Failed to import seed phrase: {}", e).red()
+                                );
                                 return None;
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         println!("{}", format!("Failed to read curve choice: {}", e).red());
                         return None;
@@ -725,13 +842,13 @@ pub fn handle_keytool_command() -> Option<String> {
                 io::stdin()
                     .read_line(&mut private_key)
                     .expect("Failed to read line");
-            
+
                 // Add curve type selection with Ed25519 option
                 println!("Select curve type:");
                 println!("1. K-256 (secp256k1)");
                 println!("2. P-256 (secp256r1)");
                 println!("3. Ed25519");
-                
+
                 let mut curve_choice = String::new();
                 match io::stdin().read_line(&mut curve_choice) {
                     Ok(_) => {
@@ -740,18 +857,27 @@ pub fn handle_keytool_command() -> Option<String> {
                             "2" => CurveType::P256,
                             "3" => CurveType::Ed25519,
                             _ => {
-                                println!("{}", "Invalid choice, using Secp256k1 as default.".yellow());
+                                println!(
+                                    "{}",
+                                    "Invalid choice, using Secp256k1 as default.".yellow()
+                                );
                                 CurveType::K256
                             }
                         };
-            
+
                         match import_from_private_key(private_key.trim(), curve_type) {
                             Ok((private_key, _, public_address)) => {
                                 let password = prompt_password(true);
                                 // Convert public_address to Address type
                                 match public_address.parse() {
                                     Ok(address) => {
-                                        match save_wallet(&address, &private_key, "", &password, curve_type) {
+                                        match save_wallet(
+                                            &address,
+                                            &private_key,
+                                            "",
+                                            &password,
+                                            curve_type,
+                                        ) {
                                             Ok(_) => match set_selected_wallet(&public_address) {
                                                 Ok(_) => {
                                                     println!(
@@ -763,8 +889,11 @@ pub fn handle_keytool_command() -> Option<String> {
                                                 Err(e) => {
                                                     println!(
                                                         "{}",
-                                                        format!("Failed to set selected wallet: {}", e)
-                                                            .red()
+                                                        format!(
+                                                            "Failed to set selected wallet: {}",
+                                                            e
+                                                        )
+                                                        .red()
                                                     );
                                                     return None;
                                                 }
@@ -788,11 +917,14 @@ pub fn handle_keytool_command() -> Option<String> {
                                 }
                             }
                             Err(e) => {
-                                println!("{}", format!("Failed to import private key: {}", e).red());
+                                println!(
+                                    "{}",
+                                    format!("Failed to import private key: {}", e).red()
+                                );
                                 return None;
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         println!("{}", format!("Failed to read curve choice: {}", e).red());
                         return None;
@@ -811,44 +943,62 @@ pub fn handle_keytool_command() -> Option<String> {
                             match io::stdin().read_line(&mut mnemonic) {
                                 Ok(_) => {
                                     let mnemonic = mnemonic.trim();
-                                    
+
                                     // Validate mnemonic (basic check for word count)
                                     let word_count = mnemonic.split_whitespace().count();
                                     if word_count != 12 && word_count != 24 {
-                                        println!("{}", "Invalid mnemonic: must be 12 or 24 words".red());
+                                        println!(
+                                            "{}",
+                                            "Invalid mnemonic: must be 12 or 24 words".red()
+                                        );
                                         return None;
                                     }
-                                    
-                                    println!("Enter associated addresses (comma-separated, or press Enter for none):");
+
+                                    println!(
+                                        "Enter associated addresses (comma-separated, or press Enter for none):"
+                                    );
                                     let mut addresses_input = String::new();
                                     match io::stdin().read_line(&mut addresses_input) {
                                         Ok(_) => {
-                                            let addresses: Vec<String> = if addresses_input.trim().is_empty() {
-                                                Vec::new()
-                                            } else {
-                                                addresses_input
-                                                    .trim()
-                                                    .split(',')
-                                                    .map(|s| s.trim().to_string())
-                                                    .filter(|s| !s.is_empty())
-                                                    .collect()
-                                            };
-                                            
+                                            let addresses: Vec<String> =
+                                                if addresses_input.trim().is_empty() {
+                                                    Vec::new()
+                                                } else {
+                                                    addresses_input
+                                                        .trim()
+                                                        .split(',')
+                                                        .map(|s| s.trim().to_string())
+                                                        .filter(|s| !s.is_empty())
+                                                        .collect()
+                                                };
+
                                             let password = prompt_password(true);
-                                            
+
                                             match save_mnemonic(mnemonic, &password, addresses) {
                                                 Ok(_) => {
-                                                    println!("{}", "✓ Mnemonic saved successfully!".green().bold());
+                                                    println!(
+                                                        "{}",
+                                                        "✓ Mnemonic saved successfully!"
+                                                            .green()
+                                                            .bold()
+                                                    );
                                                     return Some("mnemonic_saved".to_string());
                                                 }
                                                 Err(e) => {
-                                                    println!("{}", format!("Failed to save mnemonic: {}", e).red());
+                                                    println!(
+                                                        "{}",
+                                                        format!("Failed to save mnemonic: {}", e)
+                                                            .red()
+                                                    );
                                                     return None;
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            println!("{}", format!("Error reading addresses: {}", e).red());
+                                            println!(
+                                                "{}",
+                                                format!("Error reading addresses: {}", e).red()
+                                            );
                                             return None;
                                         }
                                     }
@@ -859,21 +1009,24 @@ pub fn handle_keytool_command() -> Option<String> {
                                 }
                             }
                         }
-                        
+
                         "load" => {
                             if !check_mnemonic_exists() {
                                 println!("{}", "No mnemonic found in keystore".yellow());
                                 return None;
                             }
-                            
+
                             let password = prompt_password(false);
-                            
+
                             match load_mnemonic(&password) {
                                 Ok(mnemonic) => {
-                                    println!("\n{}", "Mnemonic Information:".bright_yellow().bold());
+                                    println!(
+                                        "\n{}",
+                                        "Mnemonic Information:".bright_yellow().bold()
+                                    );
                                     println!("{}", "─".repeat(60));
                                     println!("{:<15} {}", "Mnemonic:".bold(), mnemonic.green());
-                                    
+
                                     match get_mnemonic_addresses() {
                                         Ok(addresses) => {
                                             if !addresses.is_empty() {
@@ -882,15 +1035,22 @@ pub fn handle_keytool_command() -> Option<String> {
                                                     println!("                {}", addr.green());
                                                 }
                                             } else {
-                                                println!("{:<15} {}", "Addresses:".bold(), "None".yellow());
+                                                println!(
+                                                    "{:<15} {}",
+                                                    "Addresses:".bold(),
+                                                    "None".yellow()
+                                                );
                                             }
                                         }
                                         Err(e) => {
-                                            println!("{}", format!("Error getting addresses: {}", e).red());
+                                            println!(
+                                                "{}",
+                                                format!("Error getting addresses: {}", e).red()
+                                            );
                                         }
                                     }
                                     println!("{}", "─".repeat(60));
-                                    
+
                                     return Some("mnemonic_loaded".to_string());
                                 }
                                 Err(e) => {
@@ -899,27 +1059,41 @@ pub fn handle_keytool_command() -> Option<String> {
                                 }
                             }
                         }
-                        
+
                         "remove" => {
                             if !check_mnemonic_exists() {
                                 println!("{}", "No mnemonic found in keystore".yellow());
                                 return None;
                             }
-                            
-                            println!("{}", "⚠️  WARNING: This will permanently delete your mnemonic phrase!".red().bold());
+
+                            println!(
+                                "{}",
+                                "⚠️  WARNING: This will permanently delete your mnemonic phrase!"
+                                    .red()
+                                    .bold()
+                            );
                             println!("Type 'CONFIRM' to proceed:");
-                            
+
                             let mut confirmation = String::new();
                             match io::stdin().read_line(&mut confirmation) {
                                 Ok(_) => {
                                     if confirmation.trim() == "CONFIRM" {
                                         match remove_mnemonic() {
                                             Ok(_) => {
-                                                println!("{}", "✓ Mnemonic removed successfully".green().bold());
+                                                println!(
+                                                    "{}",
+                                                    "✓ Mnemonic removed successfully"
+                                                        .green()
+                                                        .bold()
+                                                );
                                                 return Some("mnemonic_removed".to_string());
                                             }
                                             Err(e) => {
-                                                println!("{}", format!("Failed to remove mnemonic: {}", e).red());
+                                                println!(
+                                                    "{}",
+                                                    format!("Failed to remove mnemonic: {}", e)
+                                                        .red()
+                                                );
                                                 return None;
                                             }
                                         }
@@ -929,12 +1103,15 @@ pub fn handle_keytool_command() -> Option<String> {
                                     }
                                 }
                                 Err(e) => {
-                                    println!("{}", format!("Error reading confirmation: {}", e).red());
+                                    println!(
+                                        "{}",
+                                        format!("Error reading confirmation: {}", e).red()
+                                    );
                                     return None;
                                 }
                             }
                         }
-                        
+
                         "status" => {
                             if check_mnemonic_exists() {
                                 println!("{}", "✓ Mnemonic exists in keystore".green().bold());
@@ -946,7 +1123,10 @@ pub fn handle_keytool_command() -> Option<String> {
                                         }
                                     }
                                     Err(e) => {
-                                        println!("{}", format!("Error getting addresses: {}", e).red());
+                                        println!(
+                                            "{}",
+                                            format!("Error getting addresses: {}", e).red()
+                                        );
                                     }
                                 }
                             } else {
@@ -954,7 +1134,7 @@ pub fn handle_keytool_command() -> Option<String> {
                             }
                             return None;
                         }
-                        
+
                         _ => {
                             println!("{}", "Mnemonic subcommands:".bright_yellow().bold());
                             println!("  save    - Save a BIP39 mnemonic phrase");
@@ -973,7 +1153,7 @@ pub fn handle_keytool_command() -> Option<String> {
                     return None;
                 }
             }
-            
+
             "session" => {
                 // Handle session key subcommands
                 if args.len() > 3 {
@@ -983,14 +1163,20 @@ pub fn handle_keytool_command() -> Option<String> {
                             if args.len() > 5 {
                                 let key = &args[4];
                                 let value = &args[5];
-                                
+
                                 match save_session_key(key, value) {
                                     Ok(_) => {
-                                        println!("{}", format!("✓ Session key '{}' saved", key).green().bold());
+                                        println!(
+                                            "{}",
+                                            format!("✓ Session key '{}' saved", key).green().bold()
+                                        );
                                         return Some(format!("session_set_{}", key));
                                     }
                                     Err(e) => {
-                                        println!("{}", format!("Failed to save session key: {}", e).red());
+                                        println!(
+                                            "{}",
+                                            format!("Failed to save session key: {}", e).red()
+                                        );
                                         return None;
                                     }
                                 }
@@ -999,22 +1185,28 @@ pub fn handle_keytool_command() -> Option<String> {
                                 return None;
                             }
                         }
-                        
+
                         "get" => {
                             if args.len() > 4 {
                                 let key = &args[4];
-                                
+
                                 match load_session_key(key) {
                                     Ok(Some(value)) => {
                                         println!("{}: {}", key.green().bold(), value.green());
                                         return Some(format!("session_get_{}", key));
                                     }
                                     Ok(None) => {
-                                        println!("{}", format!("Session key '{}' not found", key).yellow());
+                                        println!(
+                                            "{}",
+                                            format!("Session key '{}' not found", key).yellow()
+                                        );
                                         return None;
                                     }
                                     Err(e) => {
-                                        println!("{}", format!("Failed to load session key: {}", e).red());
+                                        println!(
+                                            "{}",
+                                            format!("Failed to load session key: {}", e).red()
+                                        );
                                         return None;
                                     }
                                 }
@@ -1023,18 +1215,26 @@ pub fn handle_keytool_command() -> Option<String> {
                                 return None;
                             }
                         }
-                        
+
                         "remove" => {
                             if args.len() > 4 {
                                 let key = &args[4];
-                                
+
                                 match remove_session_key(key) {
                                     Ok(_) => {
-                                        println!("{}", format!("✓ Session key '{}' removed", key).green().bold());
+                                        println!(
+                                            "{}",
+                                            format!("✓ Session key '{}' removed", key)
+                                                .green()
+                                                .bold()
+                                        );
                                         return Some(format!("session_removed_{}", key));
                                     }
                                     Err(e) => {
-                                        println!("{}", format!("Failed to remove session key: {}", e).red());
+                                        println!(
+                                            "{}",
+                                            format!("Failed to remove session key: {}", e).red()
+                                        );
                                         return None;
                                     }
                                 }
@@ -1043,21 +1243,33 @@ pub fn handle_keytool_command() -> Option<String> {
                                 return None;
                             }
                         }
-                        
+
                         "clear" => {
-                            println!("{}", "⚠️  This will remove ALL session keys. Continue? (y/n)".yellow().bold());
-                            
+                            println!(
+                                "{}",
+                                "⚠️  This will remove ALL session keys. Continue? (y/n)"
+                                    .yellow()
+                                    .bold()
+                            );
+
                             let mut confirmation = String::new();
                             match io::stdin().read_line(&mut confirmation) {
                                 Ok(_) => {
                                     if confirmation.trim().eq_ignore_ascii_case("y") {
                                         match clear_session_keys() {
                                             Ok(_) => {
-                                                println!("{}", "✓ All session keys cleared".green().bold());
+                                                println!(
+                                                    "{}",
+                                                    "✓ All session keys cleared".green().bold()
+                                                );
                                                 return Some("session_cleared".to_string());
                                             }
                                             Err(e) => {
-                                                println!("{}", format!("Failed to clear session keys: {}", e).red());
+                                                println!(
+                                                    "{}",
+                                                    format!("Failed to clear session keys: {}", e)
+                                                        .red()
+                                                );
                                                 return None;
                                             }
                                         }
@@ -1067,12 +1279,15 @@ pub fn handle_keytool_command() -> Option<String> {
                                     }
                                 }
                                 Err(e) => {
-                                    println!("{}", format!("Error reading confirmation: {}", e).red());
+                                    println!(
+                                        "{}",
+                                        format!("Error reading confirmation: {}", e).red()
+                                    );
                                     return None;
                                 }
                             }
                         }
-                        
+
                         _ => {
                             println!("{}", "Session key subcommands:".bright_yellow().bold());
                             println!("  set <key> <value>  - Save a session key");
@@ -1107,11 +1322,11 @@ pub fn handle_keytool_command() -> Option<String> {
 fn format_balance(ka_balance: u64) -> String {
     // KA is 10^-9 of a Kari token
     const KA_PER_KARI: u64 = 1_000_000_000;
-    
+
     // Separate whole Kari and fractional part (KA)
     let whole_kari = ka_balance / KA_PER_KARI;
     let fractional_ka = ka_balance % KA_PER_KARI;
-    
+
     // Format whole part with thousands separators
     let whole_part_formatted = format!("{}", whole_kari)
         .chars()
@@ -1124,10 +1339,10 @@ fn format_balance(ka_balance: u64) -> String {
         .chars()
         .rev()
         .collect::<String>();
-    
+
     // Format fractional part with leading zeros if needed
     let fractional_part_formatted = format!("{:09}", fractional_ka);
-    
+
     format!("{}.{}", whole_part_formatted, fractional_part_formatted)
 }
 
@@ -1138,10 +1353,15 @@ fn prompt_password(confirm: bool) -> String {
     let password = match read_password() {
         Ok(pwd) => pwd,
         Err(e) => {
-            eprintln!("Error reading password: {}. Falling back to standard input.", e);
+            eprintln!(
+                "Error reading password: {}. Falling back to standard input.",
+                e
+            );
             // Fallback to standard input when secure input fails
             let mut input = String::new();
-            io::stdin().read_line(&mut input).expect("Failed to read input");
+            io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read input");
             input.trim().to_string()
         }
     };
@@ -1149,13 +1369,18 @@ fn prompt_password(confirm: bool) -> String {
     if confirm {
         print!("Confirm password: ");
         io::stdout().flush().unwrap();
-        
+
         let confirm = match read_password() {
             Ok(pwd) => pwd,
             Err(e) => {
-                eprintln!("Error reading password: {}. Falling back to standard input.", e);
+                eprintln!(
+                    "Error reading password: {}. Falling back to standard input.",
+                    e
+                );
                 let mut input = String::new();
-                io::stdin().read_line(&mut input).expect("Failed to read input");
+                io::stdin()
+                    .read_line(&mut input)
+                    .expect("Failed to read input");
                 input.trim().to_string()
             }
         };
@@ -1178,7 +1403,10 @@ fn get_rpc_endpoint() -> String {
                     if let Some(alias) = env.get("alias").and_then(|v| v.as_str()) {
                         if alias == active_env {
                             if let Some(rpc_url) = env.get("rpc").and_then(|v| v.as_str()) {
-                                println!("Using RPC endpoint from kanari config: {}", rpc_url.green());
+                                println!(
+                                    "Using RPC endpoint from kanari config: {}",
+                                    rpc_url.green()
+                                );
                                 return rpc_url.to_string();
                             }
                         }
@@ -1187,7 +1415,7 @@ fn get_rpc_endpoint() -> String {
             }
         }
     }
-    
+
     // Fallback to load_config (legacy support)
     if let Ok(config) = load_config() {
         if let Some(port) = config.get("rpc_port").and_then(|v| v.as_u64()) {
@@ -1196,10 +1424,17 @@ fn get_rpc_endpoint() -> String {
             return endpoint;
         }
     }
-    
+
     // Final fallback to default
     let default_endpoint = "http://127.0.0.1:30030".to_string();
-    println!("{}", format!("Warning: Could not determine RPC endpoint from config, using default: {}", default_endpoint).yellow());
+    println!(
+        "{}",
+        format!(
+            "Warning: Could not determine RPC endpoint from config, using default: {}",
+            default_endpoint
+        )
+        .yellow()
+    );
     println!("Make sure your node is running on the default port or check your configuration.");
     default_endpoint
 }

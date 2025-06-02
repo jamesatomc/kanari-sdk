@@ -1,8 +1,11 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::vm_module::VMModule;
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use lazy_static::lazy_static;
-use crate::vm_module::VMModule;
 
 // VM Transaction State Manager - Make it public so it can be accessed by the RPC API
 lazy_static! {
@@ -47,7 +50,7 @@ pub fn find_module_with_variations(state: &VMState, module_id: &str) -> Result<V
     if let Some(module) = state.modules.get(module_id) {
         return Ok(module.clone());
     }
-    
+
     // Try variations
     let variations = generate_module_id_variations(module_id);
     for variant in &variations {
@@ -55,33 +58,34 @@ pub fn find_module_with_variations(state: &VMState, module_id: &str) -> Result<V
             return Ok(module.clone());
         }
     }
-    
+
     // Try fuzzy match (lowercase contains)
     let module_id_lower = module_id.to_lowercase();
     for (id, module) in state.modules.iter() {
-        if id.to_lowercase().contains(&module_id_lower) || 
-           module_id_lower.contains(&id.to_lowercase()) {
+        if id.to_lowercase().contains(&module_id_lower)
+            || module_id_lower.contains(&id.to_lowercase())
+        {
             return Ok(module.clone());
         }
     }
-    
+
     Err(format!("Module not found: {}", module_id))
 }
 
 // Enhanced generate_module_id_variations function
 fn generate_module_id_variations(module_id: &str) -> Vec<String> {
     let mut variations = Vec::new();
-    
+
     if let Some((addr_part, name_part)) = module_id.split_once("::") {
         if addr_part.starts_with("0x") {
             variations.push(format!("{}::{}", &addr_part[2..], name_part));
         } else {
             variations.push(format!("0x{}::{}", addr_part, name_part));
         }
-        
+
         variations.push(format!("{}::{}", addr_part.to_lowercase(), name_part));
         variations.push(format!("{}::{}", addr_part.to_uppercase(), name_part));
-        
+
         if let Some(addr_without_prefix) = addr_part.strip_prefix("0x") {
             if let Some(non_zero_pos) = addr_without_prefix.find(|c| c != '0') {
                 if non_zero_pos > 0 {
@@ -89,11 +93,11 @@ fn generate_module_id_variations(module_id: &str) -> Vec<String> {
                     variations.push(format!("0x{}::{}", trimmed, name_part));
                 }
             }
-            
+
             let padded = format!("{:0>64}", addr_without_prefix);
             variations.push(format!("0x{}::{}", padded, name_part));
         }
     }
-    
+
     variations
 }

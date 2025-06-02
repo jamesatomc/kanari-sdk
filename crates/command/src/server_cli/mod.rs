@@ -1,11 +1,13 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use std::process::exit;
 
 use colored::Colorize;
 
-
 pub mod generate_certs;
-pub mod start_server;
 pub mod init_server;
+pub mod start_server;
 
 struct CommandInfo {
     name: &'static str,
@@ -81,7 +83,7 @@ pub async fn handle_server_command() -> Option<String> {
             );
         }
         println!();
-        
+
         // Instead of exiting, just return None to go back to main
         return None;
     }
@@ -90,7 +92,6 @@ pub async fn handle_server_command() -> Option<String> {
     let command = &args[2];
     // Use string comparison in the match statement
     match command.as_str() {
-
         "start" => {
             // Extract peer and port arguments
             let mut peers = Vec::new();
@@ -107,7 +108,10 @@ pub async fn handle_server_command() -> Option<String> {
                             peers.push(peer_addr.to_string());
                             i += 2;
                         } else {
-                            eprintln!("{}", "Error: --peer requires an address argument".red().bold());
+                            eprintln!(
+                                "{}",
+                                "Error: --peer requires an address argument".red().bold()
+                            );
                             exit(1);
                         }
                     }
@@ -124,7 +128,10 @@ pub async fn handle_server_command() -> Option<String> {
                                 }
                             }
                         } else {
-                            eprintln!("{}", "Error: --port requires a number argument".red().bold());
+                            eprintln!(
+                                "{}",
+                                "Error: --port requires a number argument".red().bold()
+                            );
                             exit(1);
                         }
                     }
@@ -137,7 +144,7 @@ pub async fn handle_server_command() -> Option<String> {
                                 _ => {
                                     println!("{}", format!("Warning: Invalid value for --localhost: '{}', defaulting to false", value).yellow().bold());
                                     false
-                                },
+                                }
                             };
                             i += 2;
                         } else {
@@ -155,12 +162,18 @@ pub async fn handle_server_command() -> Option<String> {
                             selected_wallet = Some(wallet_addr.to_string());
                             i += 2;
                         } else {
-                            eprintln!("{}", "Error: --wallet requires an address argument".red().bold());
+                            eprintln!(
+                                "{}",
+                                "Error: --wallet requires an address argument".red().bold()
+                            );
                             exit(1);
                         }
                     }
                     Some(unknown_arg) => {
-                        eprintln!("{}", format!("Unknown argument: {}", unknown_arg).red().bold());
+                        eprintln!(
+                            "{}",
+                            format!("Unknown argument: {}", unknown_arg).red().bold()
+                        );
                         display_help(true);
                         exit(1);
                     }
@@ -178,32 +191,39 @@ pub async fn handle_server_command() -> Option<String> {
                 println!("Using custom port: {}", p.to_string().bright_white());
             }
 
-            if let Err(err) = start_server::start_server(peers, port, localhost_only, selected_wallet, use_tls).await {
+            if let Err(err) =
+                start_server::start_server(peers, port, localhost_only, selected_wallet, use_tls)
+                    .await
+            {
                 eprintln!("{}", format!("Server startup failed: {}", err).red().bold());
                 return None;
             }
             Some("Server started successfully".to_string())
         }
 
-        "generate-certs" => {
-            match generate_certs::generate_ssl_certificates() {
-                Ok(_) => Some("SSL certificates generated successfully".to_string()),
-                Err(e) => {
-                    eprintln!("{}", format!("Error generating certificates: {}", e).red().bold());
-                    None
-                }
+        "generate-certs" => match generate_certs::generate_ssl_certificates() {
+            Ok(_) => Some("SSL certificates generated successfully".to_string()),
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    format!("Error generating certificates: {}", e).red().bold()
+                );
+                None
             }
-        }
+        },
 
-        "init" => {
-            match init_server::init_server_config() {
-                Ok(_) => Some("Kari server initialized successfully. Default kanari.yaml created.".to_string()),
-                Err(e) => {
-                    eprintln!("{}", format!("Error initializing server: {}", e).red().bold());
-                    None
-                }
+        "init" => match init_server::init_server_config() {
+            Ok(_) => Some(
+                "Kari server initialized successfully. Default kanari.yaml created.".to_string(),
+            ),
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    format!("Error initializing server: {}", e).red().bold()
+                );
+                None
             }
-        }
+        },
 
         _ => {
             display_help(true);
@@ -211,4 +231,3 @@ pub async fn handle_server_command() -> Option<String> {
         }
     }
 }
-

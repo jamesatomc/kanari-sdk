@@ -1,9 +1,12 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::chain_id::CHAIN_ID;
 use consensus_pos::HashAlgorithm;
-use serde::{Deserialize, Serialize};
-use mona_types::address::Address;
-use mona_crypto::verify_signature; // Add mona-crypto dependency
 use log;
+use mona_crypto::verify_signature; // Add mona-crypto dependency
+use mona_types::address::Address;
+use serde::{Deserialize, Serialize};
 
 // Define the Transaction struct
 #[derive(Serialize, Deserialize, Clone)]
@@ -14,7 +17,7 @@ pub struct Transaction {
     pub amount: u64,
     pub gas_fee: u64, // Add gas fee field
     pub timestamp: u64,
-    pub signature: Vec<u8>, // Changed from Option<String> to Vec<u8>
+    pub signature: Vec<u8>,    // Changed from Option<String> to Vec<u8>
     pub data: Option<Vec<u8>>, // Re-add data field as Option<Vec<u8>>
 }
 
@@ -29,11 +32,14 @@ impl Transaction {
         message.extend_from_slice(&self.amount.to_le_bytes());
         message.extend_from_slice(&self.gas_fee.to_le_bytes()); // Include gas fee in the signed message
         message.extend_from_slice(&self.timestamp.to_le_bytes());
-        
+
         // For debugging
-        log::debug!("Generated message for signing/verification: tx_id={}, len={}", 
-                   self.transaction_id, message.len());
-        
+        log::debug!(
+            "Generated message for signing/verification: tx_id={}, len={}",
+            self.transaction_id,
+            message.len()
+        );
+
         message
     }
 
@@ -47,7 +53,7 @@ impl Transaction {
 
         // Generate the message that was originally signed
         let message = self.to_signable_message();
-        
+
         // Verify signature using mona-crypto
         match verify_signature(&self.sender.to_string(), &message, &self.signature) {
             Ok(is_valid) => {
@@ -55,15 +61,18 @@ impl Transaction {
                     log::warn!("Invalid signature for transaction {}", self.transaction_id);
                 }
                 is_valid
-            },
+            }
             Err(err) => {
-                log::error!("Error verifying signature for transaction {}: {}", 
-                    self.transaction_id, err);
+                log::error!(
+                    "Error verifying signature for transaction {}: {}",
+                    self.transaction_id,
+                    err
+                );
                 false
             }
         }
     }
-    
+
     // Check if the transaction is a VM transaction
     pub fn is_vm_transaction(&self) -> bool {
         if let Some(data) = &self.data {
@@ -73,7 +82,7 @@ impl Transaction {
         }
         false
     }
-    
+
     // Check if the transaction is a VM module deployment
     pub fn is_vm_module_deployment(&self) -> bool {
         if let Some(data) = &self.data {
@@ -83,7 +92,7 @@ impl Transaction {
         }
         false
     }
-    
+
     // Get transaction type as a string for better logging
     pub fn get_transaction_type(&self) -> &'static str {
         if self.is_vm_module_deployment() {
@@ -96,7 +105,7 @@ impl Transaction {
             "TOKEN_TRANSFER"
         }
     }
-    
+
     // Extract VM module information from deployment transaction
     pub fn get_vm_module_info(&self) -> Option<(String, String)> {
         if let Some(data) = &self.data {
@@ -111,7 +120,7 @@ impl Transaction {
         }
         None
     }
-    
+
     // Extract VM function call information
     pub fn get_vm_function_info(&self) -> Option<(String, String)> {
         if let Some(data) = &self.data {
@@ -145,7 +154,6 @@ pub struct Block<T: HashAlgorithm> {
 
 // Implement the Block struct
 impl<T: HashAlgorithm> Block<T> {
-
     pub fn new(
         index: u32,
         data: Vec<u8>,
@@ -209,4 +217,3 @@ impl<T: HashAlgorithm> Block<T> {
         true
     }
 }
-

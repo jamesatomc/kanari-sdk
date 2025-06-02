@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use bip39::rand::rngs::OsRng;
 use bip39::{Language, Mnemonic, rand};
 use k256::ecdsa::signature::{SignatureEncoding, Verifier};
@@ -21,8 +24,8 @@ use p256::{
 };
 // Add ed25519_dalek imports
 use ed25519_dalek::{
-    Signer, SigningKey as Ed25519SigningKey, 
-    VerifyingKey as Ed25519VerifyingKey, Signature as Ed25519Signature,
+    Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey,
+    VerifyingKey as Ed25519VerifyingKey,
 };
 use thiserror::Error;
 
@@ -292,37 +295,41 @@ pub fn generate_ed25519_address(word_count: usize) -> (String, String, String) {
     let mut rng = rand::thread_rng();
     let mut seed = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rng, &mut seed);
-    
+
     // Create signing key from random bytes
     let signing_key = Ed25519SigningKey::from_bytes(&seed);
     let verifying_key = Ed25519VerifyingKey::from(&signing_key);
-    
+
     // Get the bytes of the keys
     let private_key_bytes = signing_key.to_bytes();
     let public_key_bytes = verifying_key.to_bytes();
-    
+
     // Format the public key
     let hex_encoded = hex::encode(&public_key_bytes);
     let karix_public_address = format!("0x{}", hex_encoded);
-    
+
     // Generate mnemonic with specified word count
     let mnemonic_result = match word_count {
         12 => Mnemonic::generate(12),
         24 => Mnemonic::generate(24),
         _ => panic!("Unsupported word count: {}", word_count),
     };
-    
+
     let mnemonic = match mnemonic_result {
         Ok(m) => m,
         Err(e) => panic!("Failed to generate mnemonic: {:?}", e),
     };
     let seed_phrase = mnemonic.to_string();
-    
-    (hex::encode(private_key_bytes), karix_public_address, seed_phrase)
+
+    (
+        hex::encode(private_key_bytes),
+        karix_public_address,
+        seed_phrase,
+    )
 }
 
 /// Returns list of wallet files with selection status
-/// 
+///
 /// # Returns
 /// * `Result<Vec<(String, bool)>>` - List of (wallet_filename, is_selected) tuples
 pub fn list_wallet_files() -> Result<Vec<(String, bool)>, std::io::Error> {
@@ -435,27 +442,27 @@ pub fn import_from_seed_phrase_ed25519(
 ) -> Result<(String, String, String), Box<dyn std::error::Error>> {
     // Validate and create mnemonic
     let mnemonic = Mnemonic::parse_in(Language::English, phrase)?;
-    
+
     // Generate seed from mnemonic
     let seed = mnemonic.to_seed("");
-    
+
     // Use the first 32 bytes of the seed as the private key
     let bytes = &seed[0..32];
-    
+
     // Create a fixed-size array from the seed slice
     let mut seed_array = [0u8; 32];
     seed_array.copy_from_slice(bytes);
-    
+
     // Create Ed25519 signing key from bytes
     let signing_key = Ed25519SigningKey::from_bytes(&seed_array);
     let verifying_key = Ed25519VerifyingKey::from(&signing_key);
-    
+
     // Get the formatted addresses
     let private_key = hex::encode(signing_key.to_bytes());
     let public_key_bytes = verifying_key.to_bytes();
     let hex_encoded = hex::encode(&public_key_bytes);
     let public_address = format!("0x{}", hex_encoded);
-    
+
     Ok((private_key, hex_encoded, public_address))
 }
 
@@ -521,24 +528,28 @@ pub fn import_from_private_key_ed25519(
 ) -> Result<(String, String, String), Box<dyn std::error::Error>> {
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key)?;
-    
+
     if private_key_bytes.len() != 32 {
-        return Err(format!("Invalid Ed25519 private key length: {}", private_key_bytes.len()).into());
+        return Err(format!(
+            "Invalid Ed25519 private key length: {}",
+            private_key_bytes.len()
+        )
+        .into());
     }
-    
+
     // Create a fixed-size array from the private key bytes
     let mut key_array = [0u8; 32];
     key_array.copy_from_slice(&private_key_bytes);
-    
+
     // Create signing key from private key bytes
     let signing_key = Ed25519SigningKey::from_bytes(&key_array);
     let verifying_key = Ed25519VerifyingKey::from(&signing_key);
-    
+
     // Generate public key bytes and address
     let public_key_bytes = verifying_key.to_bytes();
     let hex_encoded = hex::encode(&public_key_bytes);
     let public_address = format!("0x{}", hex_encoded);
-    
+
     Ok((private_key.to_string(), hex_encoded, public_address))
 }
 
@@ -632,21 +643,25 @@ pub fn sign_message_ed25519(
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key_hex)?;
-    
+
     if private_key_bytes.len() != 32 {
-        return Err(format!("Invalid Ed25519 private key length: {}", private_key_bytes.len()).into());
+        return Err(format!(
+            "Invalid Ed25519 private key length: {}",
+            private_key_bytes.len()
+        )
+        .into());
     }
-    
+
     // Create a fixed-size array from the private key bytes
     let mut key_array = [0u8; 32];
     key_array.copy_from_slice(&private_key_bytes);
-    
+
     // Create signing key from private key
     let signing_key = Ed25519SigningKey::from_bytes(&key_array);
-    
+
     // Sign the message directly (Ed25519 doesn't need pre-hashing)
     let signature: Ed25519Signature = signing_key.sign(message);
-    
+
     // Return the signature bytes
     Ok(signature.to_bytes().to_vec())
 }
@@ -694,16 +709,19 @@ pub fn verify_signature(
         (Ok(false), Ok(false), Ok(false)) => Ok(false),
 
         // Handle cases where some curves failed but others succeeded in creating keys
-        (Ok(false), Ok(false), Err(_)) | (Ok(false), Err(_), Ok(false)) | (Err(_), Ok(false), Ok(false)) => Ok(false),
-        (Ok(false), Err(_), Err(_)) | (Err(_), Ok(false), Err(_)) | (Err(_), Err(_), Ok(false)) => Ok(false),
+        (Ok(false), Ok(false), Err(_))
+        | (Ok(false), Err(_), Ok(false))
+        | (Err(_), Ok(false), Ok(false)) => Ok(false),
+        (Ok(false), Err(_), Err(_)) | (Err(_), Ok(false), Err(_)) | (Err(_), Err(_), Ok(false)) => {
+            Ok(false)
+        }
 
         // If all errored, combine the errors for better diagnostics
-        (Err(e_k256), Err(e_p256), Err(e_ed25519)) => {
-            Err(format!(
-                "Verification failed for all curves. K256: {}. P256: {}. Ed25519: {}", 
-                e_k256, e_p256, e_ed25519
-            ).into())
-        }
+        (Err(e_k256), Err(e_p256), Err(e_ed25519)) => Err(format!(
+            "Verification failed for all curves. K256: {}. P256: {}. Ed25519: {}",
+            e_k256, e_p256, e_ed25519
+        )
+        .into()),
     }
 }
 
@@ -715,7 +733,7 @@ pub fn verify_signature_k256(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let signature = match K256Signature::from_der(signature) {
         Ok(sig) => sig,
-        Err(e) => return Err(format!("Invalid K256 signature format: {}", e).into())
+        Err(e) => return Err(format!("Invalid K256 signature format: {}", e).into()),
     };
 
     let mut hasher = Sha3_256::default();
@@ -724,7 +742,7 @@ pub fn verify_signature_k256(
 
     let decoded_hex = match hex::decode(address_hex) {
         Ok(hex) => hex,
-        Err(e) => return Err(format!("Invalid hex in address: {}", e).into())
+        Err(e) => return Err(format!("Invalid hex in address: {}", e).into()),
     };
 
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
@@ -744,7 +762,7 @@ pub fn verify_signature_k256(
                 if verifying_key.verify(&message_hash, &signature).is_ok() {
                     return Ok(true);
                 }
-            },
+            }
             Err(_) => {}
         }
     }
@@ -758,7 +776,7 @@ pub fn verify_signature_k256(
             if verifying_key.verify(&message_hash, &signature).is_ok() {
                 return Ok(true);
             }
-        },
+        }
         Err(_) => {}
     }
 
@@ -769,7 +787,7 @@ pub fn verify_signature_k256(
             if verifying_key.verify(&message_hash, &signature).is_ok() {
                 return Ok(true);
             }
-        },
+        }
         Err(_) => {}
     }
 
@@ -788,7 +806,7 @@ pub fn verify_signature_p256(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let signature = match P256Signature::from_der(signature) {
         Ok(sig) => sig,
-        Err(e) => return Err(format!("Invalid P256 signature format: {}", e).into())
+        Err(e) => return Err(format!("Invalid P256 signature format: {}", e).into()),
     };
 
     let mut hasher = Sha3_256::default();
@@ -797,7 +815,7 @@ pub fn verify_signature_p256(
 
     let decoded_hex = match hex::decode(address_hex) {
         Ok(hex) => hex,
-        Err(e) => return Err(format!("Invalid hex in address: {}", e).into())
+        Err(e) => return Err(format!("Invalid hex in address: {}", e).into()),
     };
 
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
@@ -817,7 +835,7 @@ pub fn verify_signature_p256(
                 if verifying_key.verify(&message_hash, &signature).is_ok() {
                     return Ok(true);
                 }
-            },
+            }
             Err(_) => {}
         }
     }
@@ -831,7 +849,7 @@ pub fn verify_signature_p256(
             if verifying_key.verify(&message_hash, &signature).is_ok() {
                 return Ok(true);
             }
-        },
+        }
         Err(_) => {}
     }
 
@@ -842,7 +860,7 @@ pub fn verify_signature_p256(
             if verifying_key.verify(&message_hash, &signature).is_ok() {
                 return Ok(true);
             }
-        },
+        }
         Err(_) => {}
     }
 
@@ -863,25 +881,25 @@ pub fn verify_signature_ed25519(
     if signature.len() != 64 {
         return Err(format!("Invalid Ed25519 signature length: {}", signature.len()).into());
     }
-    
+
     // Create a fixed-size array for the signature
     let mut sig_array = [0u8; 64];
     sig_array.copy_from_slice(signature);
     let signature = Ed25519Signature::from_bytes(&sig_array);
-    
+
     // Decode the address hex (which should be the public key)
-    let decoded_hex = hex::decode(address_hex)
-        .map_err(|e| format!("Invalid hex in address: {}", e))?;
-    
+    let decoded_hex =
+        hex::decode(address_hex).map_err(|e| format!("Invalid hex in address: {}", e))?;
+
     // For Ed25519, the address should be the 32-byte public key
     if decoded_hex.len() != 32 {
         return Err(format!("Invalid address length for Ed25519: {}", decoded_hex.len()).into());
     }
-    
+
     // Create a fixed-size array for the public key
     let mut key_array = [0u8; 32];
     key_array.copy_from_slice(&decoded_hex);
-    
+
     // Create verifying key from public key bytes
     match Ed25519VerifyingKey::from_bytes(&key_array) {
         Ok(verifying_key) => {
@@ -890,8 +908,8 @@ pub fn verify_signature_ed25519(
                 Ok(_) => Ok(true),
                 Err(_) => Ok(false),
             }
-        },
-        Err(e) => Err(format!("Invalid Ed25519 public key: {}", e).into())
+        }
+        Err(e) => Err(format!("Invalid Ed25519 public key: {}", e).into()),
     }
 }
 
@@ -903,25 +921,27 @@ pub fn detect_curve_type(address: &str) -> Option<CurveType> {
         Ok(hex) => hex,
         Err(_) => return None,
     };
-    
+
     // For Ed25519, public keys are always 32 bytes exactly
     if decoded_hex.len() == 32 {
         // Try to construct an Ed25519 key
         let mut key_array = [0u8; 32];
         if let Ok(()) = std::convert::TryInto::<[u8; 32]>::try_into(decoded_hex.clone())
-            .map(|arr| { key_array.copy_from_slice(&arr); })
-            .map_err(|_| ()) {
-            
+            .map(|arr| {
+                key_array.copy_from_slice(&arr);
+            })
+            .map_err(|_| ())
+        {
             if Ed25519VerifyingKey::from_bytes(&key_array).is_ok() {
                 return Some(CurveType::Ed25519);
             }
         }
     }
-    
+
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
         return None;
     }
-    
+
     let k256_key_valid = if decoded_hex.len() == 64 {
         let mut public_key_bytes = Vec::with_capacity(65);
         public_key_bytes.push(0x04);
@@ -935,7 +955,7 @@ pub fn detect_curve_type(address: &str) -> Option<CurveType> {
             K256VerifyingKey::from_sec1_bytes(&compressed_bytes).is_ok()
         }
     };
-    
+
     let p256_key_valid = if decoded_hex.len() == 64 {
         let mut public_key_bytes = Vec::with_capacity(65);
         public_key_bytes.push(0x04);
@@ -949,7 +969,7 @@ pub fn detect_curve_type(address: &str) -> Option<CurveType> {
             VerifyingKey::from_sec1_bytes(&compressed_bytes).is_ok()
         }
     };
-    
+
     match (k256_key_valid, p256_key_valid) {
         (true, false) => Some(CurveType::K256),
         (false, true) => Some(CurveType::P256),
@@ -974,4 +994,3 @@ impl Wallet {
         self.curve_type
     }
 }
-

@@ -1,10 +1,13 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
+use move_compiler::compiled_unit::CompiledUnit;
+use move_package::source_package::layout::SourcePackageLayout;
+use rand::{Rng, thread_rng};
+use serde_json::{Value as JsonValue, json};
+use sha3::{Digest, Sha3_256};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use move_package::source_package::layout::SourcePackageLayout;
-use move_compiler::compiled_unit::CompiledUnit;
-use serde_json::{json, Value as JsonValue};
-use sha3::{Digest, Sha3_256};
-use rand::{thread_rng, Rng};
 
 pub fn reroot_path(path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let path = path.unwrap_or_else(|| PathBuf::from("."));
@@ -67,7 +70,7 @@ pub fn get_module_public_functions(module: &CompiledUnit) -> Vec<JsonValue> {
     let module_address = compiled_module.address().to_string();
     let module_name = compiled_module.name().to_string();
     let full_module_id = format!("0x{}", module_address);
-    
+
     compiled_module
         .function_defs()
         .iter()
@@ -78,7 +81,7 @@ pub fn get_module_public_functions(module: &CompiledUnit) -> Vec<JsonValue> {
                 let complete_func_path = format!("{}::{}", full_module_id, module_name);
                 let signature = compiled_module.signature_at(func_handle.parameters);
                 let param_count = signature.0.len();
-                
+
                 Some(json!({
                     "name": func_name,
                     "full_name": format!("{}::{}", complete_func_path, func_name),

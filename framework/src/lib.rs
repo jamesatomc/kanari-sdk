@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 //! Kanari Framework
 //! Core framework implementation for the Kanari blockchain
 //!

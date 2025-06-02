@@ -1,6 +1,9 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 //! Wallet management functionality
 //!
-//! This module handles wallet operations including creation, encryption, 
+//! This module handles wallet operations including creation, encryption,
 //! storage, and loading of cryptocurrency wallets.
 
 use std::io;
@@ -22,25 +25,25 @@ use crate::Keystore;
 pub enum WalletError {
     #[error("Encryption error: {0}")]
     EncryptionError(String),
-    
+
     #[error("Decryption error: {0}")]
     DecryptionError(String),
-    
+
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
-    
+
     #[error("Serialization error: {0}")]
     SerializationError(String),
-    
+
     #[error("Wallet not found: {0}")]
     NotFound(String),
-    
+
     #[error("Invalid password")]
     InvalidPassword,
-    
+
     #[error("Signing error: {0}")]
     SigningError(String),
-    
+
     #[error("Keystore error: {0}")]
     KeystoreError(String),
 }
@@ -69,7 +72,7 @@ impl Wallet {
             curve_type,
         }
     }
-    
+
     /// Sign a message using this wallet's private key
     pub fn sign(
         &self,
@@ -80,40 +83,40 @@ impl Wallet {
         if message.is_empty() {
             return Err(WalletError::SigningError("Cannot sign empty message".to_string()));
         }
-        
+
         // Validate password is not empty - this makes the parameter used and required
         if password.is_empty() {
             return Err(WalletError::InvalidPassword);
         }
-        
+
         // Create a temporary copy of the private key for signing
         let private_key_copy = self.private_key.clone();
-        
+
         // Sign the message
         let result = signatures::sign_message(
             &private_key_copy,
             message,
             self.curve_type,
         ).map_err(|e| WalletError::SigningError(e.to_string()));
-        
+
         // Securely clear the private key copy from memory
         let mut private_key_bytes = private_key_copy.into_bytes();
         signatures::secure_clear(&mut private_key_bytes);
-        
+
         result
     }
-    
+
     /// Verify a signature made with this wallet against a message
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<bool, WalletError> {
         // Validate inputs
         if message.is_empty() {
             return Err(WalletError::SigningError("Cannot verify empty message".to_string()));
         }
-        
+
         if signature.is_empty() {
             return Err(WalletError::SigningError("Cannot verify empty signature".to_string()));
         }
-        
+
         signatures::verify_signature_with_curve(
             &self.address.to_string(),
             message,
@@ -135,18 +138,18 @@ pub fn save_wallet(
     if password.is_empty() {
         return Err(WalletError::EncryptionError("Empty password not allowed".to_string()));
     }
-    
+
     if private_key.is_empty() {
         return Err(WalletError::EncryptionError("Empty private key not allowed".to_string()));
     }
-    
+
     // Ensure private key has kanari prefix
     let formatted_private_key = if private_key.starts_with("kanari") {
         private_key.to_string()
     } else {
         format!("kanari{}", private_key)
     };
-    
+
     // Create wallet object
     let wallet_data = Wallet {
         address: *address,
@@ -172,14 +175,14 @@ pub fn save_wallet(
     // Load or create the keystore
     let mut keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     // Add the wallet to the keystore with the address as the key
     keystore.add_wallet(&address.to_string(), encrypted_data)
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     // Also update the active_address in kanari.yaml
     update_active_address(&address.to_string())?;
-    
+
     Ok(())
 }
 
@@ -189,19 +192,19 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
     if address.is_empty() {
         return Err(WalletError::NotFound("Empty address".to_string()));
     }
-    
+
     if password.is_empty() {
         return Err(WalletError::InvalidPassword);
     }
-    
+
     // Load the keystore
     let keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     // Get the encrypted data for this wallet
     let encrypted_data = keystore.get_wallet(address)
         .ok_or_else(|| WalletError::NotFound(address.to_string()))?;
-    
+
     // Decrypt wallet data
     let decrypted = encryption::decrypt_data(encrypted_data, password)
         .map_err(|_| WalletError::InvalidPassword)?;
@@ -238,8 +241,8 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
                 Err(e) => {
                     // If TOML parsing fails, provide a detailed error
                     Err(WalletError::SerializationError(
-                        format!("Failed to parse wallet data as TOML: {}. First 50 bytes: {:?}", 
-                            e, 
+                        format!("Failed to parse wallet data as TOML: {}. First 50 bytes: {:?}",
+                            e,
                             &decompressed_data.get(..50.min(decompressed_data.len()))
                                 .unwrap_or(&[])
                         )
@@ -249,8 +252,8 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
         },
         Err(e) => {
             Err(WalletError::DecryptionError(
-                format!("Decrypted data is not valid UTF-8: {}. First 50 bytes: {:?}", 
-                    e, 
+                format!("Decrypted data is not valid UTF-8: {}. First 50 bytes: {:?}",
+                    e,
                     &decompressed_data.get(..50.min(decompressed_data.len()))
                         .unwrap_or(&[])
                 )
@@ -269,26 +272,26 @@ pub fn save_mnemonic(
     if password.is_empty() {
         return Err(WalletError::EncryptionError("Empty password not allowed".to_string()));
     }
-    
+
     if mnemonic.is_empty() {
         return Err(WalletError::EncryptionError("Empty mnemonic not allowed".to_string()));
     }
-    
+
     // Compress mnemonic before encryption
     let compressed_data = compression::compress_data(mnemonic.as_bytes())
         .map_err(|e| WalletError::SerializationError(format!("Compression error: {}", e)))?;
-    
+
     // Encrypt the mnemonic
     let encrypted_data = encryption::encrypt_data(&compressed_data, password)
         .map_err(|e| WalletError::EncryptionError(e.to_string()))?;
-    
+
     // Load keystore and save mnemonic
     let mut keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     keystore.set_mnemonic(encrypted_data, addresses)
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     Ok(())
 }
 
@@ -298,23 +301,23 @@ pub fn load_mnemonic(password: &str) -> Result<String, WalletError> {
     if password.is_empty() {
         return Err(WalletError::InvalidPassword);
     }
-    
+
     // Load keystore
     let keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     // Get encrypted mnemonic
     let encrypted_data = keystore.get_mnemonic()
         .ok_or_else(|| WalletError::NotFound("Mnemonic not found".to_string()))?;
-    
+
     // Decrypt mnemonic
     let decrypted = encryption::decrypt_data(encrypted_data, password)
         .map_err(|_| WalletError::InvalidPassword)?;
-    
+
     // Decompress the decrypted data
     let decompressed_data = compression::decompress_data(&decrypted)
         .map_err(|e| WalletError::DecryptionError(format!("Failed to decompress mnemonic: {}", e)))?;
-    
+
     // Convert to string
     String::from_utf8(decompressed_data)
         .map_err(|e| WalletError::DecryptionError(format!("Invalid UTF-8 in mnemonic: {}", e)))
@@ -324,7 +327,7 @@ pub fn load_mnemonic(password: &str) -> Result<String, WalletError> {
 pub fn get_mnemonic_addresses() -> Result<Vec<String>, WalletError> {
     let keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     Ok(keystore.get_mnemonic_addresses().clone())
 }
 
@@ -341,10 +344,10 @@ pub fn check_mnemonic_exists() -> bool {
 pub fn remove_mnemonic() -> Result<(), WalletError> {
     let mut keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     keystore.remove_mnemonic()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     Ok(())
 }
 
@@ -354,10 +357,10 @@ pub fn remove_mnemonic() -> Result<(), WalletError> {
 pub fn save_session_key(key: &str, value: &str) -> Result<(), WalletError> {
     let mut keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     keystore.add_session_key(key, value)
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     Ok(())
 }
 
@@ -365,7 +368,7 @@ pub fn save_session_key(key: &str, value: &str) -> Result<(), WalletError> {
 pub fn load_session_key(key: &str) -> Result<Option<String>, WalletError> {
     let keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     Ok(keystore.get_session_key(key).cloned())
 }
 
@@ -373,10 +376,10 @@ pub fn load_session_key(key: &str) -> Result<Option<String>, WalletError> {
 pub fn remove_session_key(key: &str) -> Result<(), WalletError> {
     let mut keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     keystore.remove_session_key(key)
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     Ok(())
 }
 
@@ -384,10 +387,10 @@ pub fn remove_session_key(key: &str) -> Result<(), WalletError> {
 pub fn clear_session_keys() -> Result<(), WalletError> {
     let mut keystore = Keystore::load()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     keystore.clear_session_keys()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-    
+
     Ok(())
 }
 
@@ -405,7 +408,7 @@ pub fn list_wallet_files() -> Result<Vec<(String, bool)>, io::Error> {
     // Get currently selected wallet
     let selected = get_selected_wallet().unwrap_or_default();
     let mut wallets = Vec::new();
-    
+
     // Load the keystore
     match Keystore::load() {
         Ok(keystore) => {
@@ -414,10 +417,10 @@ pub fn list_wallet_files() -> Result<Vec<(String, bool)>, io::Error> {
                 let is_selected = address == selected;
                 wallets.push((address, is_selected));
             }
-            
+
             // Sort wallets alphabetically
             wallets.sort_by(|a, b| a.0.cmp(&b.0));
-            
+
             Ok(wallets)
         },
         Err(e) => {
@@ -433,7 +436,7 @@ pub fn list_wallet_files() -> Result<Vec<(String, bool)>, io::Error> {
 pub fn set_selected_wallet(wallet_address: &str) -> io::Result<()> {
     // Clean address
     let formatted_address = wallet_address.to_string();
-    
+
     // Update active_address in kanari.yaml
     update_active_address(&formatted_address)
 }

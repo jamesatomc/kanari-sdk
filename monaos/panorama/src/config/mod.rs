@@ -1,20 +1,14 @@
-// src/config.rs
-use std::io;
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+//
 use network::NetworkConfig;
+use std::io;
 
 // Re-export all functions from common for backward compatibility
 pub use common::{
-    load_config, 
-    save_config, 
-    load_kanari_config, 
-    save_kanari_config,
-    configure_network_settings,
-    get_network_config,
-    update_network_config,
-    prompt_for_value,
-    setup_network_config,
-    ensure_network_config,
-    init_default_config
+    configure_network_settings, ensure_network_config, get_network_config, init_default_config,
+    load_config, load_kanari_config, prompt_for_value, save_config, save_kanari_config,
+    setup_network_config, update_network_config,
 };
 
 /// Function to configure the network settings (backward compatibility wrapper)

@@ -1,22 +1,26 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 #[cfg(test)]
 mod tests {
     use argon2::Argon2;
+    use argon2::PasswordHasher;
     use bip39::rand::rngs::OsRng;
     use bip39::{Mnemonic, rand};
     use key::key_old;
     use mona_types::address::Address;
-    use argon2::PasswordHasher;
     use std::cell::RefCell;
+    use std::fs;
     use std::path::PathBuf;
     use std::str::FromStr;
-    use std::fs;
-    
+
     use hex;
     // Update k256 imports to include ecdsa types
     use k256::{
         SecretKey as K256SecretKey,
         ecdsa::{
-            Signature as K256Signature, SigningKey as K256SigningKey, VerifyingKey as K256VerifyingKey,
+            Signature as K256Signature, SigningKey as K256SigningKey,
+            VerifyingKey as K256VerifyingKey,
         },
     };
     use p256::{
@@ -25,21 +29,24 @@ mod tests {
     };
     // Import ed25519_dalek types with aliases to avoid naming conflicts
     use ed25519_dalek::{
-        SigningKey as Ed25519SigningKey, 
-        VerifyingKey as Ed25519VerifyingKey, 
-        Signature as Ed25519Signature
+        Signature as Ed25519Signature, SigningKey as Ed25519SigningKey,
+        VerifyingKey as Ed25519VerifyingKey,
     };
 
     use aes_gcm::{
         Aes256Gcm, Nonce,
         aead::{Aead, KeyInit},
     };
-    
+
     use argon2::password_hash::SaltString;
-    use sha3::{Digest as Sha3Digest, Sha3_256}; // Add SHA3 imports
-    use key_old::{generate_k256_address, generate_p256_address, generate_ed25519_address, import_from_private_key, import_from_seed_phrase, sign_message_k256, sign_message_p256, sign_message_ed25519, CurveType, EncryptedData, Wallet};
-    use tempfile::tempdir;
     use k256::ecdsa::signature::Verifier;
+    use key_old::{
+        CurveType, EncryptedData, Wallet, generate_ed25519_address, generate_k256_address,
+        generate_p256_address, import_from_private_key, import_from_seed_phrase,
+        sign_message_ed25519, sign_message_k256, sign_message_p256,
+    };
+    use sha3::{Digest as Sha3Digest, Sha3_256}; // Add SHA3 imports
+    use tempfile::tempdir;
 
     // Static to hold our test directory
     thread_local! {
@@ -80,9 +87,13 @@ mod tests {
     }
 
     // Add a common derive_key function that can be used by all tests
-    fn derive_key(password: &str, salt: &SaltString) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    fn derive_key(
+        password: &str,
+        salt: &SaltString,
+    ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
         let argon2 = Argon2::default();
-        let password_hash = argon2.hash_password(password.as_bytes(), salt)
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), salt)
             .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
         let mut key = [0u8; 32];
         key.copy_from_slice(&password_hash.hash.unwrap().as_bytes()[0..32]);
@@ -154,15 +165,15 @@ mod tests {
         let secret_key = K256SecretKey::from_slice(&private_key_bytes).unwrap();
         let signing_key = K256SigningKey::from(secret_key);
         let verifying_key = K256VerifyingKey::from(&signing_key);
-        
+
         // Hash the message with SHA3 instead of SHA2
         let mut hasher = Sha3_256::new();
         hasher.update(message);
         let message_hash = hasher.finalize();
-        
+
         // Parse the signature
         let sig = K256Signature::from_der(&signature).unwrap();
-        
+
         // Directly verify with the verifying key
         assert!(verifying_key.verify(&message_hash, &sig).is_ok());
 
@@ -171,7 +182,7 @@ mod tests {
         let mut wrong_hasher = Sha3_256::new();
         wrong_hasher.update(wrong_message);
         let wrong_hash = wrong_hasher.finalize();
-        
+
         // This should fail
         assert!(verifying_key.verify(&wrong_hash, &sig).is_err());
     }
@@ -190,15 +201,15 @@ mod tests {
         let secret_key = P256SecretKey::from_slice(&private_key_bytes).unwrap();
         let signing_key = SigningKey::from(secret_key);
         let verifying_key = VerifyingKey::from(&signing_key);
-        
+
         // Hash the message with SHA3 instead of SHA2
         let mut hasher = Sha3_256::new();
         hasher.update(message);
         let message_hash = hasher.finalize();
-        
+
         // Parse the signature
         let sig = P256Signature::from_der(&signature).unwrap();
-        
+
         // Directly verify with the verifying key
         assert!(verifying_key.verify(&message_hash, &sig).is_ok());
 
@@ -207,7 +218,7 @@ mod tests {
         let mut wrong_hasher = Sha3_256::new();
         wrong_hasher.update(wrong_message);
         let wrong_hash = wrong_hasher.finalize();
-        
+
         // This should fail
         assert!(verifying_key.verify(&wrong_hash, &sig).is_err());
     }
@@ -223,25 +234,25 @@ mod tests {
         // Verify the signature
         // For Ed25519 we need to use the ed25519_dalek crate directly
         let private_key_bytes = hex::decode(&private_key).unwrap();
-        
+
         // Create a fixed-size array for the private key
         let mut key_array = [0u8; 32];
         key_array.copy_from_slice(&private_key_bytes);
-        
+
         let signing_key = Ed25519SigningKey::from_bytes(&key_array);
         let verifying_key = Ed25519VerifyingKey::from(&signing_key);
-        
+
         // Parse the signature - in Ed25519 this is just the 64 bytes
         let mut sig_array = [0u8; 64];
         sig_array.copy_from_slice(&signature);
         let sig = Ed25519Signature::from_bytes(&sig_array);
-        
+
         // Directly verify with the verifying key - Ed25519 verifies the message directly
         assert!(verifying_key.verify(message, &sig).is_ok());
 
         // Test with wrong message
         let wrong_message = b"Wrong message!";
-        
+
         // This should fail
         assert!(verifying_key.verify(wrong_message, &sig).is_err());
     }
@@ -249,9 +260,13 @@ mod tests {
     #[test]
     fn test_wallet_save_load() {
         let _temp_dir = setup_test_environment();
-        
+
         // Use closure that captures our get_wallet_dir
-        let save_wallet_test = |address: &Address, private_key: &str, seed_phrase: &str, password: &str, curve_type: CurveType| {
+        let save_wallet_test = |address: &Address,
+                                private_key: &str,
+                                seed_phrase: &str,
+                                password: &str,
+                                curve_type: CurveType| {
             let wallet_data = Wallet {
                 address: *address,
                 private_key: private_key.to_string(),
@@ -283,42 +298,48 @@ mod tests {
 
             fs::write(wallet_file, encrypted_json).unwrap();
         };
-        
+
         // Generate a wallet
         let (private_key, public_address, seed_phrase) = generate_k256_address(12);
         let address = Address::from_str(&public_address).unwrap();
         let password = "test_password";
-        
+
         // Save the wallet using our test implementation
-        save_wallet_test(&address, &private_key, &seed_phrase, password, CurveType::K256);
-        
+        save_wallet_test(
+            &address,
+            &private_key,
+            &seed_phrase,
+            password,
+            CurveType::K256,
+        );
+
         // Load the wallet (using modified function that uses get_wallet_dir)
         // You'd need to implement a test version of load_wallet as well
-        
+
         // Clean up
         teardown_test_environment();
     }
 
     #[test]
     fn test_import_from_seed_phrase() {
-        // Generate a seed phrase directly (instead of using generate_k256_address which 
+        // Generate a seed phrase directly (instead of using generate_k256_address which
         // creates unrelated private key and seed phrase)
         let mnemonic = Mnemonic::generate(12).unwrap();
         let seed_phrase = mnemonic.to_string();
-        
+
         // Import from seed phrase
         let (imported_private_key, _, imported_public_address) =
             import_from_seed_phrase(&seed_phrase, CurveType::K256).unwrap();
-        
+
         // Instead of comparing to an address derived from a different random key,
         // verify that the imported key is valid by re-importing from its private key
         let reimported = import_from_private_key(&imported_private_key, CurveType::K256).unwrap();
         assert_eq!(reimported.2, imported_public_address);
-        
+
         // Additionally test that importing the same seed phrase twice gives the same result
         let (second_import_private_key, _, second_import_public_address) =
             import_from_seed_phrase(&seed_phrase, CurveType::K256).unwrap();
-        
+
         assert_eq!(imported_private_key, second_import_private_key);
         assert_eq!(imported_public_address, second_import_public_address);
     }
@@ -328,19 +349,20 @@ mod tests {
         // Generate a seed phrase directly
         let mnemonic = Mnemonic::generate(12).unwrap();
         let seed_phrase = mnemonic.to_string();
-        
+
         // Import from seed phrase
         let (imported_private_key, _, imported_public_address) =
             import_from_seed_phrase(&seed_phrase, CurveType::Ed25519).unwrap();
-        
+
         // Verify that the imported key is valid by re-importing from its private key
-        let reimported = import_from_private_key(&imported_private_key, CurveType::Ed25519).unwrap();
+        let reimported =
+            import_from_private_key(&imported_private_key, CurveType::Ed25519).unwrap();
         assert_eq!(reimported.2, imported_public_address);
-        
+
         // Additionally test that importing the same seed phrase twice gives the same result
         let (second_import_private_key, _, second_import_public_address) =
             import_from_seed_phrase(&seed_phrase, CurveType::Ed25519).unwrap();
-        
+
         assert_eq!(imported_private_key, second_import_private_key);
         assert_eq!(imported_public_address, second_import_public_address);
     }
@@ -348,62 +370,72 @@ mod tests {
     #[test]
     fn test_list_wallets() {
         let _temp_dir = setup_test_environment();
-        
+
         // No need for a local derive_key function, use the one defined at module level
-        
+
         // Define a test version of save_wallet
-        let save_wallet_test = |address: &Address, private_key: &str, seed_phrase: &str, password: &str, curve_type: CurveType| {
+        let save_wallet_test = |address: &Address,
+                                private_key: &str,
+                                seed_phrase: &str,
+                                password: &str,
+                                curve_type: CurveType| {
             let wallet_data = Wallet {
                 address: *address,
                 private_key: private_key.to_string(),
                 seed_phrase: seed_phrase.to_string(),
                 curve_type,
             };
-    
+
             let salt = SaltString::generate(&mut OsRng);
             let key = derive_key(password, &salt).unwrap();
             let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
             let binding = rand::random::<[u8; 12]>();
             let nonce = Nonce::from_slice(&binding);
-    
+
             let toml_string = toml::to_string(&wallet_data).unwrap();
             let encrypted = cipher.encrypt(nonce, toml_string.as_bytes()).unwrap();
-    
+
             let encrypted_data = EncryptedData {
                 ciphertext: encrypted,
                 salt: salt.to_string(),
                 nonce: nonce.to_vec(),
             };
-    
+
             let wallet_dir = get_wallet_dir().join("wallets");
             fs::create_dir_all(&wallet_dir).unwrap();
-    
+
             let wallet_file = wallet_dir.join(format!("{}.enc", address));
             let encrypted_json = serde_json::to_string(&encrypted_data).unwrap();
-    
+
             fs::write(wallet_file, encrypted_json).unwrap();
         };
-        
+
         // Create a few wallets using our test version of save_wallet
         let mut created_addresses = Vec::new();
         for _i in 1..=3 {
             let (private_key, public_address, seed_phrase) = generate_k256_address(12);
             let address = Address::from_str(&public_address).unwrap();
             created_addresses.push(address.to_string());
-            
+
             // Save the wallet using our test implementation
-            save_wallet_test(&address, &private_key, &seed_phrase, "password", CurveType::K256);
+            save_wallet_test(
+                &address,
+                &private_key,
+                &seed_phrase,
+                "password",
+                CurveType::K256,
+            );
         }
-        
+
         // Implement a test version of list_wallet_files that uses get_wallet_dir
         let list_wallets_test = || -> Result<Vec<(String, bool)>, std::io::Error> {
             let wallet_dir = get_wallet_dir().join("wallets");
-    
+
             // Create wallet directory if it doesn't exist
             if !wallet_dir.exists() {
                 fs::create_dir_all(&wallet_dir)?;
             }
-    
+
             let mut wallets = Vec::new();
             for entry in fs::read_dir(wallet_dir)? {
                 let entry = entry?;
@@ -416,24 +448,29 @@ mod tests {
                     }
                 }
             }
-    
+
             wallets.sort_by(|a, b| a.0.cmp(&b.0));
             Ok(wallets)
         };
-        
+
         // Test listing the wallets
         let wallets = list_wallets_test().unwrap();
-        
+
         // Verify that we have exactly 3 wallets
-        assert_eq!(wallets.len(), 3, "Expected 3 wallets, found {}", wallets.len());
-        
+        assert_eq!(
+            wallets.len(),
+            3,
+            "Expected 3 wallets, found {}",
+            wallets.len()
+        );
+
         // Verify that each of our created wallets is in the list
         for address in &created_addresses {
             let wallet_filename = format!("{}.enc", address);
             let found = wallets.iter().any(|(name, _)| name == &wallet_filename);
             assert!(found, "Wallet {} not found in listing", wallet_filename);
         }
-        
+
         // Clean up
         teardown_test_environment();
     }

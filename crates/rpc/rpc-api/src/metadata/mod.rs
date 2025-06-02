@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use std::fs;
 use jsonrpc_core::{Params, Result as JsonRpcResult, Error as RpcError};
 use serde_json::{json, Value as JsonValue};

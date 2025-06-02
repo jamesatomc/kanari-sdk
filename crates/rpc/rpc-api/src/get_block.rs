@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use chrono;
 use jsonrpc_core::{Error as RpcError, ErrorCode, Params, Result as JsonRpcResult};
 use mona_types::address::Address;

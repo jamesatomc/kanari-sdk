@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use futures::FutureExt;
 use jsonrpc_core::IoHandler;

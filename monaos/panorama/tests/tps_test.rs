@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use std::time::Instant;
 use std::sync::{Arc, Mutex};
 use std::thread;

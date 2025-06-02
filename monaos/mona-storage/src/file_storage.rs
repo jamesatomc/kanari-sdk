@@ -1,11 +1,14 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
-use std::sync::{Arc, RwLock, Mutex};
 use thiserror::Error;
 use uuid::Uuid;
-use log::{debug, info, error};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileStorage {
@@ -42,7 +45,7 @@ pub enum StorageError2 {
 
     #[error("File not found: {0}")]
     FileNotFound(String),
-    
+
     #[error("Path canonicalization failed: {0}")]
     PathError(String),
 }
@@ -128,21 +131,35 @@ impl FileStorage {
 
     pub fn store(&self, filename: &str, data: &[u8]) -> Result<FileStorage, StorageError2> {
         // Acquire read lock to ensure thread safety
-        let _read_guard = self.access_lock.read().map_err(|_| StorageError2::LockError("read".to_string()))?;
-        
+        let _read_guard = self
+            .access_lock
+            .read()
+            .map_err(|_| StorageError2::LockError("read".to_string()))?;
+
         let file_path = self.path.join(filename);
-        debug!("Storing file: {} ({} bytes) at {:?}", filename, data.len(), file_path);
-        
+        debug!(
+            "Storing file: {} ({} bytes) at {:?}",
+            filename,
+            data.len(),
+            file_path
+        );
+
         // Use a global lock for the actual file write
-        let _fs_guard = FILE_SYSTEM_LOCK.lock().map_err(|_| StorageError2::LockError("filesystem".to_string()))?;
+        let _fs_guard = FILE_SYSTEM_LOCK
+            .lock()
+            .map_err(|_| StorageError2::LockError("filesystem".to_string()))?;
         fs::write(&file_path, data)?;
 
         let content_type = mime_guess::from_path(filename)
             .first_or_octet_stream()
             .to_string();
-            
-        info!("Successfully stored file: {} ({} bytes)", filename, data.len());
-        
+
+        info!(
+            "Successfully stored file: {} ({} bytes)",
+            filename,
+            data.len()
+        );
+
         Ok(FileStorage {
             id: self.id,
             metadata: FileMetadata {
@@ -159,16 +176,23 @@ impl FileStorage {
 
     pub fn read(&self, filename: &str) -> Result<Vec<u8>, StorageError2> {
         // Acquire read lock to ensure thread safety
-        let _read_guard = self.access_lock.read().map_err(|_| StorageError2::LockError("read".to_string()))?;
-        
+        let _read_guard = self
+            .access_lock
+            .read()
+            .map_err(|_| StorageError2::LockError("read".to_string()))?;
+
         let file_path = self.path.join(filename);
         debug!("Reading file: {} from {:?}", filename, file_path);
-        
+
         match fs::read(&file_path) {
             Ok(data) => {
-                debug!("Successfully read file: {} ({} bytes)", filename, data.len());
+                debug!(
+                    "Successfully read file: {} ({} bytes)",
+                    filename,
+                    data.len()
+                );
                 Ok(data)
-            },
+            }
             Err(e) => {
                 error!("Failed to read file {}: {}", filename, e);
                 Err(StorageError2::Io(e))
@@ -184,7 +208,7 @@ impl FileStorage {
                 let exists = canonical_path.exists();
                 debug!("File exists check: {}", exists);
                 exists
-            },
+            }
             Err(e) => {
                 debug!("Path canonicalization failed: {}", e);
                 false
@@ -202,8 +226,11 @@ impl FileStorage {
     // Upload file with improved concurrency handling
     pub fn upload(source_path: impl AsRef<Path>, filename: String) -> Result<Self, StorageError2> {
         let source_path = source_path.as_ref();
-        debug!("Uploading file from {:?} with name {}", source_path, filename);
-        
+        debug!(
+            "Uploading file from {:?} with name {}",
+            source_path, filename
+        );
+
         // Check source file
         if !source_path.exists() {
             let err_msg = format!("Source file does not exist: {:?}", source_path);
@@ -212,24 +239,25 @@ impl FileStorage {
                 source_path.to_string_lossy().to_string(),
             ));
         }
-    
+
         // Initialize storage
         if let Err(e) = FileStorage::init_storage() {
             error!("Failed to initialize storage: {}", e);
             return Err(StorageError2::Io(e));
         }
-    
+
         // Generate new UUID for file
         let id = Uuid::new_v4();
         let storage_path = get_storage_path();
-        
+
         // Create paths
-        let file_ext = source_path.extension()
+        let file_ext = source_path
+            .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
         let dest_filename = format!("{}.{}", id, file_ext);
         let dest_path = storage_path.join(&dest_filename);
-        
+
         // Get file metadata
         let file_size = match fs::metadata(source_path) {
             Ok(metadata) => metadata.len(),
@@ -238,7 +266,7 @@ impl FileStorage {
                 return Err(StorageError2::Io(e));
             }
         };
-        
+
         // Create metadata
         let metadata = FileMetadata {
             filename,
@@ -248,19 +276,21 @@ impl FileStorage {
                 .to_string(),
             uploaded_at: SystemTime::now(),
         };
-    
+
         // Use a lock for file operations
-        let _lock = FILE_SYSTEM_LOCK.lock().map_err(|_| StorageError2::LockError("filesystem".to_string()))?;
-        
+        let _lock = FILE_SYSTEM_LOCK
+            .lock()
+            .map_err(|_| StorageError2::LockError("filesystem".to_string()))?;
+
         // Save file
         info!("Copying file to storage: {} bytes", file_size);
         fs::copy(source_path, &dest_path)?;
-        
+
         // Save metadata
         let metadata_path = storage_path.join(format!("{}.json", id));
         let metadata_json = serde_json::to_string(&metadata)?;
         fs::write(&metadata_path, metadata_json)?;
-    
+
         info!("File successfully uploaded: {}", id);
         Ok(FileStorage {
             id,
@@ -274,17 +304,16 @@ impl FileStorage {
     // Get file by ID with improved error handling
     pub fn get_by_id(id_str: &str) -> Result<Self, StorageError2> {
         debug!("Retrieving file with ID: {}", id_str);
-        
+
         // Parse UUID
-        let id = Uuid::parse_str(id_str)
-            .map_err(|e| {
-                error!("Invalid UUID format: {}", e);
-                StorageError2::InvalidId
-            })?;
-    
+        let id = Uuid::parse_str(id_str).map_err(|e| {
+            error!("Invalid UUID format: {}", e);
+            StorageError2::InvalidId
+        })?;
+
         // Get storage path
         let storage_path = get_storage_path();
-        
+
         // Find file by looking for metadata first
         let metadata_path = storage_path.join(format!("{}.json", id_str));
         if !metadata_path.exists() {
@@ -292,7 +321,7 @@ impl FileStorage {
             error!("{}", err_msg);
             return Err(StorageError2::NotFound);
         }
-    
+
         // Load metadata with proper error handling
         let metadata_content = match std::fs::read_to_string(&metadata_path) {
             Ok(content) => content,
@@ -301,7 +330,7 @@ impl FileStorage {
                 return Err(StorageError2::Io(e));
             }
         };
-        
+
         let metadata: FileMetadata = match serde_json::from_str(&metadata_content) {
             Ok(data) => data,
             Err(e) => {
@@ -309,20 +338,20 @@ impl FileStorage {
                 return Err(StorageError2::Serialization(e));
             }
         };
-    
+
         // Find actual file by extension
         let file_ext = Path::new(&metadata.filename)
             .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
         let file_path = storage_path.join(format!("{}.{}", id_str, file_ext));
-    
+
         if !file_path.exists() {
             let err_msg = format!("File not found at expected path: {:?}", file_path);
             error!("{}", err_msg);
             return Err(StorageError2::NotFound);
         }
-    
+
         info!("Successfully retrieved file: {}", id_str);
         Ok(Self {
             id,
@@ -337,34 +366,34 @@ impl FileStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs::File;
     use std::io::Write;
-    
+    use tempfile::tempdir;
+
     #[test]
     fn test_file_storage_basic() {
         // Create temporary directory
         let temp_dir = tempdir().unwrap();
         let test_file_path = temp_dir.path().join("test_file.txt");
-        
+
         // Create test file
         let test_content = b"Hello, world!";
         let mut file = File::create(&test_file_path).unwrap();
         file.write_all(test_content).unwrap();
-        
+
         // Test upload
         let storage = FileStorage::new().unwrap();
         let filename = "test_file.txt";
         let stored = storage.store(filename, test_content).unwrap();
-        
+
         // Verify metadata
         assert_eq!(stored.metadata.size, test_content.len() as u64);
         assert_eq!(stored.metadata.filename, filename);
-        
+
         // Test read
         let read_content = storage.read(filename).unwrap();
         assert_eq!(read_content, test_content);
-        
+
         // Test existence check
         assert!(storage.check_file_exists(&storage.get_file_path(filename)));
     }

@@ -1,10 +1,13 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use hex::FromHex;
 use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize}; // Import Serialize and Deserialize
-                                     // Add this at the top with other imports
+// Add this at the top with other imports
 use move_core_types::account_address::AccountAddress;
 
 // Add this implementation at the end of the file, right before or after the std::error::Error impl
@@ -70,11 +73,9 @@ impl Address {
     fn validate_padding(bytes: &[u8]) -> Result<(), AddressParseError> {
         let first_non_zero = bytes.iter().position(|&b| b != 0);
         match first_non_zero {
-            Some(idx) => {
-                Ok(if idx < bytes.len() - Self::LENGTH {
-                    return Err(AddressParseError::InvalidPadding);
-                })
-            }
+            Some(idx) => Ok(if idx < bytes.len() - Self::LENGTH {
+                return Err(AddressParseError::InvalidPadding);
+            }),
             None => Ok(()),
         }
     }
@@ -104,8 +105,8 @@ impl Address {
 
         Self::validate_hex(hex_str)?;
 
-        let bytes = <[u8; Self::LENGTH]>::from_hex(hex)
-            .map_err(|_| AddressParseError::InvalidHexString)?;
+        let bytes =
+            <[u8; Self::LENGTH]>::from_hex(hex).map_err(|_| AddressParseError::InvalidHexString)?;
 
         // Optional: Uncomment if zero addresses should be rejected
         Self::validate_non_zero(&Self(bytes))?;

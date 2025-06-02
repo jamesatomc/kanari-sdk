@@ -1,3 +1,6 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use colored::Colorize;
 use command::env_cli::handle_env_command;
 use command::keytool_cli::handle_keytool_command;
@@ -6,12 +9,9 @@ use command::server_cli::handle_server_command;
 
 use std::process::exit;
 
-
 use command::public_cli::handle_public_command;
 
-
 use std::process::Command;
-
 
 static VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -149,4 +149,3 @@ async fn main() {
         _ => display_help(true),
     }
 }
-

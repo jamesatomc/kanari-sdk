@@ -1,7 +1,9 @@
-use serde::{Deserialize, Serialize};
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 use blake3::Hasher;
 use hex::encode;
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Blake3Algorithm;
@@ -30,7 +32,3 @@ impl HashAlgorithm for Blake3Algorithm {
         println!("Hashing input: {:?}", input);
     }
 }
-
-
-
-

@@ -1,70 +1,44 @@
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
 //! Secure cryptographic primitives for the Mona blockchain platform
-//! 
+//!
 //! This crate provides cryptographic operations including:
 //! - Key generation and management
 //! - Digital signatures
 //! - Encryption and decryption
 //! - Wallet operations
 
-pub mod signatures;
-pub mod encryption;
-pub mod wallet;
-pub mod keystore;
 pub mod compression;
+pub mod encryption;
+pub mod keystore;
+pub mod signatures;
+pub mod wallet;
 
 // Re-export signature functionality
 pub use signatures::{
-    sign_message,
-    verify_signature,
-    verify_signature_with_curve,
-    SignatureError,
-    secure_clear,
+    SignatureError, secure_clear, sign_message, verify_signature, verify_signature_with_curve,
 };
 
 // Re-export encryption functionality - now using actual functions from the module
 pub use encryption::{
-    encrypt_data,
-    decrypt_data,
-    encrypt_string,
-    decrypt_string,
+    EncryptedData, EncryptionError, decrypt_data, decrypt_string, encrypt_data, encrypt_string,
     secure_erase,
-    EncryptionError,
-    EncryptedData,
 };
 
 // Re-export wallet functionality
 pub use wallet::{
-    Wallet,
-    WalletError,
-    save_wallet,
-    load_wallet,
-    list_wallet_files,
-    get_selected_wallet,
-    set_selected_wallet,
-    check_wallet_exists,
-    save_mnemonic,
-    load_mnemonic,
-    check_mnemonic_exists,
-    remove_mnemonic,
-    get_mnemonic_addresses,
-    save_session_key,
-    load_session_key,
-    remove_session_key,
-    clear_session_keys,
+    Wallet, WalletError, check_mnemonic_exists, check_wallet_exists, clear_session_keys,
+    get_mnemonic_addresses, get_selected_wallet, list_wallet_files, load_mnemonic,
+    load_session_key, load_wallet, remove_mnemonic, remove_session_key, save_mnemonic,
+    save_session_key, save_wallet, set_selected_wallet,
 };
 
 // Re-export keystore functionality
-pub use keystore::{
-    Keystore,
-    keystore_exists,
-    get_keystore_path,
-};
+pub use keystore::{Keystore, get_keystore_path, keystore_exists};
 
 // Re-export compression functionality
-pub use compression::{
-    compress_data,
-    decompress_data,
-};
+pub use compression::{compress_data, decompress_data};
 
 /// Hash algorithm options
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +73,7 @@ pub fn hash_data_with_algorithm(data: &[u8], algorithm: HashAlgorithm) -> Vec<u8
             let mut hasher = Sha3_256::new();
             hasher.update(data);
             hasher.finalize().to_vec()
-        },
+        }
         HashAlgorithm::Blake3 => {
             let mut hasher = blake3::Hasher::new();
             hasher.update(data);
@@ -121,7 +95,7 @@ pub fn version() -> &'static str {
 
 /// Returns security information about the library
 pub fn security_info() -> &'static str {
-    "This library uses Argon2id for password hashing, AES-256-GCM for encryption, 
+    "This library uses Argon2id for password hashing, AES-256-GCM for encryption,
     and constant-time comparisons for secure signature verification.
     Always keep your private keys secure and use strong, unique passwords."
 }
@@ -131,11 +105,11 @@ pub fn is_password_strong(password: &str) -> bool {
     if password.len() < MIN_RECOMMENDED_PASSWORD_LENGTH {
         return false;
     }
-    
+
     let has_uppercase = password.chars().any(|c| c.is_uppercase());
     let has_lowercase = password.chars().any(|c| c.is_lowercase());
     let has_digit = password.chars().any(|c| c.is_digit(10));
     let has_special = password.chars().any(|c| !c.is_alphanumeric());
-    
+
     has_uppercase && has_lowercase && has_digit && has_special
 }

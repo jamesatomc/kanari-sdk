@@ -1,12 +1,17 @@
-use move_package::BuildConfig;
-use std::path::PathBuf;
-use std::collections::HashMap;
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::utils::{
+    generate_object_id, get_module_dependencies, get_module_public_functions, reroot_path,
+};
+use framework::{Package, PackageSourceInfo, PackageType};
+use framework::{get_framework_path, get_kanari_system_path, get_stdlib_path};
 use move_core_types::account_address::AccountAddress;
+use move_package::BuildConfig;
 use move_package::compilation::compiled_package::CompiledUnitWithSource;
-use serde_json::{json, Value as JsonValue};
-use framework::{Package, PackageType, PackageSourceInfo};
-use framework::{get_stdlib_path, get_kanari_system_path, get_framework_path};
-use crate::utils::{reroot_path, generate_object_id, get_module_dependencies, get_module_public_functions};
+use serde_json::{Value as JsonValue, json};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub struct Build {
     framework_packages: HashMap<PackageType, Option<Package>>,
@@ -20,17 +25,22 @@ impl Build {
     }
 
     pub fn with_stdlib(mut self) -> Self {
-        self.framework_packages.insert(PackageType::Stdlib, Package::new(PackageType::Stdlib).ok());
+        self.framework_packages
+            .insert(PackageType::Stdlib, Package::new(PackageType::Stdlib).ok());
         self
     }
 
     pub fn with_system(mut self) -> Self {
-        self.framework_packages.insert(PackageType::System, Package::new(PackageType::System).ok());
+        self.framework_packages
+            .insert(PackageType::System, Package::new(PackageType::System).ok());
         self
     }
 
     pub fn with_framework(mut self) -> Self {
-        self.framework_packages.insert(PackageType::Framework, Package::new(PackageType::Framework).ok());
+        self.framework_packages.insert(
+            PackageType::Framework,
+            Package::new(PackageType::Framework).ok(),
+        );
         self
     }
 
@@ -173,14 +183,17 @@ impl Build {
     }
 
     fn extract_modules_info(&self, compiled_units: &[CompiledUnitWithSource]) -> JsonValue {
-        let modules = compiled_units.iter().map(|unit| {
-            json!({
-                "name": unit.unit.name().to_string(),
-                "source_path": unit.source_path.to_string_lossy(),
-                "dependencies": get_module_dependencies(&unit.unit),
-                "public_functions": get_module_public_functions(&unit.unit)
+        let modules = compiled_units
+            .iter()
+            .map(|unit| {
+                json!({
+                    "name": unit.unit.name().to_string(),
+                    "source_path": unit.source_path.to_string_lossy(),
+                    "dependencies": get_module_dependencies(&unit.unit),
+                    "public_functions": get_module_public_functions(&unit.unit)
+                })
             })
-        }).collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
         json!(modules)
     }

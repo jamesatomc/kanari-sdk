@@ -1,4 +1,6 @@
-pub mod blockchain;
-pub mod block;
-pub mod chain_id;
+// Copyright (c) Kanari Network
+// SPDX-License-Identifier: Apache-2.0
 
+pub mod block;
+pub mod blockchain;
+pub mod chain_id;
