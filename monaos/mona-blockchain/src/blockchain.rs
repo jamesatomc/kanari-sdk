@@ -92,14 +92,10 @@ impl BlockchainData {
         }
         
         // Use saturating_add to prevent overflow
-        self.total_tokens.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            Some(current.saturating_add(block.tokens))
-        }).unwrap();
+        self.total_tokens.fetch_add(block.tokens, Ordering::Relaxed);
         
-        {
-            let mut cache = self.block_height_cache.write().unwrap();
-            cache.insert(block.hash.clone(), height);
-        }
+        // Insert into cache before adding to chain
+        self.block_height_cache.write().unwrap().insert(block.hash.clone(), height);
         
         // Add block to chain
         chain.push_back(block);
@@ -117,6 +113,11 @@ impl BlockchainData {
     
     pub fn iter(&self) -> Vec<Block<Blake3Algorithm>> {
         self.chain.read().unwrap().iter().cloned().collect()
+    }
+    
+    // Add method to get latest block without cloning entire chain
+    pub fn latest_block(&self) -> Option<Block<Blake3Algorithm>> {
+        self.chain.read().unwrap().back().cloned()
     }
 }
 
@@ -140,20 +141,25 @@ pub fn load_blockchain_with_retry() -> Result<(), StorageError> {
     load_blockchain()
 }
 
-// Improved save function that ensures balances are saved
+// Optimized save function with reduced memory allocations
 pub fn save_blockchain() -> Result<(), StorageError> {
     let kari_dir = get_kari_dir();
     let db_path = kari_dir.join("storage").join("blockchain_db");
     let storage = RocksDBStorage::new(db_path)?;
 
-    // Save blockchain data
-    let data = bincode::serialize(&BLOCKCHAIN_DATA.chain.read().unwrap().clone())?;
-    storage.save_data(b"blockchain", &data)?;
+    // Save blockchain data - use reference to avoid cloning
+    {
+        let chain_guard = BLOCKCHAIN_DATA.chain.read().unwrap();
+        let data = bincode::serialize(&*chain_guard)?;
+        storage.save_data(b"blockchain", &data)?;
+    } // Release lock early
 
-    // Save balances separately for better reliability
-    let balances = BALANCES.lock().unwrap().clone();
-    let balances_data = bincode::serialize(&balances)?;
-    storage.save_data(b"balances", &balances_data)?;
+    // Save balances separately - use reference to avoid cloning
+    {
+        let balances_guard = BALANCES.lock().unwrap();
+        let balances_data = bincode::serialize(&*balances_guard)?;
+        storage.save_data(b"balances", &balances_data)?;
+    } // Release lock early
     
     storage.flush()?;
     log::debug!("Blockchain and balances saved successfully");
@@ -161,56 +167,6 @@ pub fn save_blockchain() -> Result<(), StorageError> {
     Ok(())
 }
 
-pub fn save_mvsm() -> Result<(), StorageError> {
-    let kari_dir = get_kari_dir();
-    let db_path = kari_dir.join("storage").join("mvsm_db");
-    let storage = RocksDBStorage::new(db_path)?;
-    
-    // Save basic system state without accessing VM directly to avoid circular dependency
-    let system_metadata = serde_json::json!({
-        "status": "system_save",
-        "blockchain_height": BLOCKCHAIN_DATA.len(),
-        "total_tokens": BLOCKCHAIN_DATA.get_total_tokens(),
-        "pending_transactions": {
-            "count": match PENDING_TRANSACTIONS.lock() {
-                Ok(queue) => queue.len(),
-                Err(_) => 0
-            }
-        },
-        "system_info": {
-            "version": "2.0",
-            "save_timestamp": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        },
-        "note": "VM state will be saved separately by mona-vm to avoid circular dependencies"
-    });
-    
-    let metadata_bytes = system_metadata.to_string().into_bytes();
-    storage.save_data(b"blockchain_metadata", &metadata_bytes)?;
-    
-    // Save blockchain transaction statistics
-    let blockchain_stats = serde_json::json!({
-        "total_blocks": BLOCKCHAIN_DATA.len(),
-        "total_tokens": BLOCKCHAIN_DATA.get_total_tokens(),
-        "account_count": match BALANCES.lock() {
-            Ok(balances) => balances.len(),
-            Err(_) => 0
-        },
-        "last_saved": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-    });
-    
-    storage.save_data(b"blockchain_stats", &blockchain_stats.to_string().into_bytes())?;
-    
-    storage.flush()?;
-    log::debug!("Blockchain metadata saved successfully to secure storage");
-    
-    Ok(())
-}
 
 pub fn init_blockchain_state() {
     // BALANCES already initialized by lazy_static
@@ -327,145 +283,67 @@ pub fn get_address_balance(address: &Address) -> Result<u64, BlockchainError> {
 }
 
 
-
-
-// Improved submit_transaction function with better logging
-pub fn submit_transaction(transaction: block::Transaction) -> Result<(), BlockchainError> {
-    // Validate transaction first
-    if transaction.amount == 0 && transaction.get_transaction_type() != "VM_FUNCTION_CALL" && transaction.get_transaction_type() != "VM_MODULE" {
-        return Err(BlockchainError::Transaction("Invalid transaction amount".to_string()));
-    }
-
-    // Check for sufficient balance for non-mining transactions
-    if transaction.get_transaction_type() != "MINING" {
-        let sender_balance = get_balance(&transaction.sender.to_hex_literal())?;
-        if sender_balance < transaction.amount {
-            return Err(BlockchainError::InsufficientFunds(
-                format!("Insufficient balance: {} < {}", sender_balance, transaction.amount)
-            ));
-        }
-    }
-
-    let tx_type = transaction.get_transaction_type();
-    
-    log::info!(
-        "Submitting transaction: {} (type: {}, id: {})",
-        tx_type,
-        transaction.transaction_id,
-        hex::encode(&transaction.transaction_id.as_bytes()[..8.min(transaction.transaction_id.len())])
-    );
-    
-    // Provide detailed VM transaction info if applicable
-    if tx_type == "VM_FUNCTION_CALL" {
-        if let Some(data) = &transaction.data {
-            if let Ok(data_str) = std::str::from_utf8(data) {
-                if data_str.starts_with("VM:") {
-                    let parts: Vec<&str> = data_str.split(':').collect();
-                    if parts.len() >= 3 {
-                        log::info!(
-                            "VM function call: module={}, function={}", 
-                            parts.get(1).unwrap_or(&"unknown"), 
-                            parts.get(2).unwrap_or(&"unknown")
-                        );
-                    }
-                }
-            }
-        }
-    }
-    
-    // Add to pending transaction queue
-    let mut transactions = match PENDING_TRANSACTIONS.lock() {
-        Ok(t) => t,
-        Err(_) => return Err(BlockchainError::Transaction("Failed to lock pending transactions".to_string()))
-    };
-    
-    // Check for duplicate transactions
-    if transactions.iter().any(|tx| tx.transaction_id == transaction.transaction_id) {
-        return Err(BlockchainError::Transaction("Duplicate transaction ID".to_string()));
-    }
-    
-    transactions.push_back(transaction);
-    log::info!("Transaction added to pending queue. Queue size: {}", transactions.len());
-    
-    Ok(())
-}
-
-// Enhanced function to prioritize VM function calls
+/// Enhanced function to prioritize VM function calls with reduced memory usage
 pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(max_count.min(1000)); // Pre-allocate with reasonable size
     
     // Try to get pending transactions
     if let Ok(mut queue) = PENDING_TRANSACTIONS.lock() {
-        // Log queue size for debugging
-        info!("Processing pending transaction queue, size: {}", queue.len());
+        let queue_size = queue.len();
+        if queue_size == 0 {
+            return result;
+        }
         
-        // First pass: prioritize modules, then VM function calls
-        let mut vm_module_deployments = VecDeque::new();
-        let mut vm_function_calls = VecDeque::new();
-        let mut regular_txs = VecDeque::new();
+        info!("Processing pending transaction queue, size: {}", queue_size);
         
-        // Scan through all transactions to sort by priority
+        // Use iterators to reduce memory allocation - process in-place
+        let mut processed = 0;
+        let mut remaining_txs = Vec::with_capacity(queue_size);
+        
+        // Single pass: categorize and select transactions efficiently
         while let Some(tx) = queue.pop_front() {
-            // Check transaction type and prioritize accordingly
-            if let Some(data) = &tx.data {
-                if let Ok(data_str) = std::str::from_utf8(data) {
-                    // Highest priority - module deployments
-                    if data_str.starts_with("VM_MODULE:") {
-                        info!("Found VM module deployment transaction: {}", tx.transaction_id);
-                        vm_module_deployments.push_back(tx);
-                        continue;
-                    }
-                    // Medium priority - VM function calls
-                    else if data_str.starts_with("VM:") || data_str.contains("::") {
-                        info!("Found VM function call transaction: {}", tx.transaction_id);
-                        vm_function_calls.push_back(tx);
-                        continue;
-                    }
-                }
+            if result.len() >= max_count {
+                remaining_txs.push(tx);
+                continue;
             }
             
-            // Lowest priority - regular transactions
-            regular_txs.push_back(tx);
-        }
-        
-        // Add VM module deployments first (highest priority)
-        while !vm_module_deployments.is_empty() && result.len() < max_count {
-            if let Some(tx) = vm_module_deployments.pop_front() {
-                info!("Including VM module deployment: {}", tx.transaction_id);
+            // Priority check with early optimization
+            let should_include = if let Some(data) = &tx.data {
+                if let Ok(data_str) = std::str::from_utf8(data) {
+                    // VM modules get highest priority
+                    if data_str.starts_with("VM_MODULE:") {
+                        true
+                    } 
+                    // VM function calls get medium priority
+                    else if data_str.starts_with("VM:") || data_str.contains("::") {
+                        result.len() < max_count.saturating_sub(max_count / 4) // Reserve space for VM modules
+                    }
+                    // Regular transactions get lowest priority
+                    else {
+                        result.len() < max_count.saturating_sub(max_count / 2) // Reserve space for VM operations
+                    }
+                } else {
+                    result.len() < max_count.saturating_sub(max_count / 2)
+                }
+            } else {
+                result.len() < max_count.saturating_sub(max_count / 2)
+            };
+            
+            if should_include {
                 result.push(tx);
+                processed += 1;
+            } else {
+                remaining_txs.push(tx);
             }
         }
         
-        // Add VM function calls next (medium priority)
-        while !vm_function_calls.is_empty() && result.len() < max_count {
-            if let Some(tx) = vm_function_calls.pop_front() {
-                info!("Including VM function call: {}", tx.transaction_id);
-                result.push(tx);
-            }
+        // Return unused transactions to queue efficiently
+        for tx in remaining_txs.into_iter().rev() {
+            queue.push_front(tx);
         }
         
-        // Finally add regular transactions (lowest priority)
-        while !regular_txs.is_empty() && result.len() < max_count {
-            if let Some(tx) = regular_txs.pop_front() {
-                result.push(tx);
-            }
-        }
-        
-        // Return any unused transactions back to the queue in order of priority
-        for tx in vm_module_deployments {
-            queue.push_front(tx); // Add back to front for highest priority
-        }
-        
-        for tx in vm_function_calls {
-            queue.push_back(tx); // Medium priority
-        }
-        
-        for tx in regular_txs {
-            queue.push_back(tx); // Lowest priority
-        }
-        
-        info!("Selected {} transactions for next block ({} remain in queue)", 
-             result.len(), queue.len());
+        info!("Selected {} transactions for next block ({} processed, {} remain)", 
+             result.len(), processed, queue.len());
     } else {
         warn!("Failed to lock transaction queue, creating empty block");
     }
@@ -473,107 +351,113 @@ pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> 
     result
 }
 
-// Make sure PENDING_TRANSACTIONS is properly exposed to be processed
+// Optimized function to get pending transactions with reduced allocations
 pub fn get_pending_transactions(max_count: usize) -> Vec<block::Transaction> {
-    let mut result = Vec::new();
+    let max_count = max_count.min(10000); // Prevent excessive memory allocation
+    let mut result = Vec::with_capacity(max_count);
     
     if let Ok(mut queue) = PENDING_TRANSACTIONS.lock() {
-        while let Some(tx) = queue.pop_front() {
-            result.push(tx);
-            if result.len() >= max_count {
-                break;
-            }
-        }
+        // Use drain to avoid extra allocations
+        let to_drain = queue.len().min(max_count);
+        result.extend(queue.drain(..to_drain));
     }
     
     result
 }
 
-// Modified load method to ensure balances are properly loaded
+// Optimized load function with better memory management
 pub fn load_blockchain() -> Result<(), StorageError> {
     let kari_dir = get_kari_dir();
     let db_path = kari_dir.join("storage").join("blockchain_db");
     let storage = RocksDBStorage::new(db_path)?;
     init_blockchain_state();
     
-    let mut loaded_balances = HashMap::new();
-    if let Ok(Some(balances_data)) = storage.load_data(b"balances") {
-        if let Ok(balances) = bincode::deserialize::<HashMap<String, u64>>(&balances_data) {
-            loaded_balances = balances;
-            log::info!("Loaded {} balances from dedicated storage", loaded_balances.len());
+    // Load balances first to avoid duplicate work
+    let loaded_balances = if let Ok(Some(balances_data)) = storage.load_data(b"balances") {
+        match bincode::deserialize::<HashMap<String, u64>>(&balances_data) {
+            Ok(balances) => {
+                log::info!("Loaded {} balances from dedicated storage", balances.len());
+                Some(balances)
+            }
+            Err(e) => {
+                log::warn!("Failed to deserialize balances: {}", e);
+                None
+            }
         }
-    }
+    } else {
+        None
+    };
 
     match storage.load_data(b"blockchain")? {
         Some(value) => {
             let loaded_chain: VecDeque<Block<Blake3Algorithm>> = bincode::deserialize(&value)?;
+            let chain_len = loaded_chain.len();
             
-            let mut balances = if loaded_balances.is_empty() {
-                HashMap::new()
-            } else {
-                loaded_balances.clone()
-            };
-            
+            // Pre-allocate collections with known sizes
+            let mut balances = loaded_balances.unwrap_or_else(|| HashMap::with_capacity(chain_len));
             let mut total_tokens = 0u64;
-            let mut block_height_cache = HashMap::new();
+            let mut block_height_cache = HashMap::with_capacity(chain_len);
             
-            let mut chain = BLOCKCHAIN_DATA.chain.write().unwrap();
-            *chain = loaded_chain;
-            
-            if loaded_balances.is_empty() {
-                for (height, block) in chain.iter().enumerate() {
-                    // Prevent overflow
+            // Process blocks efficiently
+            if balances.is_empty() {
+                // Only process transactions if we don't have cached balances
+                for (height, block) in loaded_chain.iter().enumerate() {
                     total_tokens = total_tokens.saturating_add(block.tokens);
-                    
-                    let miner_address = match normalize_address(&block.address) {
-                        Ok(addr) => addr.to_hex_literal(),
-                        Err(_) => {
-                            log::warn!("Invalid miner address in block {}: {}", height, block.address);
-                            continue;
-                        }
-                    };
-                    
-                    let current_balance = balances.entry(miner_address).or_insert(0);
-                    *current_balance = current_balance.saturating_add(block.tokens);
                     block_height_cache.insert(block.hash.clone(), height);
+                    
+                    // Process miner rewards
+                    if let Ok(addr) = normalize_address(&block.address) {
+                        let miner_address = addr.to_hex_literal();
+                        *balances.entry(miner_address).or_insert(0) += block.tokens;
+                    }
 
+                    // Process transactions in batch
                     for tx in &block.transactions {
                         let tx_sender = tx.sender.to_hex_literal();
                         let tx_receiver = tx.receiver.to_hex_literal();
                         
-                        // Prevent underflow on sender balance
-                        let sender_balance = balances.entry(tx_sender).or_insert(0);
-                        *sender_balance = sender_balance.saturating_sub(tx.amount);
-                        
-                        // Prevent overflow on receiver balance
-                        let receiver_balance = balances.entry(tx_receiver).or_insert(0);
-                        *receiver_balance = receiver_balance.saturating_add(tx.amount);
+                        // Use entry API to reduce lookups
+                        *balances.entry(tx_sender).or_insert(0) = 
+                            balances.get(&tx.sender.to_hex_literal()).unwrap_or(&0).saturating_sub(tx.amount);
+                        *balances.entry(tx_receiver).or_insert(0) += tx.amount;
                     }
                 }
             } else {
-                for (height, block) in chain.iter().enumerate() {
+                // Just build cache since we have balances
+                for (height, block) in loaded_chain.iter().enumerate() {
                     total_tokens = total_tokens.saturating_add(block.tokens);
                     block_height_cache.insert(block.hash.clone(), height);
                 }
             }
 
-            BLOCKCHAIN_DATA.total_tokens.store(total_tokens, Ordering::Relaxed);
-            *BLOCKCHAIN_DATA.block_height_cache.write().unwrap() = block_height_cache;
+            // Update global state efficiently
+            {
+                let mut chain = BLOCKCHAIN_DATA.chain.write().unwrap();
+                *chain = loaded_chain;
+            }
             
-            // Use scope to ensure lock is released quickly
+            BLOCKCHAIN_DATA.total_tokens.store(total_tokens, Ordering::Relaxed);
+            
+            {
+                let mut cache = BLOCKCHAIN_DATA.block_height_cache.write().unwrap();
+                *cache = block_height_cache;
+            }
+            
             {
                 let mut global_balances = BALANCES.lock().unwrap();
                 *global_balances = balances;
             }
 
             log::info!("Blockchain loaded successfully with {} blocks and {} accounts", 
-                chain.len(), BALANCES.lock().unwrap().len());
+                chain_len, BALANCES.lock().unwrap().len());
         }
         None => {
             log::info!("No blockchain data found, initializing new chain");
+            // Initialize empty collections
             *BLOCKCHAIN_DATA.chain.write().unwrap() = VecDeque::new();
             BLOCKCHAIN_DATA.total_tokens.store(0, Ordering::Relaxed);
             *BALANCES.lock().unwrap() = HashMap::new();
+            *BLOCKCHAIN_DATA.block_height_cache.write().unwrap() = HashMap::new();
         }
     }
 

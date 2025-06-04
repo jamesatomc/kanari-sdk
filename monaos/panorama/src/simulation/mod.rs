@@ -452,35 +452,30 @@ pub fn run_blockchain(
                 error!("Cannot find previous block");
                 break;
             }
-        };
-
-        // Get pending transactions for this block
+        };        // Get pending transactions for this block with optimized processing
         let transactions = {
             match PENDING_TRANSACTIONS.write() {
                 Ok(mut queue) => {
-                    // Take up to 100000 transactions for this block
-                    let mut block_txs = Vec::new();
-                    
-                    // Log transaction queue status
-                    info!("Processing transaction queue with {} pending transactions", queue.len());
-                    
-                    while let Some(tx) = queue.pop_front() {
-                        info!("Including transaction: {} -> {}, amount: {}", 
-                            tx.sender, tx.receiver, tx.amount);
-                        block_txs.push(tx);
-                        if block_txs.len() >= 100000 {
-                            break;
+                    let queue_len = queue.len();
+                    if queue_len == 0 {
+                        Vec::new()
+                    } else {
+                        // Use get_next_block_transactions for optimized processing
+                        let max_tx_per_block = 1000.min(queue_len); // Reduced from 100000 to reasonable limit
+                        info!("Processing transaction queue with {} pending transactions", queue_len);
+                        
+                        // Use the optimized function from blockchain module
+                        let block_txs = crate::simulation::get_next_block_transactions_optimized(&mut queue, max_tx_per_block);
+                        
+                        if !block_txs.is_empty() {
+                            info!("Added {} transactions to current block", block_txs.len());
                         }
+                        
+                        // Update the pending transaction count for gas fee calculation
+                        update_pending_transaction_count(queue.len());
+                        
+                        block_txs
                     }
-                    
-                    if !block_txs.is_empty() {
-                        info!("Added {} transactions to current block", block_txs.len());
-                    }
-                    
-                    // Update the pending transaction count for gas fee calculation
-                    update_pending_transaction_count(queue.len());
-                    
-                    block_txs
                 },
                 Err(_) => {
                     error!("Failed to lock pending transactions queue");
@@ -666,28 +661,66 @@ pub fn run_blockchain(
                     let _ = tx.try_send(error_json);
                 },
             }
-            
-            // Debug: Enhanced log of all balances
+              // Debug: Optimized balance reporting (reduced frequency)
             if let Ok(balances) = BALANCES.lock() {
-                debug!("Current balances in system ({} accounts):", balances.len());
-                for (addr, bal) in balances.iter() {
-                    debug!("  {} => {}", addr, bal);
+                let account_count = balances.len();
+                if account_count > 0 {
+                    debug!("Current balances in system ({} accounts)", account_count);
+                    
+                    // Only send balance report every 10 blocks to reduce noise
+                    if new_block.index % 10 == 0 {
+                        let balance_report = json!({
+                            "event": "system_balances",
+                            "account_count": account_count,
+                            "timestamp": current_time
+                        }).to_string();
+                        let _ = tx.try_send(balance_report);
+                    }
                 }
-                
-                // Send system-wide balance report
-                let balance_report = json!({
-                    "event": "system_balances",
-                    "account_count": balances.len(),
-                    "timestamp": current_time
-                }).to_string();
-                let _ = tx.try_send(balance_report);
             }
         }
 
         // Update last block time for gas fee calculation
-        update_last_block_time(new_block.timestamp);
-
-        // Sleep to control block creation rate
-        thread::sleep(Duration::from_millis(420)); // 420 milliseconds for better performance
+        update_last_block_time(new_block.timestamp);        // Sleep to control block creation rate - optimized for better performance
+        thread::sleep(Duration::from_millis(300)); // Reduced from 420ms to 300ms for faster block times
     }
+}
+
+// Optimized function to process transactions from queue with reduced allocations
+fn get_next_block_transactions_optimized(
+    queue: &mut VecDeque<Transaction>, 
+    max_count: usize
+) -> Vec<Transaction> {
+    if queue.is_empty() {
+        return Vec::new();
+    }
+    
+    let to_process = queue.len().min(max_count);
+    let mut result = Vec::with_capacity(to_process);
+    
+    // Process transactions in batch, logging only summary
+    let mut vm_count = 0;
+    let mut regular_count = 0;
+    
+    for _ in 0..to_process {
+        if let Some(tx) = queue.pop_front() {
+            // Quick priority check without excessive string operations
+            if let Some(data) = &tx.data {
+                if data.len() >= 3 && &data[0..3] == b"VM_" {
+                    vm_count += 1;
+                } else {
+                    regular_count += 1;
+                }
+            } else {
+                regular_count += 1;
+            }
+            result.push(tx);
+        }
+    }
+    
+    if vm_count > 0 || regular_count > 0 {
+        info!("Processed {} VM transactions and {} regular transactions", vm_count, regular_count);
+    }
+    
+    result
 }

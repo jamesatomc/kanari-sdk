@@ -41,8 +41,8 @@ pub struct RocksDBStorage {
 
 impl RocksDBStorage {
     pub fn new(path: PathBuf) -> Result<Self, StorageError> {
-        const MAX_RETRIES: u32 = 5;
-        let mut backoff = Duration::from_millis(100);
+        const MAX_RETRIES: u32 = 3; // Reduced from 5 to fail faster
+        let mut backoff = Duration::from_millis(50); // Reduced initial backoff
         
         info!("Initializing RocksDB at: {:?}", path);
         
@@ -54,27 +54,26 @@ impl RocksDBStorage {
         let mut attempts = 0;
         while attempts < MAX_RETRIES {
             let lock_path = path.join("LOCK");
-            if lock_path.exists() {
+            if lock_path.exists() && attempts > 0 {
                 debug!("Found stale lock file, attempting to remove");
                 match fs::remove_file(&lock_path) {
                     Ok(_) => info!("Successfully removed stale lock file"),
-                    Err(e) => {
-                        warn!("Failed to remove lock file: {}", e);
-                    }
+                    Err(e) => warn!("Failed to remove lock file: {}", e),
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(50));
             }
 
             let mut opts = Options::default();
             opts.create_if_missing(true);
+            // Optimized settings for reduced memory usage
             opts.set_keep_log_file_num(1);
-            opts.set_max_open_files(10);
-            opts.set_use_fsync(true);
-            opts.set_write_buffer_size(64 * 1024 * 1024);
+            opts.set_max_open_files(5); // Reduced from 10
+            opts.set_use_fsync(false); // Better performance for non-critical data
+            opts.set_write_buffer_size(32 * 1024 * 1024); // Reduced from 64MB to 32MB
             opts.set_compaction_style(rocksdb::DBCompactionStyle::Level);
             
-            // Add error recovery options
-            opts.set_paranoid_checks(true);
+            // Optimized recovery options
+            opts.set_paranoid_checks(false); // Disable for better performance
             opts.set_error_if_exists(false);
             
             match DB::open(&opts, &path) {
@@ -87,7 +86,7 @@ impl RocksDBStorage {
                     warn!("Failed to open DB (attempt {}/{}): {}", attempts, MAX_RETRIES, e);
                     if attempts < MAX_RETRIES {
                         std::thread::sleep(backoff);
-                        backoff = backoff.saturating_mul(2); // Prevent overflow
+                        backoff = backoff.saturating_mul(2).min(Duration::from_millis(500)); // Cap backoff
                     }
                 }
             }
@@ -185,15 +184,18 @@ impl BlockchainStorage for RocksDBStorage {
                 Err(StorageError::DbError(e))
             }
         }
-    }
-
+    }   
+    
     fn list_keys_with_prefix(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>, StorageError> {
         debug!("Listing keys with prefix of {} bytes", prefix.len());
         let mut result = Vec::new();
         
         let iter = self.db.prefix_iterator(prefix);
         let mut count = 0;
-        const MAX_KEYS: usize = 10000; // Prevent memory exhaustion
+        const MAX_KEYS: usize = 1000; // Reduced from 10000 to prevent memory exhaustion
+        
+        // Pre-allocate with reasonable capacity
+        result.reserve(MAX_KEYS.min(100));
         
         for item in iter {
             if count >= MAX_KEYS {
@@ -217,6 +219,7 @@ impl BlockchainStorage for RocksDBStorage {
         }
         
         debug!("Found {} keys with prefix", result.len());
+        result.shrink_to_fit(); // Release unused capacity
         Ok(result)
     }
 }

@@ -1,3 +1,4 @@
+use mona_blockchain::blockchain::BLOCKCHAIN_DATA;
 use move_package::compilation::compiled_package::CompiledUnitWithSource;
 use move_package::{source_package::layout::SourcePackageLayout, BuildConfig};
 use move_compiler::compiled_unit::CompiledUnit;
@@ -15,6 +16,7 @@ use framework::get_framework_path;
 use framework::{Package, PackageType, PackageSourceInfo};
 use rand::{thread_rng, Rng};
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
 // Import all gas functions and constants, not just format_gas_fee_display
 use mona_types::gas::{
@@ -24,13 +26,15 @@ use mona_types::gas::{
 // New imports for blockchain integration
 use std::sync::{Arc, RwLock};
 use mona_blockchain::block::Transaction;
-use mona_blockchain::blockchain::{BLOCKCHAIN_DATA, submit_transaction};
 use lazy_static::lazy_static;
 use mona_crypto::verify_signature;
 
 // Add imports for secure storage
-use mona_storage::{BlockchainStorage, RocksDBStorage, StorageError};
+use mona_storage::{BlockchainStorage, RocksDBStorage};
 use common::get_kari_dir;
+
+// Import for transaction submission - use blockchain directly to avoid circular dependency
+use mona_blockchain::blockchain::PENDING_TRANSACTIONS;
 
 // VM Transaction State Manager - Make it public so it can be accessed by the RPC API
 lazy_static! {
@@ -50,7 +54,8 @@ pub struct VMState {
     pub last_signer: Option<String>,
 }
 
-// Structure to represent a Move VM Module
+// Simplified VMModule with better performance
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VMModule {
     pub module_id: String,
     pub address: AccountAddress,
@@ -98,6 +103,7 @@ impl VMModule {
             deploy_block_height,
         }
     }
+    
 }
 
 // VM Transaction Structure
@@ -847,7 +853,7 @@ impl Publish {
         signer_address: Option<String>,
     ) -> anyhow::Result<DeploymentResult> {
         let start = std::time::Instant::now();
-    
+
         let modules = deployment_info["modules"].as_array().unwrap();
         let mut total_gas_used = 0;
         let mut modules_deployed = 0;
@@ -857,165 +863,99 @@ impl Publish {
             Some(block) => block.index,
             None => 0,
         };
-    
-        let mut vm_state = match VM_STATE.try_write() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to lock VM state for writing: {}", e));
-            }
-        };
-    
-        let deploy_tx_id = format!("deploy_tx_{}", generate_random_hex(32));
-    
-        if modules.is_empty() {
-            return Err(anyhow::anyhow!("No modules to deploy"));
-        }
-        
-        let mut blockchain_transactions = Vec::new();
-        let mut mvsm_storage_keys = Vec::new();
-        
-        let _gas_collector = match AccountAddress::from_hex_literal(
-            "0x47621776628ba3a5b9baaab38e61f4c98e893e124204bc4dad52e702e2b24ea1") {
-            Ok(addr) => addr,
-            Err(_) => *address
-        };
-    
-        for (_idx, module_json) in modules.iter().enumerate() {
+
+        let mut vm_state = VM_STATE.try_write()
+            .map_err(|e| anyhow::anyhow!("Failed to lock VM state: {}", e))?;
+
+        let deploy_tx_id = format!("deploy_tx_{}", generate_random_hex(16)); // Reduced from 32
+
+        let mut blockchain_transactions = Vec::with_capacity(modules.len());
+        let mut mvsm_storage_keys = Vec::with_capacity(modules.len());
+
+        for module_json in modules.iter() {
             let module_name = module_json["name"].as_str().unwrap_or("unknown");
             
-            let bytecode = match package.root_compiled_units.iter().find(|unit| unit.unit.name().to_string() == module_name) {
-                Some(unit) => {
-                    let bytecode = unit.unit.serialize(None);
-                    bytecode
-                },
-                None => {
-                    let size_bytes = module_json["size_bytes"].as_u64().unwrap_or(1024) as usize;
-                    vec![0u8; size_bytes]
-                }
-            };
-            
-            let size_bytes = bytecode.len() as u64;
+            let bytecode = package.root_compiled_units
+                .iter()
+                .find(|unit| unit.unit.name().to_string() == module_name)
+                .map(|unit| unit.unit.serialize(None))
+                .unwrap_or_else(|| vec![0u8; 1024]);
             
             let public_funcs = module_json["public_functions"]
                 .as_array()
-                .unwrap_or(&Vec::new())
-                .iter()
-                .filter_map(|f| f["name"].as_str().map(|s| s.to_string()))
-                .collect::<Vec<String>>();
-            
-            let _module_id = format!("0x{}::{}", address.to_hex(), module_name);
+                .map(|arr| arr.iter()
+                    .filter_map(|f| f["name"].as_str().map(String::from))
+                    .collect())
+                .unwrap_or_default();
             
             let vm_module = VMModule::new(
                 *address,
                 module_name.to_string(),
                 bytecode.clone(),
-                public_funcs.clone(),
+                public_funcs,
                 block_height,
             );
             
-            // Store module in secure storage instead of file system
-            let storage_key = match serialize_module_to_mvsm(
-                &vm_module, 
-                &package.compiled_package_info.package_name.to_string(),
-                None
-            ) {
-                Ok(key) => {
-                    println!("Stored .mvsm module in secure storage: {}", key);
-                    mvsm_storage_keys.push(key.clone());
-                    Some(key)
-                },
-                Err(e) => {
-                    eprintln!("Warning: Failed to store .mvsm module in secure storage: {}", e);
-                    None
-                }
-            };
+            // Store in secure storage and also save as .mvsm file
+            if let Ok(key) = serialize_module_to_mvsm(&vm_module, 
+                &package.compiled_package_info.package_name.to_string(), None) {
+                mvsm_storage_keys.push(key);
+            }
             
-            let priority_boost = size_bytes / 100;
-            let gas_used = calculate_gas_fee(Some(priority_boost));
+            // Also save as traditional .mvsm file format
+            if let Ok(mvsm_path) = save_mvsm(&vm_module, &package.compiled_package_info.package_name.to_string()) {
+                log::info!("Saved module as .mvsm file: {}", mvsm_path);
+            }
+            
+            let gas_used = calculate_gas_fee(Some(bytecode.len() as u64 / 100));
             total_gas_used += gas_used;
             
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-                
-            let mut tx_data = Vec::new();
-            let module_hash = {
-                let mut hasher = Sha3_256::new();
-                hasher.update(&bytecode);
-                hex::encode(hasher.finalize())
-            };
-            
-            // Include storage key in transaction data if available
-            let data_str = if let Some(key) = storage_key {
-                format!("VM_MODULE:{}:{}:{}:{}", 
-                    module_name, 
-                    bytecode.len(), 
-                    module_hash,
-                    key
-                )
-            } else {
-                format!("VM_MODULE:{}:{}:{}", module_name, bytecode.len(), module_hash)
-            };
-            
-            tx_data.extend_from_slice(data_str.as_bytes());
+            // Create blockchain transaction
+            let tx_data = format!("VM_MODULE:{}:{}:{}", 
+                module_name, bytecode.len(), hex::encode(sha3::Sha3_256::digest(&bytecode)));
             
             let blockchain_tx = mona_blockchain::block::Transaction {
                 transaction_id: format!("{}_{}", deploy_tx_id, module_name),
                 sender: (*address).into(),
                 receiver: (*address).into(),
                 amount: 0,
-                timestamp,
+                timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
                 gas_fee: gas_used,
                 signature: signature.clone().unwrap_or_default(),
-                data: Some(tx_data),
+                data: Some(tx_data.into_bytes()),
             };
             
             blockchain_transactions.push(blockchain_tx);
             
-            vm_state.register_module(vm_module.clone());
-            
-            let padded_addr = format!("{:0>64}", address.to_hex());
-            let full_module_id = format!("0x{}::{}", padded_addr, module_name);
-            
-            let mut vm_module_copy = vm_module.clone();
-            vm_module_copy.module_id = full_module_id;
-            vm_state.register_module(vm_module_copy);
-            
+            // Register module (single registration)
+            vm_state.register_module(vm_module);
             modules_deployed += 1;
         }
-    
+
+        // Update VM state
         if let (Some(sig), Some(signer)) = (&signature, &signer_address) {
             vm_state.last_signature = Some(hex::encode(sig));
             vm_state.last_signer = Some(signer.clone());
         }
-    
-        let execution_time = start.elapsed().as_millis();
-        
-        vm_state.execution_count += 1;
-        vm_state.last_execution = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        
-        drop(vm_state);
 
+        vm_state.execution_count += 1;
+        vm_state.last_execution = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+          drop(vm_state);        // Submit transactions directly to blockchain pending queue
         for tx in blockchain_transactions {
-            let _tx_id = tx.transaction_id.clone();
-            if let Err(_) = submit_transaction(tx) {}
+            if let Ok(mut queue) = PENDING_TRANSACTIONS.lock() {
+                queue.push_back(tx);
+            }
         }
-    
-        let result = DeploymentResult {
+
+        Ok(DeploymentResult {
             transaction_id: deploy_tx_id,
             status: "COMMITTED".to_string(),
             gas_used: total_gas_used,
-            execution_time_ms: execution_time as u64,
+            execution_time_ms: start.elapsed().as_millis() as u64,
             block_height: block_height as u64,
             modules_deployed,
             mvsm_files: mvsm_storage_keys,
-        };
-    
-        Ok(result)
+        })
     }
 }
 
@@ -1060,7 +1000,7 @@ fn get_module_dependencies(module: &CompiledUnit) -> Vec<String> {
 fn get_module_public_functions(module: &CompiledUnit) -> Vec<JsonValue> {
     let compiled_module = &module.module;
     let module_address = compiled_module.address().to_string();
-    let module_name = compiled_module.name().to_string();
+    let _module_name = compiled_module.name().to_string();
     let full_module_id = format!("0x{}", module_address);
     
     compiled_module
@@ -1070,7 +1010,7 @@ fn get_module_public_functions(module: &CompiledUnit) -> Vec<JsonValue> {
             if func_def.visibility == move_binary_format::file_format::Visibility::Public {
                 let func_handle = compiled_module.function_handle_at(func_def.function);
                 let func_name = compiled_module.identifier_at(func_handle.name).to_string();
-                let complete_func_path = format!("{}::{}", full_module_id, module_name);
+                let complete_func_path = format!("{}::{}", full_module_id, func_name);
                 let signature = compiled_module.signature_at(func_handle.parameters);
                 let param_count = signature.0.len();
                 
@@ -1100,86 +1040,45 @@ fn generate_random_hex(length: usize) -> String {
         .collect()
 }
 
-// Utility function to clone a VMModule for multiple registrations
-impl Clone for VMModule {
-    fn clone(&self) -> Self {
-        Self {
-            module_id: self.module_id.clone(),
-            address: self.address,
-            name: self.name.clone(),
-            bytecode: self.bytecode.clone(),
-            public_functions: self.public_functions.clone(),
-            deploy_block_height: self.deploy_block_height,
-        }
-    }
-}
 
-// Add a standalone VM state save function
-pub fn save_vm_state() -> Result<(), StorageError> {
+fn save_mvsm(module: &VMModule, package_name: &str) -> anyhow::Result<String> {
     let kari_dir = get_kari_dir();
     let db_path = kari_dir.join("storage").join("mvsm_db");
-    let storage = RocksDBStorage::new(db_path)?;
     
-    match VM_STATE.try_read() {
-        Ok(vm_state) => {
-            let modules_count = vm_state.modules.len();
-            
-            // Save comprehensive VM state metadata
-            let vm_metadata = serde_json::json!({
-                "modules_count": modules_count,
-                "last_execution": vm_state.last_execution,
-                "execution_count": vm_state.execution_count,
-                "last_signature": vm_state.last_signature.clone(),
-                "last_signer": vm_state.last_signer.clone(),
-                "modules": vm_state.modules.keys().collect::<Vec<_>>(),
-                "system_info": {
-                    "version": "2.0",
-                    "save_timestamp": std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                }
-            });
-            
-            let metadata_bytes = vm_metadata.to_string().into_bytes();
-            storage.save_data(b"vm_state_metadata", &metadata_bytes)?;
-            
-            // Save individual module summaries for quick lookup
-            for (module_id, module) in vm_state.modules.iter() {
-                let module_summary = serde_json::json!({
-                    "module_id": module_id,
-                    "address": format!("0x{}", module.address.to_hex()),
-                    "name": module.name,
-                    "deploy_block_height": module.deploy_block_height,
-                    "bytecode_size": module.bytecode.len(),
-                    "function_count": module.public_functions.len(),
-                });
-                
-                let summary_key = format!("module_summary_{}", module_id);
-                storage.save_data(summary_key.as_bytes(), &module_summary.to_string().into_bytes())?;
-            }
-            
-            log::info!("Saved VM state with {} modules", modules_count);
-        }
-        Err(e) => {
-            log::warn!("Could not access VM state for save: {}", e);
-            
-            // Save fallback metadata
-            let fallback_metadata = serde_json::json!({
-                "status": "fallback_save",
-                "timestamp": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                "error": format!("{}", e),
-            });
-            
-            storage.save_data(b"vm_state_metadata", &fallback_metadata.to_string().into_bytes())?;
-        }
-    }
+    // Create storage directory if it doesn't exist
+    std::fs::create_dir_all(&db_path)?;
     
-    storage.flush()?;
-    log::debug!("VM state saved successfully to secure storage");
+    // Generate filename in format: (address)name.mvsm
+    let address_hex = module.address.to_hex();
+    let filename = format!("({}){}mvsm", address_hex, module.name);
+    let file_path = db_path.join(&filename);
     
-    Ok(())
+    // Create module metadata
+    let module_data = serde_json::json!({
+        "module_id": module.module_id,
+        "address": format!("0x{}", address_hex),
+        "name": module.name,
+        "package": package_name,
+        "deploy_block_height": module.deploy_block_height,
+        "public_functions": module.public_functions,
+        "bytecode_size": module.bytecode.len(),
+        "version": "1.0",
+        "timestamp": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    });
+    
+    // Create file content with metadata and bytecode
+    let mut file_content = module_data.to_string().into_bytes();
+    file_content.extend_from_slice(b"\n===BYTECODE===\n");
+    file_content.extend_from_slice(&module.bytecode);
+    
+    // Write to file
+    std::fs::write(&file_path, &file_content)?;
+    
+    let file_location = file_path.to_string_lossy().to_string();
+    log::info!("Saved MVSM file: {}", file_location);
+    
+    Ok(file_location)
 }

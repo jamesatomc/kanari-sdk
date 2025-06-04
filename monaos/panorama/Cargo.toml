@@ -47,7 +47,6 @@ env_logger.workspace = true
 colored.workspace = true
 thiserror.workspace = true
 
-mona-vm.workspace = true
 mona-types.workspace = true
 mona-blockchain.workspace = true
 
@@ -65,7 +64,5 @@ consensus-pos.workspace = true
 network.workspace = true
 
 crossbeam.workspace = true
-
-kari-move.workspace = true
 
 move-core-types.workspace = true
