@@ -10,7 +10,7 @@ mod get_block;
 mod accounts;
 mod move_api; // Add the new module
 
-use stake::{get_staking_info, get_staking_stats, stake_tokens, unstake_tokens};
+use stake::{get_staking_info, get_staking_stats, stake_tokens, unstake_tokens, claim_rewards};
 use get_block::{
     get_all_blocks, 
     get_account_details, 
@@ -132,6 +132,11 @@ pub async fn start_rpc_server(network_config: NetworkConfig) -> Result<(), tokio
 
     io.add_method("get_staking_stats", |params| {
         futures::future::ready(get_staking_stats(params)).boxed()
+    });
+
+    // Add enhanced staking operations
+    io.add_method("claim_rewards", |params| {
+        futures::future::ready(claim_rewards(params)).boxed()
     });
 
     // Add Move VM operations

@@ -12,9 +12,9 @@ use mona_blockchain::block::{Block, Transaction};
 use mona_blockchain::blockchain::{save_blockchain, BALANCES, BLOCKCHAIN_DATA, normalize_address};
 use crate::transfer_tokens::transfer_tokens;
 use mona_types::address::Address;
-use mona_types::kari::{KARI, KA_PER_KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KA, TOTAL_SUPPLY_KARI, VALIDATOR_STAKING_MINIMUM_KARI, NODE_STAKING_MINIMUM_KARI};
+use mona_types::kari::{KARI, KA_PER_KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KA, TOTAL_SUPPLY_KARI};
 use crate::utils::{update_pending_transaction_count, update_last_block_time, calculate_gas_fee, format_gas_fee_display};
-use crate::staking::{load_staking_state, process_rewards, is_validator};
+use crate::staking::{load_enhanced_staking_state, distribute_rewards_enhanced, get_enhanced_staking_info, get_validator_list, get_pool_state, MIN_NODE_STAKE, MIN_VALIDATOR_STAKE, REWARD_RATE_BASIS_POINTS};
 use crate::node::{NodeConfig, start_node, stop_node, propagate_block, get_peer_count};
 
 pub mod create_genesis_block;
@@ -27,9 +27,15 @@ fn parse_address(address: &str) -> Result<Address, String> {
         .map_err(|_| format!("Invalid address format: {}", address))
 }
 
-// Add pending transactions queue
+// Move-aligned constants for staking validation
+const STAKING_LOCK_PERIOD_MS: u64 = 86400000; // 24 hours in milliseconds (matches Move)
+const EARLY_UNSTAKE_PENALTY_BASIS_POINTS: u64 = 1000; // 10% (matches Move)
+const EPOCH_DURATION_MS: u64 = 86400000; // Daily epochs (matches Move)
+
+// Enhanced staking information tracking
 lazy_static::lazy_static! {
     static ref PENDING_TRANSACTIONS: RwLock<VecDeque<Transaction>> = RwLock::new(VecDeque::new());
+    static ref MOVE_INTEGRATION_ENABLED: RwLock<bool> = RwLock::new(false);
 }
 
 // Now use .write() or .read() instead of .lock()
@@ -253,35 +259,47 @@ pub fn run_blockchain(
     let normalized_address = node_address.to_hex_literal();
     debug!("Using normalized address: {}", normalized_address);
 
-    // Initialize staking system
-    if let Err(e) = load_staking_state() {
-        warn!("Failed to load staking state: {}", e);
+    // Initialize enhanced staking system with Move alignment
+    if let Err(e) = load_enhanced_staking_state() {
+        warn!("Failed to load enhanced staking state: {}", e);
     } else {
-        info!("Staking system initialized");
+        info!("Enhanced staking system initialized");
     }
     
-    // Initialize node networking if multiple nodes are supported
+    // Check if this node can be a validator using Move-aligned constants
+    let node_balance = match mona_blockchain::blockchain::get_balance(&normalized_address) {
+        Ok(balance) => balance,
+        Err(_) => 0,
+    };
+    
+    let can_validate = node_balance >= MIN_VALIDATOR_STAKE;
+    let can_run_node = node_balance >= MIN_NODE_STAKE;
+    
+    info!("Node staking status: balance={} KA, can_validate={}, can_run_node={}", 
+          node_balance, can_validate, can_run_node);
+    
+    // Initialize node networking with enhanced validator detection
     let node_config = NodeConfig {
         node_id: format!("node-{}", normalized_address[..8].to_string()),
         blockchain_address: normalized_address.clone(),
-        listen_ip: "0.0.0.0".to_string(), // Listen on all interfaces, not just localhost
-        listen_port: 51303, // Use fixed default port instead of dynamic calculation
+        listen_ip: "0.0.0.0".to_string(),
+        listen_port: 51303,
         discovery_nodes: vec![
-            // List of discovery nodes for peer discovery
             "devnet.kanari.site:51303".to_string(),
             "testnet.kanari.site:51303".to_string(),
             "mainnet.kanari.site:51303".to_string(),
         ],
-        max_peers: 50, // Increased max peers for better network connectivity
-        is_validator: is_validator(&node_address), // Dynamically check if this node is a validator
-        use_tls: false, // TLS disabled by default
+        max_peers: 50,
+        is_validator: can_validate && get_enhanced_staking_info(&node_address).map_or(false, |info| info.is_validator),
+        use_tls: false,
         cert_path: Some(format!("{}/certs/node.crt", common::get_kari_dir().display())),
         key_path: Some(format!("{}/certs/node.key", common::get_kari_dir().display())),
     };
     
-    // Log node network configuration
-    info!("Node network configuration: {}:{} (validator: {})", 
-          node_config.listen_ip, node_config.listen_port, node_config.is_validator);
+    // Log enhanced node configuration
+    info!("Node network configuration: {}:{} (validator: {}, staking_balance: {} KARI)", 
+          node_config.listen_ip, node_config.listen_port, node_config.is_validator,
+          node_balance as f64 / KA_PER_KARI as f64);
     
     // Start node networking
     if let Err(e) = start_node(node_config, tx.clone()) {
@@ -290,7 +308,7 @@ pub fn run_blockchain(
         info!("Node networking started");
     }
 
-    // Send initial status including staking information
+    // Send enhanced initial status including Move-aligned staking information
     let init_status = json!({
         "event": "blockchain_initializing",
         "coin": {
@@ -302,8 +320,16 @@ pub fn run_blockchain(
         },
         "node_address": normalized_address,
         "staking": {
-            "validator_minimum": VALIDATOR_STAKING_MINIMUM_KARI,
-            "node_minimum": NODE_STAKING_MINIMUM_KARI,
+            "min_validator_stake": MIN_VALIDATOR_STAKE,
+            "min_node_stake": MIN_NODE_STAKE,
+            "min_validator_stake_display": MIN_VALIDATOR_STAKE as f64 / KA_PER_KARI as f64,
+            "min_node_stake_display": MIN_NODE_STAKE as f64 / KA_PER_KARI as f64,
+            "reward_rate_basis_points": REWARD_RATE_BASIS_POINTS,
+            "lock_period_hours": STAKING_LOCK_PERIOD_MS / 3600000,
+            "penalty_basis_points": EARLY_UNSTAKE_PENALTY_BASIS_POINTS,
+            "can_validate": can_validate,
+            "can_run_node": can_run_node,
+            "move_integration": MOVE_INTEGRATION_ENABLED.read().map_or(false, |enabled| *enabled),
         },
         "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
     }).to_string();
@@ -423,7 +449,7 @@ pub fn run_blockchain(
     }
 
     // Start block production loop
-    info!("Starting block production with node address: {}", normalized_address);
+    info!("Starting enhanced block production with Move-aligned staking");
     
     // Block production loop
     loop {
@@ -452,7 +478,9 @@ pub fn run_blockchain(
                 error!("Cannot find previous block");
                 break;
             }
-        };        // Get pending transactions for this block with optimized processing
+        };
+
+        // Get pending transactions for this block with optimized processing
         let transactions = {
             match PENDING_TRANSACTIONS.write() {
                 Ok(mut queue) => {
@@ -538,18 +566,24 @@ pub fn run_blockchain(
             }
         }
         
-        // Process staking rewards
-        let staking_rewards = match process_rewards(new_block.index) {
+        // Enhanced staking rewards processing with Move alignment
+        let current_epoch = current_time / (EPOCH_DURATION_MS / 1000); // Convert to epoch number
+        let staking_rewards = match distribute_rewards_enhanced(new_block.index) {
             Ok(rewards) => rewards,
             Err(e) => {
-                warn!("Failed to process staking rewards: {}", e);
+                warn!("Failed to process enhanced staking rewards: {}", e);
                 0
             }
         };
         
-        // Check if the node operator is staking as validator
-        let validator_status = is_validator(&node_address);
-
+        // Get enhanced staking information
+        let node_staking_info = get_enhanced_staking_info(&node_address);
+        let validator_list = get_validator_list();
+        let pool_state = get_pool_state();
+        
+        // Check if the node operator is staking as validator with enhanced info
+        let validator_status = node_staking_info.as_ref().map_or(false, |info| info.is_validator && info.is_active);
+        
         // If we included transactions, provide detailed logs
         if !transactions.is_empty() {
             info!("Block {} includes {} transactions:", new_block.index, transactions.len());
@@ -577,21 +611,41 @@ pub fn run_blockchain(
             },
             "blockchain": {
                 "height": BLOCKCHAIN_DATA.len(),
-                "last_update": current_time
+                "last_update": current_time,
+                "epoch": current_epoch,
             },
             "staking": {
                 "rewards_distributed": staking_rewards,
+                "rewards_display": staking_rewards as f64 / KA_PER_KARI as f64,
                 "is_validator": validator_status,
-                "display_rewards": staking_rewards as f64 / KA_PER_KARI as f64,
-                "pool_balance": match crate::staking::get_pool_remaining_balance() {
-                    Ok(balance) => balance,
-                    Err(_) => 0
+                "node_info": node_staking_info.as_ref().map(|info| json!({
+                    "staked_amount": info.staked_amount,
+                    "staked_amount_display": info.staked_amount as f64 / KA_PER_KARI as f64,
+                    "accumulated_rewards": info.accumulated_rewards,
+                    "accumulated_rewards_display": info.accumulated_rewards as f64 / KA_PER_KARI as f64,
+                    "unlock_time": info.unlock_time,
+                    "is_locked": current_time < info.unlock_time,
+                    "commission_rate": info.commission_rate,
+                    "delegated_stake": info.delegated_stake,
+                    "delegated_stake_display": info.delegated_stake as f64 / KA_PER_KARI as f64,
+                })),
+                "pool_state": {
+                    "total_staked": pool_state.total_staked,
+                    "total_staked_display": pool_state.total_staked as f64 / KA_PER_KARI as f64,
+                    "validator_count": pool_state.validator_count,
+                    "node_count": pool_state.node_count,
+                    "reward_rate": pool_state.reward_rate,
+                    "last_reward_epoch": pool_state.last_reward_epoch,
                 },
-                "pool_balance_display": match crate::staking::get_pool_remaining_balance() {
-                    Ok(balance) => balance as f64 / KA_PER_KARI as f64,
-                    Err(_) => 0.0
-                },
-                "pool_address": POOL_ADDRESS
+                "validators": validator_list.len(),
+                "validator_list": validator_list.iter().map(|v| json!({
+                    "address": v.address.to_hex_literal(),
+                    "stake_amount": v.stake_amount,
+                    "stake_amount_display": v.stake_amount as f64 / KA_PER_KARI as f64,
+                    "commission_rate": v.commission_rate,
+                    "is_active": v.is_active,
+                })).collect::<Vec<_>>(),
+                "move_integration": MOVE_INTEGRATION_ENABLED.read().map_or(false, |enabled| *enabled),
             },
             "networking": {
                 "peer_count": get_peer_count(),
@@ -627,7 +681,7 @@ pub fn run_blockchain(
         if new_block.index % 5 == 0 {
             match mona_blockchain::blockchain::get_balance(&normalized_address) {
                 Ok(balance) => {
-                    // Enhanced balance update with more details
+                    // Enhanced balance update with staking details
                     let balance_json = json!({
                         "event": "balance_update",
                         "address": normalized_address,
@@ -637,16 +691,24 @@ pub fn run_blockchain(
                             "symbol": coin.symbol,
                             "formatted": format!("{:.9} {}", balance as f64 / KA_PER_KARI as f64, coin.symbol)
                         },
+                        "staking_eligibility": {
+                            "can_run_node": balance >= MIN_NODE_STAKE,
+                            "can_validate": balance >= MIN_VALIDATOR_STAKE,
+                            "currently_staking": node_staking_info.is_some(),
+                            "staked_amount": node_staking_info.as_ref().map_or(0, |info| info.staked_amount),
+                        },
                         "block_height": new_block.index,
                         "timestamp": current_time
                     }).to_string();
                     
                     let _ = tx.try_send(balance_json);
                     
-                    // Log balance info
+                    // Log enhanced balance info
                     debug!(
-                        "Current balance for {} is {} {}A",
-                        normalized_address, balance, coin.symbol
+                        "Current balance for {} is {} {}A (staked: {} {}A)",
+                        normalized_address, balance, coin.symbol,
+                        node_staking_info.as_ref().map_or(0, |info| info.staked_amount),
+                        coin.symbol
                     );
                 },
                 Err(e) => {
@@ -661,7 +723,8 @@ pub fn run_blockchain(
                     let _ = tx.try_send(error_json);
                 },
             }
-              // Debug: Optimized balance reporting (reduced frequency)
+
+            // Debug: Optimized balance reporting (reduced frequency)
             if let Ok(balances) = BALANCES.lock() {
                 let account_count = balances.len();
                 if account_count > 0 {
@@ -681,8 +744,10 @@ pub fn run_blockchain(
         }
 
         // Update last block time for gas fee calculation
-        update_last_block_time(new_block.timestamp);        // Sleep to control block creation rate - optimized for better performance
-        thread::sleep(Duration::from_millis(300)); // Reduced from 420ms to 300ms for faster block times
+        update_last_block_time(new_block.timestamp);
+        
+        // Enhanced sleep for Move-aligned block timing
+        thread::sleep(Duration::from_millis(250)); // Slightly faster for better responsiveness
     }
 }
 
@@ -723,4 +788,31 @@ fn get_next_block_transactions_optimized(
     }
     
     result
+}
+
+// Enhanced function to enable Move integration
+pub fn enable_move_integration() -> Result<(), String> {
+    match MOVE_INTEGRATION_ENABLED.write() {
+        Ok(mut enabled) => {
+            *enabled = true;
+            info!("Move integration enabled");
+            Ok(())
+        },
+        Err(e) => Err(format!("Failed to enable Move integration: {}", e)),
+    }
+}
+
+pub fn disable_move_integration() -> Result<(), String> {
+    match MOVE_INTEGRATION_ENABLED.write() {
+        Ok(mut enabled) => {
+            *enabled = false;
+            info!("Move integration disabled");
+            Ok(())
+        },
+        Err(e) => Err(format!("Failed to disable Move integration: {}", e)),
+    }
+}
+
+pub fn is_move_integration_enabled() -> bool {
+    MOVE_INTEGRATION_ENABLED.read().map_or(false, |enabled| *enabled)
 }

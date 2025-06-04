@@ -27,6 +27,21 @@ impl From<AccountAddress> for Address {
     }
 }
 
+// Add conversion back to Move AccountAddress
+impl From<Address> for AccountAddress {
+    fn from(addr: Address) -> Self {
+        // Find the first non-zero byte to trim leading zeros
+        let start_idx = addr.0.iter().position(|&b| b != 0).unwrap_or(addr.0.len() - 1);
+        let trimmed_bytes = &addr.0[start_idx..];
+
+        // AccountAddress expects exactly the right number of bytes
+        AccountAddress::from_bytes(trimmed_bytes).unwrap_or_else(|_| {
+            // Fallback: use the full 32 bytes
+            AccountAddress::from_bytes(&addr.0).expect("Failed to convert Address to AccountAddress")
+        })
+    }
+}
+
 /// Represents an address in the system
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Address([u8; Address::LENGTH]);
