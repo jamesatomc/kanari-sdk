@@ -12,8 +12,8 @@ repository.workspace = true
 description.workspace = true
 
 [features]
-# Define blake3 as an optional feature that enables the blake3 dependency
-blake3 = ["dep:blake3"]  # Define the blake3 feature
+# Remove the blake3 feature since we use consensus-pos for Blake3
+default = []
 
 [dependencies]
 # Core crypto libraries
@@ -24,8 +24,8 @@ sha3 = "0.10.8"
 aes-gcm = "0.10.2"
 argon2 = "0.5"
 zstd = "0.13.3"
-# Make blake3 optional and enabled via the blake3 feature
-blake3 = { version = "1.3.1", optional = true }
+# Use consensus-pos for Blake3 functionality
+consensus-pos = { workspace = true }
 
 # BIP39 support
 bip39 = { version = "2.0", features = ["rand"] }

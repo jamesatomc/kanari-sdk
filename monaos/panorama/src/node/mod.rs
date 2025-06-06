@@ -1,4 +1,6 @@
 use log::{debug, error, info, warn};
+use mona_crypto::hash_data_blake3;
+use mona_types::storage::block::Block;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -8,10 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-use mona_blockchain::block::Block;
-use mona_blockchain::blockchain::BlockchainError;
+use mona_types::storage::BlockchainError;
 use consensus_pos::Blake3Algorithm;
-use mona_crypto::hash_data_blake3;
 use rand::Rng; // Add Rng trait import
 pub mod coordinator;
 
@@ -890,7 +890,7 @@ fn process_peer_message(
             );
 
             // Check if we already have this block
-            let have_block = mona_blockchain::blockchain::BLOCKCHAIN_DATA.has_block_with_hash(&block_hash);
+            let have_block = mona_types::storage::BLOCKCHAIN_DATA.has_block_with_hash(&block_hash);
 
             if !have_block {
                 info!("Requesting block {} from peer {}", block_hash, peer_id);
@@ -919,7 +919,7 @@ fn process_peer_message(
         }
         NodeMessage::BlockRequest { block_hash } => {
             // Try to find the requested block
-            let block = mona_blockchain::blockchain::BLOCKCHAIN_DATA.get_block_by_hash(&block_hash);
+            let block = mona_types::storage::BLOCKCHAIN_DATA.get_block_by_hash(&block_hash);
 
             let response = match block {
                 Some(b) => {
@@ -947,11 +947,11 @@ fn process_peer_message(
 
                     // Verify and add the block to our chain
                     // This could be expanded with more sophisticated validation
-                    if mona_blockchain::blockchain::BLOCKCHAIN_DATA.add_block(b.clone()) {
+                    if mona_types::storage::BLOCKCHAIN_DATA.add_block(b.clone()) {
                         info!("Added block #{} from peer {}", b.index, peer_id);
 
                         // Save blockchain state immediately
-                        match mona_blockchain::blockchain::save_blockchain() {
+                        match mona_types::storage::save_blockchain() {
                             Ok(_) => (),
                             Err(e) => warn!("Failed to save blockchain after adding block: {}", e),
                         }
@@ -1228,7 +1228,7 @@ fn connect_to_peer(peer_addr: &str, config: &NodeConfig) -> Result<(), Blockchai
         blockchain_address: config.blockchain_address.clone(),
         protocol_version: PROTOCOL_VERSION.to_string(),
         is_validator: config.is_validator,
-        chain_height: mona_blockchain::blockchain::BLOCKCHAIN_DATA.len() as u64,
+        chain_height: mona_types::storage::BLOCKCHAIN_DATA.len() as u64,
         nonce: nonce.clone(), // Add nonce for security
     };
 

@@ -1,22 +1,32 @@
-use crate::block::{self, Block};
 use bincode;
 use consensus_pos::Blake3Algorithm;
-// Replace with common import
-use common::get_kari_dir;
 use log::{info, warn};
 use mona_storage::{BlockchainStorage, RocksDBStorage, StorageError};
-use mona_types::address::Address;
 use serde::{Deserialize, Serialize};
 
 use lazy_static::lazy_static;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, RwLock, atomic::{AtomicU64, Ordering}};
+use std::path::PathBuf;
+
+use crate::address::Address;
+use crate::storage::block::Block;
+use crate::{Transaction};
+
+pub mod block;
+
+// Local implementation of get_kari_dir
+fn get_kari_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".kari")
+}
 
 // Define improved thread-safe blockchain globals
 lazy_static! {
-    pub static ref BLOCKCHAIN_DATA: BlockchainData = BlockchainData::new();
+    pub static ref BLOCKCHAIN_DATA: BlockchainData = BlockchainData::new();        
     pub static ref BALANCES: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
-    pub static ref PENDING_TRANSACTIONS: Mutex<VecDeque<block::Transaction>> = Mutex::new(VecDeque::new());
+    pub static ref PENDING_TRANSACTIONS: Mutex<VecDeque<Transaction>> = Mutex::new(VecDeque::new());
 }
 
 /// Improved blockchain data container with thread-safety and performance features
@@ -223,13 +233,13 @@ impl std::fmt::Display for BlockchainError {
 
 // Helper function to normalize addresses
 pub fn normalize_address(address: &str) -> Result<Address, BlockchainError> {
-    Address::from_hex_literal(address)
-        .map_err(|_| BlockchainError::InvalidAddress(format!("Invalid address format: {}", address)))
+    // Convert string address to Address struct using the from_hex method or similar
+    Address::from_hex(address).map_err(|e| BlockchainError::InvalidAddress(format!("Failed to parse address: {}", e)))
 }
 
 // Add a function to handle Address directly
 pub fn get_hex_from_address(address: &Address) -> String {
-    address.to_hex_literal()
+    address.to_string()
 }
 
 pub fn get_balance(address: &str) -> Result<u64, BlockchainError> {
@@ -279,12 +289,12 @@ pub fn get_balance(address: &str) -> Result<u64, BlockchainError> {
 
 // Add a new function that accepts Address directly
 pub fn get_address_balance(address: &Address) -> Result<u64, BlockchainError> {
-    get_balance(&address.to_hex_literal())
+    get_balance(&address.to_string())
 }
 
 
 /// Enhanced function to prioritize VM function calls with reduced memory usage
-pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> {
+pub fn get_next_block_transactions(max_count: usize) -> Vec<Transaction> {
     let mut result = Vec::with_capacity(max_count.min(1000)); // Pre-allocate with reasonable size
     
     // Try to get pending transactions
@@ -352,7 +362,7 @@ pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> 
 }
 
 // Optimized function to get pending transactions with reduced allocations
-pub fn get_pending_transactions(max_count: usize) -> Vec<block::Transaction> {
+pub fn get_pending_transactions(max_count: usize) -> Vec<Transaction> {
     let max_count = max_count.min(10000); // Prevent excessive memory allocation
     let mut result = Vec::with_capacity(max_count);
     
@@ -407,18 +417,18 @@ pub fn load_blockchain() -> Result<(), StorageError> {
                     
                     // Process miner rewards
                     if let Ok(addr) = normalize_address(&block.address) {
-                        let miner_address = addr.to_hex_literal();
+                        let miner_address = addr.to_string();
                         *balances.entry(miner_address).or_insert(0) += block.tokens;
                     }
 
                     // Process transactions in batch
                     for tx in &block.transactions {
-                        let tx_sender = tx.sender.to_hex_literal();
-                        let tx_receiver = tx.receiver.to_hex_literal();
+                        let tx_sender = tx.sender.to_string();
+                        let tx_receiver = tx.receiver.to_string();
                         
                         // Use entry API to reduce lookups
                         *balances.entry(tx_sender).or_insert(0) = 
-                            balances.get(&tx.sender.to_hex_literal()).unwrap_or(&0).saturating_sub(tx.amount);
+                            balances.get(&tx.sender.to_string()).unwrap_or(&0).saturating_sub(tx.amount);
                         *balances.entry(tx_receiver).or_insert(0) += tx.amount;
                     }
                 }

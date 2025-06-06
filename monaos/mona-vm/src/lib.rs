@@ -1,4 +1,5 @@
-use mona_blockchain::blockchain::BLOCKCHAIN_DATA;
+use mona_types::storage::BLOCKCHAIN_DATA;
+use mona_types::Transaction;
 use move_package::compilation::compiled_package::CompiledUnitWithSource;
 use move_package::{source_package::layout::SourcePackageLayout, BuildConfig};
 use move_compiler::compiled_unit::CompiledUnit;
@@ -25,7 +26,6 @@ use mona_types::gas::{
 
 // New imports for blockchain integration
 use std::sync::{Arc, RwLock};
-use mona_blockchain::block::Transaction;
 use lazy_static::lazy_static;
 use mona_crypto::verify_signature;
 
@@ -34,7 +34,7 @@ use mona_storage::{BlockchainStorage, RocksDBStorage};
 use common::get_kari_dir;
 
 // Import for transaction submission - use blockchain directly to avoid circular dependency
-use mona_blockchain::blockchain::PENDING_TRANSACTIONS;
+use mona_types::storage::PENDING_TRANSACTIONS;
 
 // VM Transaction State Manager - Make it public so it can be accessed by the RPC API
 lazy_static! {
@@ -913,8 +913,8 @@ impl Publish {
             // Create blockchain transaction
             let tx_data = format!("VM_MODULE:{}:{}:{}", 
                 module_name, bytecode.len(), hex::encode(sha3::Sha3_256::digest(&bytecode)));
-            
-            let blockchain_tx = mona_blockchain::block::Transaction {
+
+            let blockchain_tx = Transaction {
                 transaction_id: format!("{}_{}", deploy_tx_id, module_name),
                 sender: (*address).into(),
                 receiver: (*address).into(),

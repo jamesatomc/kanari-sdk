@@ -12,6 +12,9 @@ pub mod wallet;
 pub mod keystore;
 pub mod compression;
 
+// Import consensus_pos for Blake3 functionality
+use consensus_pos::Blake3Algorithm;
+
 // Re-export signature functionality
 pub use signatures::{
     sign_message,
@@ -101,9 +104,7 @@ pub fn hash_data_with_algorithm(data: &[u8], algorithm: HashAlgorithm) -> Vec<u8
             hasher.finalize().to_vec()
         },
         HashAlgorithm::Blake3 => {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(data);
-            hasher.finalize().as_bytes().to_vec()
+            Blake3Algorithm::hash(data)
         }
     }
 }

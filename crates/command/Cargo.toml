@@ -23,6 +23,7 @@ kari-move.workspace = true
 mona-blockchain.workspace = true
 mona-storage.workspace = true
 mona-crypto.workspace = true
+mona-types.workspace = true
 serde_yaml.workspace = true
 network.workspace = true
 consensus-pos.workspace = true

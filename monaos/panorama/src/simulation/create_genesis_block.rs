@@ -1,14 +1,15 @@
 use consensus_pos::Blake3Algorithm;
 use log::{error, info};
 use mona_types::address::Address;
+use mona_types::storage::block::Block;
+use mona_types::Transaction;
 
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::json;
 
 
-use mona_blockchain::block::{Block, Transaction};
-use mona_blockchain::blockchain::normalize_address;
+use  mona_types::storage::normalize_address;
 
 use mona_types::kari::{KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KARI};
 

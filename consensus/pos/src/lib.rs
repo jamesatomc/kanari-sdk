@@ -11,6 +11,14 @@ impl Blake3Algorithm {
     pub fn new() -> Self {
         Blake3Algorithm
     }
+    
+    /// Static method to hash data and return Vec<u8> for compatibility
+    pub fn hash(input: &[u8]) -> Vec<u8> {
+        let mut hasher = Hasher::new();
+        hasher.update(input);
+        let result = hasher.finalize();
+        result.as_bytes().to_vec()
+    }
 }
 
 pub trait HashAlgorithm {

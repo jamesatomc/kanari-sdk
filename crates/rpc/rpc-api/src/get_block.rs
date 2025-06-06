@@ -1,7 +1,8 @@
 use chrono;
 use jsonrpc_core::{Error as RpcError, ErrorCode, Params, Result as JsonRpcResult};
+use mona_blockchain::CHAIN_ID;
 use mona_types::address::Address;
-use mona_blockchain::{blockchain::{BLOCKCHAIN_DATA, get_balance, load_blockchain_with_retry}, chain_id::CHAIN_ID};
+use mona_types::{storage::{BLOCKCHAIN_DATA, get_balance, load_blockchain_with_retry}};
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 use std::str::FromStr;

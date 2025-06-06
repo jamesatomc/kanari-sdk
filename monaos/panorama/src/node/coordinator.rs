@@ -1,11 +1,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use log::{info, warn, debug};
+use mona_types::storage::block::Block;
+use mona_types::Transaction;
 use tokio::sync::mpsc;
 use serde::{Serialize, Deserialize};
-use mona_blockchain::block::{Block, Transaction};
 use consensus_pos::Blake3Algorithm;
-use mona_blockchain::blockchain::BlockchainError;
+use mona_types::storage::BlockchainError;
 use std::net::ToSocketAddrs;
 
 use super::{send_message_to_peer, ACTIVE_CONNECTIONS, NodeMessage};

@@ -1,7 +1,7 @@
 use std::{str::FromStr, time::{SystemTime, UNIX_EPOCH}};
 use jsonrpc_core::{Params, Result as JsonRpcResult, Error as RpcError, ErrorCode};
 
-use mona_blockchain::blockchain::load_blockchain_with_retry;
+use mona_types::storage::load_blockchain_with_retry;
 use mona_crypto::load_wallet;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};

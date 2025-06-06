@@ -1,6 +1,7 @@
-use mona_blockchain::{block::Transaction, blockchain::{get_balance, normalize_address, save_blockchain, BlockchainError, BALANCES}};
+
 use crate::utils::{GAS_FEE_COLLECTOR, calculate_total_transaction_cost};
 pub mod verify_transaction;
+use mona_types::{storage::{get_balance, normalize_address, save_blockchain, BlockchainError, BALANCES}, Transaction};
 use verify_transaction::verify_transaction;
 use mona_crypto::{load_wallet, secure_clear, is_password_strong}; // Add password strength check
 

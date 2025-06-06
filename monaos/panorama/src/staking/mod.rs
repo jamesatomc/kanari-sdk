@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
 use lazy_static::lazy_static;
+
+use mona_crypto::hash_data_blake3;
 use mona_storage::BlockchainStorage;
 use mona_types::address::Address;
 use mona_types::kari::{
@@ -12,8 +14,8 @@ use log::{debug, info, warn};
 use serde::{Serialize, Deserialize};
 use bincode;
 use std::time::{SystemTime, UNIX_EPOCH};
-use mona_blockchain::blockchain::{BlockchainError, BALANCES, normalize_address};
-use mona_crypto::hash_data_blake3;
+use  mona_types::storage::{BlockchainError, BALANCES, normalize_address};
+
 
 // Enhanced constants aligned with Move staking module
 pub const MIN_NODE_STAKE: u64 = 200_000_000_000; // 200 KARI in KA (matches Move)
@@ -114,7 +116,7 @@ pub fn stake_tokens_enhanced(
     }
     
     // Verify balance
-    let balance = mona_blockchain::blockchain::get_balance(&address_str)?;
+    let balance = mona_types::storage::get_balance(&address_str)?;
     if balance < amount {
         return Err(BlockchainError::InsufficientFunds(
             format!("Insufficient balance for staking: {} < {}", balance, amount)
@@ -333,7 +335,7 @@ pub fn distribute_rewards_enhanced(block_height: u32) -> Result<u64, BlockchainE
         Err(_) => return Err(BlockchainError::Transaction("Invalid pool address".to_string())),
     };
     
-    let pool_balance = mona_blockchain::blockchain::get_balance(&pool_addr_str)?;
+    let pool_balance = mona_types::storage::get_balance(&pool_addr_str)?;
     if pool_balance == 0 {
         info!("No funds in reward pool");
         return Ok(0);
@@ -377,7 +379,7 @@ pub fn distribute_rewards_enhanced(block_height: u32) -> Result<u64, BlockchainE
                 
                 // Apply commission (validator keeps commission, rest goes to delegators)
                 let commission = (validator_reward * validator_info.commission_rate) / 10000;
-                let delegator_reward = validator_reward - commission;
+                let _delegator_reward = validator_reward - commission;
                 
                 // Add to validator's accumulated rewards
                 node.accumulated_rewards = node.accumulated_rewards.saturating_add(commission);

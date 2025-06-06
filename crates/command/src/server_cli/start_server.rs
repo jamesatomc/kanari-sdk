@@ -3,7 +3,7 @@ use network::NetworkConfig;
 use panorama::simulation::run_blockchain;
 
 use common::{load_kanari_config, save_kanari_config, ensure_network_config, load_config};
-use mona_blockchain::blockchain::{load_blockchain, save_blockchain};
+use mona_types::storage::{load_blockchain, save_blockchain};
 use mona_blockchain::chain_id::CHAIN_ID;
 use rpc_api::start_rpc_server;
 

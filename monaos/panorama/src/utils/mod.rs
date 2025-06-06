@@ -1,8 +1,8 @@
+use mona_types::Transaction;
 use tokio::sync::mpsc;
 use log::{info, error};
 use rand::{Rng, thread_rng};
 
-use mona_blockchain::block::Transaction;
 use crate::simulation::add_pending_transaction;
 // Add mona-crypto imports for enhanced security
 use mona_crypto::{hash_data_blake3, HashAlgorithm, hash_data_with_algorithm, secure_clear};

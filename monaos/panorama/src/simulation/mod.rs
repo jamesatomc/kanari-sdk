@@ -1,5 +1,7 @@
 use consensus_pos::Blake3Algorithm;
 use log::{error, info, warn, debug};
+use mona_types::storage::block::Block;
+use mona_types::Transaction;
 use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -8,8 +10,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::str::FromStr;
 
-use mona_blockchain::block::{Block, Transaction};
-use mona_blockchain::blockchain::{save_blockchain, BALANCES, BLOCKCHAIN_DATA, normalize_address};
+use  mona_types::storage::{save_blockchain, BALANCES, BLOCKCHAIN_DATA, normalize_address};
 use crate::transfer_tokens::transfer_tokens;
 use mona_types::address::Address;
 use mona_types::kari::{KARI, KA_PER_KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KA, TOTAL_SUPPLY_KARI};
@@ -116,7 +117,7 @@ pub fn process_transfer(
                 let _ = tx.try_send(tx_json);
                 
                 // Force save blockchain state to ensure transaction persistence
-                match mona_blockchain::blockchain::save_blockchain() {
+                match  mona_types::storage::save_blockchain() {
                     Ok(_) => info!("Transaction recorded and blockchain state saved"),
                     Err(e) => warn!("Transaction recorded but failed to save state: {}", e),
                 }
@@ -267,7 +268,7 @@ pub fn run_blockchain(
     }
     
     // Check if this node can be a validator using Move-aligned constants
-    let node_balance = match mona_blockchain::blockchain::get_balance(&normalized_address) {
+    let node_balance = match  mona_types::storage::get_balance(&normalized_address) {
         Ok(balance) => balance,
         Err(_) => 0,
     };
@@ -360,7 +361,7 @@ pub fn run_blockchain(
         let _ = tx.try_send(status_json);
 
         // Check balance using both original and normalized address for troubleshooting
-        match mona_blockchain::blockchain::get_balance(&normalized_address) {
+        match  mona_types::storage::get_balance(&normalized_address) {
             Ok(balance) => {
                 let balance_in_kari = balance as f64 / KA_PER_KARI as f64;
                 info!(
@@ -373,7 +374,7 @@ pub fn run_blockchain(
 
         // Debug: Also check with original address if they're different
         if normalized_address != address {
-            match mona_blockchain::blockchain::get_balance(&address) {
+            match  mona_types::storage::get_balance(&address) {
                 Ok(balance) => {
                     debug!(
                         "Original address {} has {} {}A",
@@ -679,7 +680,7 @@ pub fn run_blockchain(
 
         // Enhanced balance checking
         if new_block.index % 5 == 0 {
-            match mona_blockchain::blockchain::get_balance(&normalized_address) {
+            match  mona_types::storage::get_balance(&normalized_address) {
                 Ok(balance) => {
                     // Enhanced balance update with staking details
                     let balance_json = json!({

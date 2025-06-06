@@ -8,9 +8,9 @@ use std::fs;
 use std::path::Path;
 
 
-use mona_blockchain::block::Transaction;
+use mona_types::Transaction;
 use panorama::simulation::add_pending_transaction;
-use mona_blockchain::blockchain::{save_blockchain, BALANCES};
+use mona_types::storage::{save_blockchain, BALANCES};
 use mona_types::address::Address;
 
 // Global logger initialization

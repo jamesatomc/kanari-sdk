@@ -1,7 +1,8 @@
-use mona_blockchain::{block::Transaction, blockchain::BlockchainError};
-use mona_crypto::{verify_signature, verify_signature_with_curve, hash_data_blake3};
+
 use key::keys::CurveType;
 use log;
+use mona_crypto::{hash_data_blake3, verify_signature, verify_signature_with_curve};
+use mona_types::{storage::BlockchainError, Transaction};
 
 // Add function to verify a transaction
 pub fn verify_transaction(transaction: &Transaction) -> Result<bool, BlockchainError> {
