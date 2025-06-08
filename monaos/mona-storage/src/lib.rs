@@ -4,11 +4,21 @@ use rocksdb::{DB, Error as RocksError, Options};
 use bincode;
 use log::{debug, info, warn, error};
 pub mod file_storage;
+pub mod smart_contract;
 
 pub use file_storage::{
     FileStorage,
     StorageError2,
     FileMetadata
+};
+
+pub use smart_contract::{
+    SmartContractStorage,
+    SmartContractAddress,
+    SmartContractMetadata,
+    MoveModuleInfo,
+    ContractStateSnapshot,
+    SmartContractEvent,
 };
 
 #[derive(Error, Debug)]

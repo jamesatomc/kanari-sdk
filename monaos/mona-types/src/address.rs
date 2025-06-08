@@ -3,11 +3,9 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize}; // Import Serialize and Deserialize
-                                     // Add this at the top with other imports
+use serde::{Deserialize, Serialize};
 use move_core_types::account_address::AccountAddress;
 
-// Add this implementation at the end of the file, right before or after the std::error::Error impl
 impl From<AccountAddress> for Address {
     fn from(addr: AccountAddress) -> Self {
         // Get the bytes from AccountAddress
@@ -42,6 +40,14 @@ impl Address {
 
     /// Zero address constant
     pub const ZERO: Self = Self([0u8; Self::LENGTH]);
+
+    /// Creates an all-zero address.
+    ///
+    /// This is functionally equivalent to `Address::ZERO` but provided as a method for consistency
+    /// or when a function call is preferred.
+    pub const fn zero() -> Self {
+        Self::ZERO
+    }
 
     /// Returns the underlying bytes
     pub fn to_bytes(&self) -> &[u8; Self::LENGTH] {
