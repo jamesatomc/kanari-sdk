@@ -6,7 +6,7 @@ use mona_types::address::Address;
 use crate::types::{ContractAddress, ContractEvent};
 
 /// Execution context passed to VM operations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
     /// Address that initiated the transaction
     pub caller: Address,

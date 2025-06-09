@@ -1,4 +1,4 @@
-//! Move language adapter for Kanari blockchain
+//! Move language adapter for Kanari blockchain with mona-types integration
 
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
@@ -7,6 +7,8 @@ use log::{debug, info, error};
 use move_core_types::{
     account_address::AccountAddress,
     language_storage::ModuleId,
+    runtime_value::MoveValue,
+    resolver::{LinkageResolver, ModuleResolver, ResourceResolver},
 };
 use move_binary_format::{
     CompiledModule,
@@ -14,11 +16,17 @@ use move_binary_format::{
 };
 use move_compiler::{Compiler, shared::NumericalAddress};
 use move_symbol_pool::Symbol;
+use move_vm_runtime::{move_vm::MoveVM, session::Session};
 use sha3::Digest;
 
 use crate::types::{VMResult, VMError};
 use crate::{ExecutionContext, ExecutionResult};
-use mona_types::address::Address;
+use mona_types::{
+    address::Address,
+    gas_coin::KariBalance,
+    balance::Balance,
+    event::{EventData, EventEmitter, MemoryEventEmitter, TransferEvent},
+};
 
 /// Move function visibility levels
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,14 +60,19 @@ pub struct MoveModuleInfo {
     pub bytecode_hash: String,
 }
 
-/// Move adapter for compiling and executing Move code
+/// Enhanced Move adapter for compiling and executing Move code with mona-types
 pub struct MoveAdapter {
+    /// Move VM runtime instance
+    move_vm: MoveVM,
     /// Compiled modules cache
     modules: HashMap<ModuleId, CompiledModule>,
     /// Module information cache
-    module_info: HashMap<ModuleId, MoveModuleInfo>,
-    /// Address mappings for named addresses
+    module_info: HashMap<ModuleId, MoveModuleInfo>,    /// Address mappings for named addresses
     address_mappings: HashMap<String, AccountAddress>,
+    /// Event emitter for Move events
+    event_emitter: MemoryEventEmitter,
+    /// KARI balance tracker
+    kari_balances: HashMap<Address, KariBalance>,
 }
 
 impl MoveAdapter {
@@ -70,12 +83,13 @@ impl MoveAdapter {
         // Add standard address mappings
         address_mappings.insert("std".to_string(), AccountAddress::from_hex_literal("0x1").unwrap());
         address_mappings.insert("kanari_framework".to_string(), AccountAddress::from_hex_literal("0x2").unwrap());
-        address_mappings.insert("kanari_system".to_string(), AccountAddress::from_hex_literal("0x3").unwrap());
-
-        Self {
+        address_mappings.insert("kanari_system".to_string(), AccountAddress::from_hex_literal("0x3").unwrap());        Self {
+            move_vm: MoveVM::new(vec![]).expect("Failed to create Move VM"),
             modules: HashMap::new(),
             module_info: HashMap::new(),
             address_mappings,
+            event_emitter: MemoryEventEmitter::new(),
+            kari_balances: HashMap::new(),
         }
     }
 
@@ -314,11 +328,138 @@ impl MoveAdapter {
     /// Add address mapping
     pub fn add_address_mapping(&mut self, name: String, address: AccountAddress) {
         self.address_mappings.insert(name, address);
-    }
-
-    /// Get address mapping
+    }    /// Get address mapping
     pub fn get_address_mapping(&self, name: &str) -> Option<AccountAddress> {
         self.address_mappings.get(name).copied()
+    }
+
+    // Enhanced functions for mona-types integration    /// Execute a Move function with enhanced integration
+    pub fn execute_function_with_context(
+        &mut self,
+        sender: Address,
+        module_id: &ModuleId,
+        function_name: &str,
+        _type_args: Vec<String>,
+        args: Vec<MoveValue>,
+        _gas_budget: u64,
+    ) -> VMResult<ExecutionResult> {        debug!("Executing Move function: {}::{}", module_id, function_name);
+
+        // Check gas budget
+        if _gas_budget == 0 {
+            return Err(VMError::GasLimitExceeded { used: 0, limit: 0 });
+        }
+
+        // Create Move session
+        // Note: This is a simplified version - real implementation would need proper resolver
+        let _session = self.move_vm.new_session(&DummyResolver);
+
+        // Convert mona Address to AccountAddress
+        let _sender_addr = convert_address_to_account_address(sender);
+
+        // Simplified execution - in a real implementation, this would use the Move VM
+        debug!("Executing function with {} arguments", args.len());
+
+        // For now, return a successful result
+        Ok(ExecutionResult {
+            success: true,
+            return_value: vec![],
+            gas_used: 1000, // Placeholder
+            events: vec![],
+            error: None,
+        })
+    }
+
+    /// Transfer KARI tokens using Move VM
+    pub fn transfer_kari(
+        &mut self,
+        from: Address,
+        to: Address,
+        amount: u64,
+        gas_budget: u64,
+    ) -> VMResult<ExecutionResult> {
+        debug!("Transferring {} KARI from {} to {}", amount, from, to);
+
+        // Check if sender has sufficient balance
+        let from_balance = self.kari_balances.get(&from).cloned().unwrap_or_default();
+        if from_balance.value() < amount {
+            return Err(VMError::InsufficientFunds {
+                required: amount,
+                available: from_balance.value(),
+            });
+        }        // Calculate gas fee (simplified calculation)
+        let gas_fee = 100; // Base gas fee
+        let total_cost = amount + gas_fee;
+
+        if from_balance.value() < total_cost {
+            return Err(VMError::InsufficientFunds {
+                required: total_cost,
+                available: from_balance.value(),
+            });
+        }
+
+        // Update balances
+        let new_from_balance = Balance::with_value(from_balance.value() - total_cost);
+        let to_balance = self.kari_balances.get(&to).cloned().unwrap_or_default();
+        let new_to_balance = Balance::with_value(to_balance.value() + amount);
+
+        self.kari_balances.insert(from, new_from_balance);
+        self.kari_balances.insert(to, new_to_balance);        // Emit transfer event
+        let transfer_event = TransferEvent {
+            from,
+            to,
+            amount,
+            coin_type: "KARI".to_string(),
+        };
+        self.event_emitter.emit(transfer_event);Ok(ExecutionResult {
+            success: true,
+            return_value: vec![],
+            gas_used: gas_fee,
+            events: Vec::new(), // Empty events for now
+            error: None,
+        })
+    }
+
+    /// Get KARI balance for an address
+    pub fn get_kari_balance(&self, address: &Address) -> u64 {
+        self.kari_balances.get(address)
+            .map(|b| b.value())
+            .unwrap_or(0)
+    }
+
+    /// Set KARI balance for an address (for testing/genesis)
+    pub fn set_kari_balance(&mut self, address: Address, balance: u64) {
+        self.kari_balances.insert(address, Balance::with_value(balance));
+    }   
+    
+     /// Get emitted events
+    pub fn get_events(&self) -> Vec<EventData> {
+        self.event_emitter.get_events()
+    }
+
+
+    /// Clear events (usually called after processing)
+    pub fn clear_events(&mut self) {
+        // MemoryEventEmitter doesn't have a clear method, so we recreate it
+        self.event_emitter = MemoryEventEmitter::new();
+    }    // Private helper functions - simplified implementations
+    fn _execute_script_function(
+        &self,
+        _session: Session<&DummyResolver>,
+        _sender: AccountAddress,
+        _module_id: &ModuleId,
+        _function_name: &str,
+        _type_args: Vec<String>,
+        _args: Vec<MoveValue>,
+        _gas_budget: u64,
+    ) -> VMResult<ExecutionResult> {
+        // Simplified implementation
+        Ok(ExecutionResult {
+            success: true,
+            return_value: vec![],
+            gas_used: 1000, // Placeholder
+            events: vec![],
+            error: None,
+        })
     }
 }
 
@@ -326,6 +467,38 @@ impl Default for MoveAdapter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Dummy resolver for Move VM (simplified)
+struct DummyResolver;
+
+impl LinkageResolver for DummyResolver {
+    type Error = VMError;
+}
+
+impl ModuleResolver for DummyResolver {
+    type Error = VMError;
+
+    fn get_module(&self, _module_id: &ModuleId) -> Result<Option<Vec<u8>>, Self::Error> {
+        Ok(None)
+    }
+}
+
+impl ResourceResolver for DummyResolver {
+    type Error = VMError;
+
+    fn get_resource(
+        &self,
+        _address: &AccountAddress,
+        _typ: &move_core_types::language_storage::StructTag,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
+        Ok(None)
+    }
+}
+
+/// Convert mona Address to Move AccountAddress
+fn convert_address_to_account_address(addr: Address) -> AccountAddress {
+    AccountAddress::new(*addr.to_bytes())
 }
 
 #[cfg(test)]

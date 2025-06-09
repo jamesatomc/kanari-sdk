@@ -156,7 +156,7 @@ impl Validator {    /// Validate an address format
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kari::KARI;
+    use crate::gas_coin::KARI;
 
     #[test]
     fn test_address_from_seed() {

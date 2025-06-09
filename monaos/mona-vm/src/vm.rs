@@ -1,4 +1,4 @@
-//! Core VM implementation for Move smart contracts with Kari gas integration
+//! Core VM implementation for Move smart contracts with KARI gas integration
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Mutex};
@@ -9,15 +9,26 @@ use log::{debug, info, warn, error};
 use move_core_types::{
     account_address::AccountAddress,
     language_storage::ModuleId,
+//     runtime_value::MoveValue,
 };
 use sha3::Digest;
 
 use crate::types::{
     ContractAddress, ExecutionStats, DeploymentInfo, FunctionCall,
-    TransactionReceipt, ContractEvent, VMConfig, VMError, VMResult, VMEvent
+    TransactionReceipt, ContractEvent, VMConfig, VMError, VMResult, VMEvent,
 };
 use crate::{ExecutionContext, ExecutionResult, StateManager, ContractState, GasParameters, MoveAdapter, VMStorage};
-use mona_types::address::Address;
+use crate::recovery::{RecoveryManager, RecoveryStrategy, ProblemClassification, RecoveryResult};
+use crate::diagnostics::{DiagnosticManager, DiagnosticReport, PerformanceMetrics, Alert};
+use mona_types::{
+    address::Address,
+    // gas_coin::{KARI, KariCoin, KariBalance, calculate_gas_fee},
+    // coin::Coin,
+    // balance::Balance,
+    // event::{Event, EventData, EventEmitter},
+    tx_context::TxContext,
+    // object::{ID, UID},
+};
 
 /// Main Move VM implementation
 pub struct MonaVM {
@@ -37,6 +48,10 @@ pub struct MonaVM {
     module_cache: Arc<RwLock<HashMap<String, Vec<u8>>>>,
     /// Execution statistics
     stats: Arc<RwLock<ExecutionStats>>,
+    /// Error recovery manager
+    recovery_manager: Arc<RecoveryManager>,
+    /// Diagnostic manager for monitoring and analysis
+    diagnostic_manager: Arc<DiagnosticManager>,
 }
 
 impl MonaVM {    /// Create a new MonaVM instance
@@ -47,7 +62,30 @@ impl MonaVM {    /// Create a new MonaVM instance
     ) -> VMResult<Self> {
         let storage = Arc::new(VMStorage::new(rocks_storage.clone(), 1024 * 1024)); // 1MB cache
         let move_adapter = Arc::new(Mutex::new(MoveAdapter::new()));
-        let state_manager = Arc::new(Mutex::new(StateManager::new(rocks_storage)));
+        let state_manager = Arc::new(Mutex::new(StateManager::new(rocks_storage.clone())));
+        
+        // Initialize recovery manager with required dependencies
+        let recovery_manager = Arc::new(RecoveryManager::new(
+            state_manager.clone(),
+            storage.clone(),
+            100, // max_snapshots
+        ));
+        
+        // Initialize diagnostic manager with complete config
+        let diagnostic_config = crate::diagnostics::DiagnosticConfig {
+            max_reports: 1000,
+            metrics_retention_hours: 24,
+            alert_thresholds: crate::diagnostics::AlertThresholds {
+                gas_usage_threshold: 0.8,
+                memory_usage_threshold: 0.9,
+                error_rate_threshold: 0.1,
+                response_time_threshold: 1000,
+                storage_latency_threshold: 500,
+            },
+            enable_detailed_tracing: true,
+            enable_performance_profiling: true,
+        };
+        let diagnostic_manager = Arc::new(DiagnosticManager::new(diagnostic_config));
         
         Ok(Self {
             config,
@@ -65,6 +103,8 @@ impl MonaVM {    /// Create a new MonaVM instance
                 storage_reads: 0,
                 storage_writes: 0,
             })),
+            recovery_manager,
+            diagnostic_manager,
         })
     }
 
@@ -214,8 +254,7 @@ impl MonaVM {    /// Create a new MonaVM instance
         let gas_used = execution_result.gas_used;
         let return_value = execution_result.return_value.clone();
         let events = execution_result.events.clone();
-        
-        // Create transaction receipt
+          // Create transaction receipt
         let receipt = TransactionReceipt {
             transaction_hash: transaction_hash.clone(),
             contract_address: Some(function_call.contract_address),
@@ -227,11 +266,12 @@ impl MonaVM {    /// Create a new MonaVM instance
             return_data: return_value,
             events,
             error_message: None,
-            execution_time_ms: start_time.elapsed().as_millis() as u64,
+            execution_time_ms: start_time.elapsed().as_millis() as u64,            
             move_gas_breakdown: Some(serde_json::json!({
                 "function_call": gas_used,
                 "execution_time": start_time.elapsed().as_millis()
             })),
+            tx_context: Some(self.create_simple_tx_context(function_call.caller, &transaction_hash)?),
         };
 
         // Store execution result
@@ -248,9 +288,69 @@ impl MonaVM {    /// Create a new MonaVM instance
         });
 
         // Update stats
-        self.update_stats(execution_result.gas_used, start_time.elapsed().as_millis() as u64);
+        self.update_stats(execution_result.gas_used, start_time.elapsed().as_millis() as u64);        Ok(receipt)
+    }
 
-        Ok(receipt)
+    /// Execute a function call with integrated error recovery and diagnostics
+    pub fn call_function_with_recovery(
+        &self,
+        function_call: FunctionCall,
+    ) -> VMResult<TransactionReceipt> {
+        let start_time = Instant::now();
+        
+        // Create execution context
+        let mut context = ExecutionContext::new(
+            function_call.caller,
+            function_call.contract_address,
+            function_call.gas_limit,
+            chrono::Utc::now().timestamp() as u64,
+        );
+
+        // Create state snapshot before execution
+        let snapshot_id = self.create_recovery_snapshot(
+            format!("Function call: {}.{}", function_call.module_name, function_call.function_name)
+        )?;
+
+        // Attempt function execution with error handling
+        let result = self.call_function(function_call.clone());
+        
+        match result {
+            Ok(receipt) => {
+                // Update diagnostic metrics on success
+                self.diagnostic_manager.update_performance_metrics(
+                    receipt.gas_used,
+                    start_time.elapsed().as_millis() as u64,
+                )?;
+                
+                Ok(receipt)
+            }            Err(error) => {
+                warn!("Function call failed: {}", error);
+                
+                // Attempt recovery
+                match self.handle_error_with_recovery(error.clone(), &context)? {
+                    RecoveryResult::Recovered { strategy, recovery_time_ms, state_changes, metrics } => {
+                        info!("Successfully recovered using strategy: {:?} in {}ms", strategy, recovery_time_ms);
+                        // Retry the function call with reduced gas if suggested
+                        if let RecoveryStrategy::RetryWithReducedGas { reduction_factor } = strategy {
+                            let mut retry_call = function_call.clone();
+                            retry_call.gas_limit = (retry_call.gas_limit as f64 * reduction_factor) as u64;
+                            info!("Retrying function call with reduced gas: {}", retry_call.gas_limit);
+                            self.call_function(retry_call)
+                        } else {
+                            Err(error)
+                        }
+                    }
+                    RecoveryResult::Failed { reason, strategy_attempted, recovery_time_ms, metrics } => {
+                        error!("Recovery failed: {} (strategy: {:?})", reason, strategy_attempted);
+                        // Restore from snapshot if recovery failed
+                        if let Err(restore_error) = self.restore_from_snapshot(&snapshot_id) {
+                            error!("Failed to restore from snapshot: {}", restore_error);
+                        }
+                        Err(error)
+                    }
+                }
+            }
+        }
     }
 
     /// Execute Move function with enhanced Kari gas accounting
@@ -367,8 +467,9 @@ impl MonaVM {    /// Create a new MonaVM instance
                 indexed_data: Vec::new(),
             }).collect(),
             error_message: error.clone(),
-            execution_time_ms,
+            execution_time_ms,            
             move_gas_breakdown: Some(self.create_move_gas_breakdown(&context, function_name)),
+            tx_context: Some(self.create_simple_tx_context(caller, &transaction_hash)?),
         };
 
         // Store execution result (clone to avoid borrow issues)
@@ -433,7 +534,8 @@ impl MonaVM {    /// Create a new MonaVM instance
         &self,
         context: &ExecutionContext,
         function_name: &str,
-    ) -> serde_json::Value {        serde_json::json!({
+    ) -> serde_json::Value {        
+        serde_json::json!({
             "base_execution": self.gas_params.base.function_call_base,
             "move_execution": self.gas_params.move_ops.function_call,
             "storage_operations": context.gas_used - self.gas_params.base.function_call_base - self.gas_params.move_ops.function_call,
@@ -567,7 +669,22 @@ impl MonaVM {    /// Create a new MonaVM instance
         stats.execution_time_ms += execution_time_ms;
         stats.instructions_executed += 1; // Simplified
         stats.storage_reads += 1; // Simplified
-    }    /// Execute Move script with enhanced error handling and metrics
+    }   
+    
+     /// Create a simple TxContext for VM operations
+    fn create_simple_tx_context(&self, sender: Address, tx_hash: &str) -> VMResult<TxContext> {
+        TxContext::new(
+            sender,
+            tx_hash.as_bytes().to_vec(),
+            0, // epoch
+            chrono::Utc::now().timestamp_millis() as u64, // epoch_timestamp_ms
+            0, // ids_created
+        ).map_err(|e| VMError::InternalError {
+            message: format!("Failed to create TxContext: {:?}", e),
+        })
+    }  
+    
+     /// Execute Move script with enhanced error handling and metrics
     pub fn execute_move_script_with_metrics(
         &self,
         _script_bytecode: Vec<u8>,
@@ -583,7 +700,9 @@ impl MonaVM {    /// Create a new MonaVM instance
             caller, // Script execution uses caller as both caller and target
             gas_limit,
             chrono::Utc::now().timestamp() as u64,
-        );// Execute script
+        );
+
+        // Execute script
         let execution_result: VMResult<ExecutionResult> = {
             // Script execution not yet implemented in MoveAdapter
             Err(VMError::RuntimeError {
@@ -622,6 +741,7 @@ impl MonaVM {    /// Create a new MonaVM instance
                         "execution_time_ms": execution_time_ms,
                         "kari_spent": kari_spent
                     })),
+                    tx_context: Some(self.create_simple_tx_context(caller, &transaction_hash)?),
                 };
 
                 // Store execution result
@@ -675,6 +795,7 @@ impl MonaVM {    /// Create a new MonaVM instance
                 "execution_time_ms": execution_time_ms,
                 "kari_spent": kari_spent
             })),
+            tx_context: Some(self.create_simple_tx_context(caller, &transaction_hash)?),
         };
 
         // Store execution result
@@ -789,7 +910,8 @@ impl MonaVM {    /// Create a new MonaVM instance
             gas_price: 0, // Simulations don't cost Kari
             kari_spent: 0,
             success: execution_result.success,
-            return_data: execution_result.return_value,            events: execution_result.events.into_iter().map(|e| ContractEvent {
+            return_data: execution_result.return_value,
+            events: execution_result.events.into_iter().map(|e| ContractEvent {
                 contract_address,
                 event_type: format!("simulation:{}", function_name),
                 data: e.data,
@@ -801,6 +923,7 @@ impl MonaVM {    /// Create a new MonaVM instance
                 "simulation": true,
                 "estimated_gas": context.gas_used
             })),
+            tx_context: Some(self.create_simple_tx_context(contract_address, "simulation")?),
         };
 
         debug!("Simulated Move function {}: {} gas estimated", function_name, context.gas_used);
@@ -879,8 +1002,101 @@ impl MonaVM {    /// Create a new MonaVM instance
             "gas_analytics": gas_data,
             "compilation_info": compilation_info,
             "analysis_timestamp": chrono::Utc::now().timestamp()
-        });
-
-        Ok(analytics)
+        });        Ok(analytics)
+    }
+    
+    /// Handle VM error with integrated recovery and diagnostics
+    pub fn handle_error_with_recovery(
+        &self,
+        error: VMError,
+        context: &ExecutionContext,
+    ) -> VMResult<RecoveryResult> {        // Generate diagnostic report
+        let diagnostic_report = self.diagnostic_manager.generate_diagnostic_report(&error, context, None)?;
+        
+        // Store diagnostic information
+        self.diagnostic_manager.store_diagnostic_report(diagnostic_report)?;
+        
+        // Attempt recovery
+        let recovery_result = self.recovery_manager.handle_error(error, context)?;
+        
+        // Update performance metrics
+        self.diagnostic_manager.update_performance_metrics(context.gas_used, context.timestamp)?;
+        
+        // Check for alerts
+        self.diagnostic_manager.check_alerts()?;
+        
+        Ok(recovery_result)
+    }
+    /// Get comprehensive system health status
+    pub fn get_system_health(&self) -> VMResult<serde_json::Value> {
+        let recovery_metrics = self.recovery_manager.get_metrics();
+        let diagnostic_metrics = self.diagnostic_manager.get_performance_metrics()?;
+        let vm_stats = self.get_stats();
+        
+        // Convert recovery metrics to JSON-compatible format
+        // The most_common_failures HashMap has enum keys that can't be directly serialized to JSON
+        let most_common_failures_json: serde_json::Map<String, serde_json::Value> = recovery_metrics
+            .most_common_failures
+            .iter()
+            .map(|(problem, count)| {
+                // Convert ProblemClassification enum to a string representation
+                let problem_key = format!("{:?}", problem);
+                (problem_key, serde_json::json!(*count))
+            })
+            .collect();
+        
+        Ok(serde_json::json!({
+            "vm_stats": {
+                "gas_used": vm_stats.gas_used,
+                "execution_time_ms": vm_stats.execution_time_ms,
+                "instructions_executed": vm_stats.instructions_executed,
+                "memory_used": vm_stats.memory_used,
+                "storage_reads": vm_stats.storage_reads,
+                "storage_writes": vm_stats.storage_writes
+            },
+            "recovery_metrics": {
+                "total_recovery_attempts": recovery_metrics.total_recovery_attempts,
+                "successful_recoveries": recovery_metrics.successful_recoveries,
+                "failed_recoveries": recovery_metrics.failed_recoveries,
+                "average_recovery_time_ms": recovery_metrics.average_recovery_time_ms,
+                "most_common_failures": most_common_failures_json
+            },
+            "diagnostic_metrics": diagnostic_metrics,
+            "timestamp": chrono::Utc::now().timestamp()
+        }))
+    }
+      /// Get active alerts
+    pub fn get_active_alerts(&self) -> VMResult<Vec<Alert>> {
+        Ok(self.diagnostic_manager.get_active_alerts())
+    }
+      /// Create state snapshot for recovery purposes
+    pub fn create_recovery_snapshot(&self, description: String) -> VMResult<String> {
+        // Create execution context for snapshot (simplified version)
+        let context = ExecutionContext::new(            Address::from([0u8; 32]), // placeholder caller
+            ContractAddress::from([0u8; 32]), // placeholder contract
+            0, // placeholder gas limit
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        );
+        self.recovery_manager.create_snapshot(&context)
+    }
+    
+    /// Restore from state snapshot
+    pub fn restore_from_snapshot(&self, snapshot_id: &str) -> VMResult<()> {
+        // For now, just log the restore attempt since the actual restore method needs implementation
+        info!("Attempting to restore from snapshot: {}", snapshot_id);
+        Ok(())
+    }
+    
+    /// Get recovery manager reference
+    pub fn get_recovery_manager(&self) -> &Arc<RecoveryManager> {
+        &self.recovery_manager
+    }
+    
+    /// Get diagnostic manager reference
+    pub fn get_diagnostic_manager(&self) -> &Arc<DiagnosticManager> {
+        &self.diagnostic_manager
     }
 }

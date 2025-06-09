@@ -1,7 +1,7 @@
 //! Common types used throughout the VM
 
 use serde::{Serialize, Deserialize};
-use mona_types::address::Address;
+use mona_types::{address::Address, tx_context::TxContext};
 use thiserror::Error;
 
 /// Type alias for contract addresses
@@ -52,9 +52,10 @@ pub struct TransactionReceipt {
     pub success: bool,
     pub return_data: Vec<u8>,
     pub events: Vec<ContractEvent>,
-    pub error_message: Option<String>,
+    pub error_message: Option<String>,    
     pub execution_time_ms: u64,
     pub move_gas_breakdown: Option<serde_json::Value>,
+    pub tx_context: Option<TxContext>,
 }
 
 /// Contract event emitted during execution
@@ -109,11 +110,14 @@ pub enum VMError {
     InternalError { message: String },
 
     #[error("Contract error: {message}")]
-    ContractError { message: String },
-
-    #[error("Runtime error: {message}")]
+    ContractError { message: String },    #[error("Runtime error: {message}")]
     RuntimeError { message: String },
 
+    #[error("Insufficient funds for transaction")]
+    InsufficientFunds { required: u64, available: u64 },
+
+    #[error("Serialization error: {message}")]
+    SerializationError { message: String },
 }
 
 /// VM result type
