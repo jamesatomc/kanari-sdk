@@ -52,11 +52,10 @@ impl Transaction {    // Create a message representation of the transaction for 
         message.extend_from_slice(&self.gas_fee.to_le_bytes()); // Include gas fee in the signed message
         message.extend_from_slice(&self.timestamp.to_le_bytes());
         message.extend_from_slice(&self.kari_gas_used.to_le_bytes()); // Include Kari gas usage
-        
-        // Include contract data if present
+          // Include contract data if present
         if let Some(contract_data) = &self.contract_data {
             if let Some(contract_addr) = &contract_data.contract_address {
-                message.extend_from_slice(contract_addr.as_bytes());
+                message.extend_from_slice(contract_addr.as_ref());
             }
             if let Some(function_name) = &contract_data.function_name {
                 message.extend_from_slice(function_name.as_bytes());

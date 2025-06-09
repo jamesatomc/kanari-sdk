@@ -6,6 +6,7 @@ use common::get_kari_dir;
 use log::{info, warn};
 use mona_storage::{BlockchainStorage, RocksDBStorage, StorageError};
 use mona_types::address::Address;
+use mona_vm::types::FunctionCall;
 use serde::{Deserialize, Serialize};
 
 use lazy_static::lazy_static;
@@ -212,18 +213,29 @@ impl BlockchainData {
         
         let contract_address = contract_data.contract_address
             .ok_or("Missing contract address for call")?;
-        
-        let function_name = contract_data.function_name.as_ref()
+          let function_name = contract_data.function_name.as_ref()
             .ok_or("Missing function name for call")?;
 
-        // Execute function call using VM
-        let result = vm.call_function(
+        // Get module name from contract metadata
+        let module_name = match vm.get_contract_info(contract_address) {
+            Ok(Some(contract_state)) => contract_state.metadata.module_name,
+            Ok(None) => return Err("Contract not found".to_string()),
+            Err(_) => "default_module".to_string(), // Fallback for compatibility
+        };
+
+        // Create FunctionCall struct for VM
+        let function_call = FunctionCall {
             contract_address,
-            function_name.clone(),
-            contract_data.arguments.clone(),
-            transaction.sender,
-            contract_data.gas_limit,
-        ).map_err(|e| format!("Function call failed: {:?}", e))?;
+            module_name,
+            function_name: function_name.clone(),
+            caller: transaction.sender,
+            args: contract_data.arguments.clone(),
+            gas_limit: contract_data.gas_limit,
+        };
+
+        // Execute function call using VM
+        let result = vm.call_function(function_call)
+            .map_err(|e| format!("Function call failed: {:?}", e))?;
 
         Ok(ContractExecutionResult {
             transaction_hash: transaction.transaction_id.clone(),

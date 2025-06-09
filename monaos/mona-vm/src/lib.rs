@@ -17,6 +17,7 @@ pub use types::{
     ContractAddress, ExecutionStats, DeploymentInfo, 
     FunctionCall, TransactionReceipt, ContractEvent
 };
+pub use vm::MonaVM;
 pub use executor::{ExecutionContext, ExecutionResult};
 pub use state::{StateManager, ContractState};
 pub use gas::{GasParameters, GasCosts, MoveCosts, StorageCosts, BaseCosts};
