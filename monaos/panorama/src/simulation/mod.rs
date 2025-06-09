@@ -19,6 +19,9 @@ use p2p_protocol::node::{NodeConfig, start_node, stop_node, propagate_block, get
 pub mod create_genesis_block;
 use create_genesis_block::create_genesis_block;
 
+pub mod move_contract;
+pub use move_contract::MoveContractSimulator;
+
 
 // Function to parse and normalize address
 fn parse_address(address: &str) -> Result<Address, String> {

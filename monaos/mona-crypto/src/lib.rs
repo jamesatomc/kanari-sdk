@@ -99,11 +99,17 @@ pub fn hash_data_with_algorithm(data: &[u8], algorithm: HashAlgorithm) -> Vec<u8
             let mut hasher = Sha3_256::new();
             hasher.update(data);
             hasher.finalize().to_vec()
-        },
-        HashAlgorithm::Blake3 => {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(data);
-            hasher.finalize().as_bytes().to_vec()
+        },        HashAlgorithm::Blake3 => {
+            #[cfg(feature = "blake3")]
+            {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(data);
+                hasher.finalize().as_bytes().to_vec()
+            }
+            #[cfg(not(feature = "blake3"))]
+            {
+                panic!("Blake3 feature not enabled");
+            }
         }
     }
 }

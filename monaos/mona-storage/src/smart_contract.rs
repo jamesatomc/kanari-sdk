@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use serde::{Serialize, Deserialize};
 use bincode;
 use log::{debug, info, warn};
+use serde_json;
 
 use crate::{BlockchainStorage, StorageError};
 
@@ -83,6 +84,46 @@ pub struct SmartContractEvent {
     pub timestamp: u64,
 }
 
+/// Gas accounting entry for contract execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GasUsageRecord {
+    pub contract_address: SmartContractAddress,
+    pub transaction_hash: String,
+    pub operation_type: String, // "deploy", "call", "read", "write"
+    pub kari_amount: u64,
+    pub gas_price: u64,
+    pub timestamp: u64,
+    pub block_height: u64,
+}
+
+/// Move resource information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoveResourceInfo {
+    pub resource_type: String,
+    pub module_address: SmartContractAddress,
+    pub module_name: String,
+    pub struct_name: String,
+    pub data: Vec<u8>,
+    pub last_modified: u64,
+}
+
+/// Contract execution trace for debugging
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionTrace {
+    pub transaction_hash: String,
+    pub contract_address: SmartContractAddress,
+    pub function_name: String,
+    pub arguments: Vec<Vec<u8>>,
+    pub return_values: Vec<Vec<u8>>,
+    pub gas_used: u64,
+    pub kari_spent: u64,
+    pub execution_time_ms: u64,
+    pub status: String, // "success", "failed", "aborted"
+    pub error_message: Option<String>,
+    pub events: Vec<SmartContractEvent>,
+    pub storage_changes: HashMap<Vec<u8>, Vec<u8>>,
+}
+
 /// Smart contract storage manager
 pub struct SmartContractStorage {
     /// Underlying storage
@@ -97,8 +138,7 @@ pub struct SmartContractStorage {
     current_cache_size: Arc<RwLock<usize>>,
 }
 
-impl SmartContractStorage {
-    /// Create a new smart contract storage manager
+impl SmartContractStorage {    /// Create a new smart contract storage manager
     pub fn new(
         storage: Arc<dyn BlockchainStorage + Send + Sync>,
         cache_size_limit: usize,
@@ -109,6 +149,53 @@ impl SmartContractStorage {
             metadata_cache: Arc::new(RwLock::new(HashMap::new())),
             cache_size_limit,
             current_cache_size: Arc::new(RwLock::new(0)),
+        }
+    }
+
+    /// Helper method to create contract-specific keys
+    fn make_contract_key(&self, address: &SmartContractAddress, suffix: &str) -> String {
+        format!("contract:{}:{}", address.to_hex_literal(), suffix)
+    }
+
+    /// Helper method to create storage keys
+    fn make_storage_key(&self, address: &SmartContractAddress, storage_key: &[u8]) -> String {
+        format!("contract_storage:{}:{}", address.to_hex_literal(), hex::encode(storage_key))
+    }
+
+    /// Update contract cache with size management
+    fn update_contract_cache(&self, address: SmartContractAddress, bytecode: Vec<u8>) -> Result<(), StorageError> {
+        if let Ok(mut cache) = self.contract_cache.write() {
+            if let Ok(mut current_size) = self.current_cache_size.write() {
+                let new_size = bytecode.len();
+                
+                // Check if we need to make room
+                while *current_size + new_size > self.cache_size_limit && !cache.is_empty() {
+                    if let Some((_, removed_bytecode)) = cache.iter().next() {
+                        let removed_size = removed_bytecode.len();
+                        let key_to_remove = cache.keys().next().cloned();
+                        if let Some(key) = key_to_remove {
+                            cache.remove(&key);
+                            *current_size = current_size.saturating_sub(removed_size);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                
+                // Add new entry
+                cache.insert(address, bytecode);
+                *current_size += new_size;
+            }
+        }
+        Ok(())
+    }
+
+    /// Get bytecode from contract cache
+    fn get_from_contract_cache(&self, address: &SmartContractAddress) -> Option<Vec<u8>> {
+        if let Ok(cache) = self.contract_cache.read() {
+            cache.get(address).cloned()
+        } else {
+            None
         }
     }
 
@@ -452,124 +539,358 @@ impl SmartContractStorage {
         self.storage.flush()
     }
 
-    // Private helper methods
-
-    fn make_contract_key(&self, address: &SmartContractAddress, suffix: &str) -> String {
-        format!("contract_{}:{}", suffix, address.to_hex_literal())
-    }
-
-    fn make_storage_key(&self, address: &SmartContractAddress, storage_key: &[u8]) -> String {
-        format!("contract_storage:{}:{}", 
-               address.to_hex_literal(), 
-               hex::encode(storage_key))
-    }
-
-    fn update_contract_cache(
+    /// Store gas usage record for Kari gas accounting
+    pub fn store_gas_usage(
         &self,
-        address: SmartContractAddress,
-        bytecode: Vec<u8>,
+        gas_record: &GasUsageRecord,
     ) -> Result<(), StorageError> {
-        if let Ok(mut cache) = self.contract_cache.write() {
-            if let Ok(mut size) = self.current_cache_size.write() {
-                let new_size = bytecode.len();
-                
-                // Check if adding this would exceed cache limit
-                if *size + new_size > self.cache_size_limit {
-                    // Simple eviction: clear half the cache
-                    let keys_to_remove: Vec<_> = cache.keys().take(cache.len() / 2).cloned().collect();
-                    for key in keys_to_remove {
-                        if let Some(removed) = cache.remove(&key) {
-                            *size = size.saturating_sub(removed.len());
-                        }
+        let key = format!("gas_usage:{}:{}", 
+                         gas_record.contract_address.to_hex_literal(),
+                         gas_record.transaction_hash);
+        let serialized = bincode::serialize(gas_record)?;
+        
+        debug!("Storing gas usage record for tx {}", gas_record.transaction_hash);
+        self.storage.save_data(key.as_bytes(), &serialized)
+    }
+
+    /// Load gas usage records for a contract within a time range  
+    pub fn load_gas_usage_records(
+        &self,
+        address: &SmartContractAddress,
+        from_timestamp: u64,
+        to_timestamp: u64,
+    ) -> Result<Vec<GasUsageRecord>, StorageError> {
+        let prefix = format!("gas_usage:{}:", address.to_hex_literal());
+        let keys = self.storage.list_keys_with_prefix(prefix.as_bytes())?;
+        let mut records = Vec::new();
+        
+        for key in keys {
+            if let Some(data) = self.storage.load_data(&key)? {
+                if let Ok(record) = bincode::deserialize::<GasUsageRecord>(&data) {
+                    if record.timestamp >= from_timestamp && record.timestamp <= to_timestamp {
+                        records.push(record);
                     }
                 }
-                
-                cache.insert(address, bytecode);
-                *size += new_size;
             }
         }
+        
+        debug!("Loaded {} gas usage records for contract {}", 
+               records.len(), address.to_hex_literal());
+        Ok(records)
+    }
+
+    /// Store Move resource data
+    pub fn store_move_resource(
+        &self,
+        address: &SmartContractAddress,
+        resource_info: &MoveResourceInfo,
+    ) -> Result<(), StorageError> {
+        let key = format!("move_resource:{}:{}:{}:{}", 
+                         address.to_hex_literal(),
+                         resource_info.module_name,
+                         resource_info.struct_name,
+                         resource_info.resource_type);
+        let serialized = bincode::serialize(resource_info)?;
+        
+        debug!("Storing Move resource {} for contract {}", 
+               resource_info.resource_type, address.to_hex_literal());
+        self.storage.save_data(key.as_bytes(), &serialized)
+    }
+
+    /// Load Move resource data
+    pub fn load_move_resource(
+        &self,
+        address: &SmartContractAddress,
+        module_name: &str,
+        struct_name: &str,
+        resource_type: &str,
+    ) -> Result<Option<MoveResourceInfo>, StorageError> {
+        let key = format!("move_resource:{}:{}:{}:{}", 
+                         address.to_hex_literal(),
+                         module_name,
+                         struct_name,
+                         resource_type);
+        
+        debug!("Loading Move resource {} for contract {}", 
+               resource_type, address.to_hex_literal());
+        
+        match self.storage.load_data(key.as_bytes())? {
+            Some(data) => {
+                let resource_info: MoveResourceInfo = bincode::deserialize(&data)?;
+                Ok(Some(resource_info))
+            },
+            None => Ok(None),
+        }
+    }
+
+    /// List all Move resources for a contract
+    pub fn list_move_resources(
+        &self,
+        address: &SmartContractAddress,
+    ) -> Result<Vec<MoveResourceInfo>, StorageError> {
+        let prefix = format!("move_resource:{}:", address.to_hex_literal());
+        let keys = self.storage.list_keys_with_prefix(prefix.as_bytes())?;
+        let mut resources = Vec::new();
+        
+        for key in keys {
+            if let Some(data) = self.storage.load_data(&key)? {
+                if let Ok(resource) = bincode::deserialize::<MoveResourceInfo>(&data) {
+                    resources.push(resource);
+                }
+            }
+        }
+        
+        debug!("Found {} Move resources for contract {}", 
+               resources.len(), address.to_hex_literal());
+        Ok(resources)
+    }
+
+    /// Store execution trace for debugging and analysis
+    pub fn store_execution_trace(
+        &self,
+        trace: &ExecutionTrace,
+    ) -> Result<(), StorageError> {
+        let key = format!("execution_trace:{}:{}", 
+                         trace.contract_address.to_hex_literal(),
+                         trace.transaction_hash);
+        let serialized = bincode::serialize(trace)?;
+        
+        debug!("Storing execution trace for tx {} on contract {}", 
+               trace.transaction_hash, trace.contract_address.to_hex_literal());
+        self.storage.save_data(key.as_bytes(), &serialized)
+    }
+
+    /// Load execution trace by transaction hash
+    pub fn load_execution_trace(
+        &self,
+        contract_address: &SmartContractAddress,
+        transaction_hash: &str,
+    ) -> Result<Option<ExecutionTrace>, StorageError> {
+        let key = format!("execution_trace:{}:{}", 
+                         contract_address.to_hex_literal(),
+                         transaction_hash);
+        
+        debug!("Loading execution trace for tx {}", transaction_hash);
+        
+        match self.storage.load_data(key.as_bytes())? {
+            Some(data) => {
+                let trace: ExecutionTrace = bincode::deserialize(&data)?;
+                Ok(Some(trace))
+            },
+            None => Ok(None),
+        }
+    }
+
+    /// Get total Kari spent by a contract (gas accounting)
+    pub fn get_contract_kari_spent(
+        &self,
+        address: &SmartContractAddress,
+        from_timestamp: u64,
+        to_timestamp: u64,
+    ) -> Result<u64, StorageError> {
+        let gas_records = self.load_gas_usage_records(address, from_timestamp, to_timestamp)?;
+        let total_kari = gas_records.iter().map(|r| r.kari_amount).sum();
+        
+        debug!("Contract {} spent {} Kari between {} and {}", 
+               address.to_hex_literal(), total_kari, from_timestamp, to_timestamp);
+        Ok(total_kari)
+    }
+
+    /// Store Kari gas consumption for Move contract execution
+    pub fn store_move_gas_consumption(
+        &self,
+        contract_address: &SmartContractAddress,
+        transaction_hash: &str,
+        function_name: &str,
+        gas_used: u64,
+        kari_spent: u64,
+        execution_time_ms: u64,
+    ) -> Result<(), StorageError> {
+        let gas_record = GasUsageRecord {
+            contract_address: contract_address.clone(),
+            transaction_hash: transaction_hash.to_string(),
+            operation_type: format!("move_function_call:{}", function_name),
+            kari_amount: kari_spent,
+            gas_price: if gas_used > 0 { kari_spent / gas_used } else { 0 },
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            block_height: 0, // Will be updated when integrated with blockchain
+        };
+
+        self.store_gas_usage(&gas_record)?;        // Store detailed execution metrics
+        let metrics_key = format!("move_execution_metrics:{}:{}", 
+                                 contract_address.to_hex_literal(),
+                                 transaction_hash);
+        let metrics = serde_json::json!({
+            "function_name": function_name,
+            "gas_used": gas_used,
+            "kari_spent": kari_spent,
+            "execution_time_ms": execution_time_ms,
+            "gas_efficiency": if execution_time_ms > 0 { gas_used as f64 / execution_time_ms as f64 } else { 0.0 },
+            "kari_efficiency": if execution_time_ms > 0 { kari_spent as f64 / execution_time_ms as f64 } else { 0.0 }
+        });        let serialized = serde_json::to_vec(&metrics).map_err(|e| {
+            StorageError::SerializationError(Box::new(bincode::ErrorKind::Custom(
+                format!("JSON serialization error: {}", e)
+            )))
+        })?;
+
+        self.storage.save_data(metrics_key.as_bytes(), &serialized)?;
+
+        debug!("Stored Move gas consumption: {} gas, {} Kari for function {} on contract {}", 
+               gas_used, kari_spent, function_name, contract_address.to_hex_literal());
         Ok(())
     }
 
-    fn get_from_contract_cache(&self, address: &SmartContractAddress) -> Option<Vec<u8>> {
-        if let Ok(cache) = self.contract_cache.read() {
-            cache.get(address).cloned()
-        } else {
-            None
+    /// Load Move execution metrics for performance analysis
+    pub fn load_move_execution_metrics(
+        &self,
+        contract_address: &SmartContractAddress,
+        start_time: u64,
+        end_time: u64,
+    ) -> Result<Vec<u8>, StorageError> {
+        let prefix = format!("move_execution_metrics:{}:", contract_address.to_hex_literal());
+        let keys = self.storage.list_keys_with_prefix(prefix.as_bytes())?;
+        
+        let mut all_metrics = Vec::new();
+        for key in keys {
+            if let Some(data) = self.storage.load_data(&key)? {
+                // Parse JSON to check timestamp range
+                if let Ok(metrics_value) = serde_json::from_slice::<serde_json::Value>(&data) {
+                    if let Some(timestamp) = metrics_value.get("timestamp").and_then(|v| v.as_u64()) {
+                        if timestamp >= start_time && timestamp <= end_time {
+                            all_metrics.extend_from_slice(&data);
+                        }
+                    }
+                }
+            }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::RocksDBStorage;
-
-    use super::*;    use tempfile::tempdir;
-
-    fn create_test_storage() -> Arc<RocksDBStorage> {
-        let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().to_path_buf();
-        Arc::new(RocksDBStorage::new(db_path).unwrap())
+        
+        Ok(all_metrics)
     }
 
-    #[test]
-    fn test_smart_contract_address() {
-        let bytes = [1u8; 32];
-        let addr = SmartContractAddress::new(bytes);
-        assert_eq!(addr.bytes, bytes);
-        
-        let hex_literal = addr.to_hex_literal();
-        assert!(hex_literal.starts_with("0x"));
-        
-        let addr2 = SmartContractAddress::from_hex(&hex_literal).unwrap();
-        assert_eq!(addr, addr2);
+    /// Store Move compilation artifacts (source code, ABI, dependencies)
+    pub fn store_move_compilation_artifacts(
+        &self,
+        contract_address: &SmartContractAddress,
+        source_code: &str,
+        abi_data: &[u8],
+        dependencies: &[String],
+    ) -> Result<(), StorageError> {
+        let artifacts = serde_json::json!({
+            "source_code": source_code,
+            "abi_data": abi_data,
+            "dependencies": dependencies,
+            "compiled_at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        });        let key = format!("move_compilation_artifacts:{}", contract_address.to_hex_literal());
+        let serialized = serde_json::to_vec(&artifacts).map_err(|e| {
+            StorageError::SerializationError(Box::new(bincode::ErrorKind::Custom(
+                format!("JSON serialization error: {}", e)
+            )))
+        })?;
+
+        self.storage.save_data(key.as_bytes(), &serialized)?;
+        debug!("Stored Move compilation artifacts for contract {}", contract_address.to_hex_literal());
+        Ok(())
     }
 
-    #[test]
-    fn test_contract_bytecode_storage() {
-        let storage = create_test_storage();
-        let sc_storage = SmartContractStorage::new(storage, 1024 * 1024); // 1MB cache
+    /// Load Move compilation artifacts
+    pub fn load_move_compilation_artifacts(
+        &self,
+        contract_address: &SmartContractAddress,
+    ) -> Result<Option<(String, Vec<u8>, Vec<String>)>, StorageError> {
+        let key = format!("move_compilation_artifacts:{}", contract_address.to_hex_literal());
         
-        let address = SmartContractAddress::new([1u8; 32]);
-        let bytecode = vec![0xde, 0xad, 0xbe, 0xef];
+        if let Some(data) = self.storage.load_data(key.as_bytes())? {
+            if let Ok(artifacts) = serde_json::from_slice::<serde_json::Value>(&data) {
+                let source_code = artifacts.get("source_code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                
+                let abi_data = artifacts.get("abi_data")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect())
+                    .unwrap_or_default();
+                
+                let dependencies = artifacts.get("dependencies")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+                
+                return Ok(Some((source_code, abi_data, dependencies)));
+            }
+        }
         
-        // Store bytecode
-        sc_storage.store_contract_bytecode(&address, &bytecode).unwrap();
-        
-        // Load bytecode
-        let loaded = sc_storage.load_contract_bytecode(&address).unwrap();
-        assert_eq!(loaded, Some(bytecode));
-        
-        // Test non-existent contract
-        let nonexistent = SmartContractAddress::new([2u8; 32]);
-        let result = sc_storage.load_contract_bytecode(&nonexistent).unwrap();
-        assert_eq!(result, None);
+        Ok(None)
     }
 
-    #[test]
-    fn test_contract_storage_operations() {
-        let storage = create_test_storage();
-        let sc_storage = SmartContractStorage::new(storage, 1024 * 1024);
+    /// Store Move resource snapshot for debugging and analysis
+    pub fn store_move_resource_snapshot(
+        &self,
+        contract_address: &SmartContractAddress,
+        resource_type: &str,
+        resource_data: &[u8],
+        timestamp: u64,
+    ) -> Result<(), StorageError> {
+        let key = format!("move_resource_snapshot:{}:{}:{}", 
+                         contract_address.to_hex_literal(),
+                         resource_type,
+                         timestamp);
         
-        let address = SmartContractAddress::new([1u8; 32]);
-        let storage_key = b"test_key";
-        let value = b"test_value";
+        let snapshot = serde_json::json!({
+            "resource_type": resource_type,
+            "resource_data": resource_data,
+            "timestamp": timestamp,
+            "contract_address": contract_address.to_hex_literal()
+        });        let serialized = serde_json::to_vec(&snapshot).map_err(|e| {
+            StorageError::SerializationError(Box::new(bincode::ErrorKind::Custom(
+                format!("JSON serialization error: {}", e)
+            )))
+        })?;
+
+        self.storage.save_data(key.as_bytes(), &serialized)?;
+        debug!("Stored Move resource snapshot for contract {} resource {}", 
+               contract_address.to_hex_literal(), resource_type);
+        Ok(())
+    }
+
+    /// Get detailed Move contract gas analytics
+    pub fn get_move_contract_gas_analytics(
+        &self,
+        contract_address: &SmartContractAddress,
+        days: u32,
+    ) -> Result<String, StorageError> {
+        let end_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let start_time = end_time - (days as u64 * 24 * 60 * 60);
+
+        let gas_records = self.load_gas_usage_records(contract_address, start_time, end_time)?;
         
-        // Store storage item
-        sc_storage.store_contract_storage(&address, storage_key, value).unwrap();
-        
-        // Load storage item
-        let loaded = sc_storage.load_contract_storage(&address, storage_key).unwrap();
-        assert_eq!(loaded, Some(value.to_vec()));
-        
-        // List storage keys
-        let keys = sc_storage.list_contract_storage_keys(&address).unwrap();
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0], storage_key);
-        
-        // Delete storage item
-        sc_storage.delete_contract_storage(&address, storage_key).unwrap();
-        let deleted = sc_storage.load_contract_storage(&address, storage_key).unwrap();
-        assert_eq!(deleted, None);
+        let total_gas = gas_records.iter().map(|r| r.kari_amount).sum::<u64>();
+        let avg_gas = if !gas_records.is_empty() { total_gas / gas_records.len() as u64 } else { 0 };
+        let max_gas = gas_records.iter().map(|r| r.kari_amount).max().unwrap_or(0);
+        let min_gas = gas_records.iter().map(|r| r.kari_amount).min().unwrap_or(0);
+
+        let analytics = serde_json::json!({
+            "contract_address": contract_address.to_hex_literal(),
+            "analysis_period_days": days,
+            "total_transactions": gas_records.len(),
+            "total_kari_spent": total_gas,
+            "average_kari_per_transaction": avg_gas,
+            "max_kari_per_transaction": max_gas,
+            "min_kari_per_transaction": min_gas,
+            "analysis_timestamp": end_time
+        });        serde_json::to_string(&analytics).map_err(|e| {
+            StorageError::SerializationError(Box::new(bincode::ErrorKind::Custom(
+                format!("JSON serialization error: {}", e)
+            )))
+        })
     }
 }

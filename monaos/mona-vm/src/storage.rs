@@ -39,10 +39,19 @@ impl VMStorage {
             cache_size_limit,
             current_cache_size: Arc::new(RwLock::new(0)),
         }
-    }    /// Convert ContractAddress to SmartContractAddress
+    }
+
+    /// Get access to the underlying smart contract storage
+    pub fn get_smart_contract_storage(&self) -> &Arc<SmartContractStorage> {
+        &self.smart_contract_storage
+    }
+    
+    /// Convert ContractAddress to SmartContractAddress
     fn to_smart_contract_address(&self, address: ContractAddress) -> SmartContractAddress {
         SmartContractAddress::new(address.into_bytes())
-    }/// Store contract bytecode
+    }
+    
+    /// Store contract bytecode
     pub fn store_contract_bytecode(&self, address: ContractAddress, bytecode: &[u8]) -> VMResult<()> {
         let smart_address = self.to_smart_contract_address(address);
         self.smart_contract_storage
@@ -337,9 +346,7 @@ impl VMStorage {
             size_bytes: cache_size,
             size_limit: self.cache_size_limit,
         }
-    }
-
-    /// Clear cache
+    }    /// Clear cache
     pub fn clear_cache(&self) {
         let mut cache = self.cache.write().unwrap();
         let mut cache_size = self.current_cache_size.write().unwrap();
@@ -347,6 +354,96 @@ impl VMStorage {
         cache.clear();
         *cache_size = 0;
         debug!("Cache cleared");
+    }    /// Store Move gas consumption data for analytics
+    pub fn store_move_gas_consumption(
+        &self,
+        address: ContractAddress,
+        transaction_hash: &str,
+        function_name: &str,
+        gas_used: u64,
+        kari_spent: u64,
+        execution_time_ms: u64,
+    ) -> VMResult<()> {
+        let smart_address = self.to_smart_contract_address(address);
+        self.smart_contract_storage
+            .store_move_gas_consumption(&smart_address, transaction_hash, function_name, gas_used, kari_spent, execution_time_ms)
+            .map_err(|e| VMError::StorageError {
+                message: format!("Failed to store Move gas consumption: {}", e),
+            })
+    }
+
+    /// Load Move execution metrics for performance analysis
+    pub fn load_move_execution_metrics(
+        &self,
+        address: ContractAddress,
+        start_time: u64,
+        end_time: u64,
+    ) -> VMResult<Vec<u8>> {
+        let smart_address = self.to_smart_contract_address(address);
+        self.smart_contract_storage
+            .load_move_execution_metrics(&smart_address, start_time, end_time)
+            .map_err(|e| VMError::StorageError {
+                message: format!("Failed to load Move execution metrics: {}", e),
+            })
+    }
+
+    /// Store Move compilation artifacts (source code, ABI, dependencies)
+    pub fn store_move_compilation_artifacts(
+        &self,
+        address: ContractAddress,
+        source_code: &str,
+        abi_data: &[u8],
+        dependencies: &[String],
+    ) -> VMResult<()> {
+        let smart_address = self.to_smart_contract_address(address);
+        self.smart_contract_storage
+            .store_move_compilation_artifacts(&smart_address, source_code, abi_data, dependencies)
+            .map_err(|e| VMError::StorageError {
+                message: format!("Failed to store Move compilation artifacts: {}", e),
+            })
+    }
+
+    /// Load Move compilation artifacts
+    pub fn load_move_compilation_artifacts(
+        &self,
+        address: ContractAddress,
+    ) -> VMResult<Option<(String, Vec<u8>, Vec<String>)>> {
+        let smart_address = self.to_smart_contract_address(address);
+        self.smart_contract_storage
+            .load_move_compilation_artifacts(&smart_address)
+            .map_err(|e| VMError::StorageError {
+                message: format!("Failed to load Move compilation artifacts: {}", e),
+            })
+    }
+
+    /// Store Move resource snapshot for debugging and analysis
+    pub fn store_move_resource_snapshot(
+        &self,
+        address: ContractAddress,
+        resource_type: &str,
+        resource_data: &[u8],
+        timestamp: u64,
+    ) -> VMResult<()> {
+        let smart_address = self.to_smart_contract_address(address);
+        self.smart_contract_storage
+            .store_move_resource_snapshot(&smart_address, resource_type, resource_data, timestamp)
+            .map_err(|e| VMError::StorageError {
+                message: format!("Failed to store Move resource snapshot: {}", e),
+            })
+    }
+
+    /// Get detailed Move contract gas analytics
+    pub fn get_move_contract_gas_analytics(
+        &self,
+        address: ContractAddress,
+        days: u32,
+    ) -> VMResult<String> {
+        let smart_address = self.to_smart_contract_address(address);
+        self.smart_contract_storage
+            .get_move_contract_gas_analytics(&smart_address, days)
+            .map_err(|e| VMError::StorageError {
+                message: format!("Failed to get Move contract gas analytics: {}", e),
+            })
     }
 }
 

@@ -8,6 +8,7 @@ mod metadata;
 mod stake;
 mod get_block;
 mod accounts;
+mod move_contracts;
 
 use stake::{get_staking_info, get_staking_stats, stake_tokens, unstake_tokens};
 use get_block::{
@@ -19,6 +20,7 @@ use get_block::{
     get_gas_fee_info
 };
 use accounts::{get_blockchain_status, get_wallets, list_accounts, transfer_tokens};
+use move_contracts::register_move_contract_rpc;
 
 
 // Format function locally since panorama::utils is not available
@@ -66,6 +68,12 @@ pub async fn start_rpc_server(network_config: NetworkConfig) -> Result<(), tokio
     io.add_method("get_file", |params| {
         futures::future::ready(get_file(params)).boxed()
     });
+
+    // Register Move contract RPC methods
+    let storage_path = std::path::PathBuf::from("./move_contracts_db");
+    if let Err(e) = register_move_contract_rpc(&mut io, storage_path) {
+        eprintln!("Warning: Failed to register Move contract RPC methods: {}", e);
+    }
 
     // Add blockchain operations
     io.add_method("blockchain_status", |params| {
@@ -126,7 +134,6 @@ pub async fn start_rpc_server(network_config: NetworkConfig) -> Result<(), tokio
     io.add_method("get_staking_stats", |params| {
         futures::future::ready(get_staking_stats(params)).boxed()
     });
-
 
     // Configure socket address - bind only to localhost if in localhost_only mode
     let bind_addr = if network_config.localhost_only {

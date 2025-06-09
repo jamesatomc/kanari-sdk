@@ -48,10 +48,13 @@ pub struct TransactionReceipt {
     pub caller: Address,
     pub gas_used: u64,
     pub gas_price: u64,
+    pub kari_spent: u64,
     pub success: bool,
     pub return_data: Vec<u8>,
     pub events: Vec<ContractEvent>,
     pub error_message: Option<String>,
+    pub execution_time_ms: u64,
+    pub move_gas_breakdown: Option<serde_json::Value>,
 }
 
 /// Contract event emitted during execution

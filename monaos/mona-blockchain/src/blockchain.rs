@@ -107,6 +107,140 @@ impl BlockchainData {
     pub fn iter(&self) -> Vec<Block<Blake3Algorithm>> {
         self.chain.read().unwrap().iter().cloned().collect()
     }
+
+    /// Process Move contract transactions in a block
+    pub fn process_contract_transactions(
+        &self,
+        block: &Block<Blake3Algorithm>,
+        vm: Option<&mona_vm::MonaVM>,
+    ) -> Vec<ContractExecutionResult> {
+        let mut results = Vec::new();
+        
+        for transaction in &block.transactions {
+            if transaction.is_contract_transaction() {
+                match self.execute_contract_transaction(transaction, vm) {
+                    Ok(result) => results.push(result),
+                    Err(e) => {
+                        warn!("Contract execution failed for tx {}: {}", 
+                              transaction.transaction_id, e);
+                        
+                        // Create failed execution result
+                        if let Some(contract_addr) = transaction.get_contract_address() {
+                            results.push(ContractExecutionResult {
+                                transaction_hash: transaction.transaction_id.clone(),
+                                contract_address: contract_addr,
+                                gas_used: 0,
+                                kari_spent: 0,
+                                success: false,
+                                error_message: Some(e),
+                                events: Vec::new(),
+                                storage_changes: HashMap::new(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        info!("Processed {} contract transactions in block {}", 
+              results.len(), block.index);
+        results
+    }
+
+    /// Execute a single contract transaction
+    fn execute_contract_transaction(
+        &self,
+        transaction: &block::Transaction,
+        vm: Option<&mona_vm::MonaVM>,
+    ) -> Result<ContractExecutionResult, String> {
+        let vm = vm.ok_or("VM not available for contract execution")?;
+        
+        match transaction.transaction_type {
+            block::TransactionType::ContractDeploy => {
+                self.execute_contract_deployment(transaction, vm)
+            },
+            block::TransactionType::ContractCall => {
+                self.execute_contract_call(transaction, vm)
+            },
+            _ => Err("Not a contract transaction".to_string()),
+        }
+    }
+
+    /// Execute contract deployment
+    fn execute_contract_deployment(
+        &self,
+        transaction: &block::Transaction,
+        vm: &mona_vm::MonaVM,
+    ) -> Result<ContractExecutionResult, String> {
+        let contract_data = transaction.contract_data.as_ref()
+            .ok_or("Missing contract data for deployment")?;
+        
+        let bytecode = contract_data.bytecode.as_ref()
+            .ok_or("Missing bytecode for deployment")?;
+
+        // Convert bytecode to source code (simplified for now)
+        let source_code = String::from_utf8_lossy(bytecode).to_string();
+        
+        // Deploy contract using VM
+        let deployment_info = vm.deploy_contract(
+            source_code,
+            contract_data.dependencies.clone(),
+            transaction.sender,
+            contract_data.gas_limit,
+        ).map_err(|e| format!("Deployment failed: {:?}", e))?;
+
+        Ok(ContractExecutionResult {
+            transaction_hash: transaction.transaction_id.clone(),
+            contract_address: deployment_info.contract_address,
+            gas_used: deployment_info.gas_used,
+            kari_spent: deployment_info.gas_used, // 1:1 ratio
+            success: true,
+            error_message: None,
+            events: Vec::new(), // TODO: Convert VM events
+            storage_changes: HashMap::new(),
+        })
+    }
+
+    /// Execute contract function call
+    fn execute_contract_call(
+        &self,
+        transaction: &block::Transaction,
+        vm: &mona_vm::MonaVM,
+    ) -> Result<ContractExecutionResult, String> {
+        let contract_data = transaction.contract_data.as_ref()
+            .ok_or("Missing contract data for call")?;
+        
+        let contract_address = contract_data.contract_address
+            .ok_or("Missing contract address for call")?;
+        
+        let function_name = contract_data.function_name.as_ref()
+            .ok_or("Missing function name for call")?;
+
+        // Execute function call using VM
+        let result = vm.call_function(
+            contract_address,
+            function_name.clone(),
+            contract_data.arguments.clone(),
+            transaction.sender,
+            contract_data.gas_limit,
+        ).map_err(|e| format!("Function call failed: {:?}", e))?;
+
+        Ok(ContractExecutionResult {
+            transaction_hash: transaction.transaction_id.clone(),
+            contract_address,
+            gas_used: result.gas_used,
+            kari_spent: result.gas_used, // 1:1 ratio
+            success: result.success,
+            error_message: result.error_message,
+            events: result.events.into_iter().map(|e| ContractEvent {
+                event_type: e.event_type,
+                data: e.data,
+                contract_address,
+            }).collect(),
+            storage_changes: HashMap::new(), // TODO: Track storage changes
+        })
+    }
+
 }
 
 // Helper functions to maintain backward compatibility
@@ -484,4 +618,25 @@ pub fn load_blockchain() -> Result<(), StorageError> {
 
     storage.flush()?;
     Ok(())
+}
+
+/// Move contract execution result for blockchain processing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractExecutionResult {
+    pub transaction_hash: String,
+    pub contract_address: Address,
+    pub gas_used: u64,
+    pub kari_spent: u64,
+    pub success: bool,
+    pub error_message: Option<String>,
+    pub events: Vec<ContractEvent>,
+    pub storage_changes: HashMap<Vec<u8>, Vec<u8>>,
+}
+
+/// Contract event for blockchain storage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractEvent {
+    pub event_type: String,
+    pub data: Vec<u8>,
+    pub contract_address: Address,
 }

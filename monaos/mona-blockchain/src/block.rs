@@ -5,6 +5,26 @@ use mona_types::address::Address;
 use mona_crypto::verify_signature; // Add mona-crypto dependency
 use log;
 
+// Transaction types for different operations
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum TransactionType {
+    Transfer,
+    ContractDeploy,
+    ContractCall,
+    ContractUpgrade,
+}
+
+// Move smart contract transaction data
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ContractTransaction {
+    pub contract_address: Option<Address>, // None for deployment
+    pub function_name: Option<String>, // None for deployment
+    pub arguments: Vec<Vec<u8>>,
+    pub bytecode: Option<Vec<u8>>, // For deployment
+    pub dependencies: Vec<String>, // Module dependencies
+    pub gas_limit: u64,
+}
+
 // Define the Transaction struct
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Transaction {
@@ -16,11 +36,13 @@ pub struct Transaction {
     pub timestamp: u64,
     pub signature: Vec<u8>, // Changed from Option<String> to Vec<u8>
     pub data: Option<Vec<u8>>, // Re-add data field as Option<Vec<u8>>
+    pub transaction_type: TransactionType, // Transaction type
+    pub contract_data: Option<ContractTransaction>, // Smart contract data
+    pub kari_gas_used: u64, // Kari amount used for gas
 }
 
 // Add methods to the Transaction struct
-impl Transaction {
-    // Create a message representation of the transaction for signing/verification
+impl Transaction {    // Create a message representation of the transaction for signing/verification
     pub fn to_signable_message(&self) -> Vec<u8> {
         let mut message = Vec::new();
         message.extend_from_slice(self.transaction_id.as_bytes());
@@ -29,6 +51,18 @@ impl Transaction {
         message.extend_from_slice(&self.amount.to_le_bytes());
         message.extend_from_slice(&self.gas_fee.to_le_bytes()); // Include gas fee in the signed message
         message.extend_from_slice(&self.timestamp.to_le_bytes());
+        message.extend_from_slice(&self.kari_gas_used.to_le_bytes()); // Include Kari gas usage
+        
+        // Include contract data if present
+        if let Some(contract_data) = &self.contract_data {
+            if let Some(contract_addr) = &contract_data.contract_address {
+                message.extend_from_slice(contract_addr.as_bytes());
+            }
+            if let Some(function_name) = &contract_data.function_name {
+                message.extend_from_slice(function_name.as_bytes());
+            }
+            message.extend_from_slice(&contract_data.gas_limit.to_le_bytes());
+        }
         
         // For debugging
         log::debug!("Generated message for signing/verification: tx_id={}, len={}", 
@@ -95,6 +129,86 @@ impl Transaction {
         } else {
             "TOKEN_TRANSFER"
         }
+    }
+
+    /// Create a new contract deployment transaction
+    pub fn new_contract_deployment(
+        transaction_id: String,
+        deployer: Address,
+        bytecode: Vec<u8>,
+        dependencies: Vec<String>,
+        gas_limit: u64,
+        kari_gas_amount: u64,
+        timestamp: u64,
+    ) -> Self {
+        Self {
+            transaction_id,
+            sender: deployer,
+            receiver: Address::zero(), // No specific receiver for deployment
+            amount: 0, // No token transfer in deployment
+            gas_fee: 0, // Will be calculated based on gas usage
+            timestamp,
+            signature: Vec::new(), // Will be set when signing
+            data: Some(bytecode.clone()),
+            transaction_type: TransactionType::ContractDeploy,
+            contract_data: Some(ContractTransaction {
+                contract_address: None, // Will be determined after deployment
+                function_name: None,
+                arguments: Vec::new(),
+                bytecode: Some(bytecode),
+                dependencies,
+                gas_limit,
+            }),
+            kari_gas_used: kari_gas_amount,
+        }
+    }
+
+    /// Create a new contract function call transaction
+    pub fn new_contract_call(
+        transaction_id: String,
+        caller: Address,
+        contract_address: Address,
+        function_name: String,
+        arguments: Vec<Vec<u8>>,
+        gas_limit: u64,
+        kari_gas_amount: u64,
+        timestamp: u64,
+    ) -> Self {
+        Self {
+            transaction_id,
+            sender: caller,
+            receiver: contract_address,
+            amount: 0, // No direct token transfer
+            gas_fee: 0, // Will be calculated
+            timestamp,
+            signature: Vec::new(),
+            data: None,
+            transaction_type: TransactionType::ContractCall,
+            contract_data: Some(ContractTransaction {
+                contract_address: Some(contract_address),
+                function_name: Some(function_name),
+                arguments,
+                bytecode: None,
+                dependencies: Vec::new(),
+                gas_limit,
+            }),
+            kari_gas_used: kari_gas_amount,
+        }
+    }
+
+    /// Check if this is a Move contract transaction
+    pub fn is_contract_transaction(&self) -> bool {
+        matches!(self.transaction_type, TransactionType::ContractDeploy | TransactionType::ContractCall | TransactionType::ContractUpgrade)
+    }
+
+    /// Get the contract address if this is a contract transaction
+    pub fn get_contract_address(&self) -> Option<Address> {
+        self.contract_data.as_ref().and_then(|data| data.contract_address)
+    }
+
+    /// Get the function name if this is a contract call
+    pub fn get_function_name(&self) -> Option<&String> {
+        self.contract_data.as_ref().and_then(|data| data.function_name.as_ref())
     }
 }
 

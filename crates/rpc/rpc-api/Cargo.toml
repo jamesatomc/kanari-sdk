@@ -39,3 +39,7 @@ mona-vm = { workspace = true }
 mona-crypto = { workspace = true }
 key = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+
+# Additional dependencies for Move contracts RPC
+jsonrpc-derive = "18.0"
+blake3.workspace = true

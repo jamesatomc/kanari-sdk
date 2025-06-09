@@ -19,6 +19,9 @@ pub use smart_contract::{
     MoveModuleInfo,
     ContractStateSnapshot,
     SmartContractEvent,
+    GasUsageRecord,
+    MoveResourceInfo,
+    ExecutionTrace,
 };
 
 #[derive(Error, Debug)]

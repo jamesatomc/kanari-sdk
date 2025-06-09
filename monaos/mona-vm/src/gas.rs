@@ -34,6 +34,14 @@ pub struct BaseCosts {
     pub per_byte: u64,
     /// Base cost for any transaction
     pub base_transaction: u64,
+    /// Base cost for function calls
+    pub function_call_base: u64,
+    /// Cost to emit an event
+    pub emit_event: u64,
+    /// Cost per byte for serialization
+    pub serialization_per_byte: u64,
+    /// Cost per byte for event data
+    pub event_per_byte: u64,
 }
 
 impl Default for BaseCosts {
@@ -43,6 +51,10 @@ impl Default for BaseCosts {
             signature_verification: 500,
             per_byte: 1,
             base_transaction: 100,
+            function_call_base: 50,
+            emit_event: 200,
+            serialization_per_byte: 2,
+            event_per_byte: 3,
         }
     }
 }

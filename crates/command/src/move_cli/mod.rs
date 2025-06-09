@@ -10,6 +10,9 @@ use kari_move::{
     }, run_cli, sandbox, Command, Move
 };
 
+pub mod kari_move_enhanced;
+pub use kari_move_enhanced::{run_kari_move_cli, KariMoveCli};
+
 struct CommandInfo {
     name: &'static str,
     description: &'static str,

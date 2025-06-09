@@ -39,6 +39,10 @@ futures.workspace = true
 tokio.workspace = true
 serde_yaml.workspace = true
 
+# Internal dependencies
+mona-vm = { path = "../mona-vm" }
+mona-storage = { path = "../mona-storage" }
+
 # Utilities
 digest.workspace = true
 hex.workspace = true
@@ -54,4 +58,3 @@ mona-crypto = { workspace = true, features = ["blake3"] }  # Add blake3 feature
 mona-types.workspace = true
 common.workspace = true
 consensus-pos.workspace = true
-mona-storage.workspace = true
