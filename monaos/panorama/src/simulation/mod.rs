@@ -1,29 +1,39 @@
 use consensus_pos::Blake3Algorithm;
-use log::{error, info, warn, debug};
-use tokio::sync::mpsc;
+use log::{debug, error, info, warn};
+use std::collections::VecDeque;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::collections::VecDeque;
-use std::str::FromStr;
+use tokio::sync::mpsc;
 
-use mona_blockchain::block::{Block, Transaction};
-use mona_blockchain::blockchain::{save_blockchain, BALANCES, BLOCKCHAIN_DATA, normalize_address};
+use crate::staking::{is_validator, load_staking_state, process_rewards};
 use crate::transfer_tokens::transfer_tokens;
+use crate::utils::{
+    calculate_gas_fee, format_gas_fee_display, update_last_block_time,
+    update_pending_transaction_count,
+};
+use mona_blockchain::block::{Block, Transaction};
+use mona_blockchain::blockchain::{BALANCES, BLOCKCHAIN_DATA, normalize_address, save_blockchain};
 use mona_types::address::Address;
-use mona_types::kari::{KARI, KA_PER_KARI, POOL_ADDRESS, POOL_RESERVED_KA, POOL_RESERVED_KARI, TOTAL_SUPPLY_KA, TOTAL_SUPPLY_KARI, VALIDATOR_STAKING_MINIMUM_KARI, NODE_STAKING_MINIMUM_KARI};
-use crate::utils::{update_pending_transaction_count, update_last_block_time, calculate_gas_fee, format_gas_fee_display};
-use crate::staking::{load_staking_state, process_rewards, is_validator};
-use p2p_protocol::node::{NodeConfig, start_node, stop_node, propagate_block, get_peer_count};
+use mona_types::kari::{
+    KA_PER_KARI, KARI, NODE_STAKING_MINIMUM_KARI, POOL_ADDRESS, POOL_RESERVED_KA,
+    POOL_RESERVED_KARI, TOTAL_SUPPLY_KA, TOTAL_SUPPLY_KARI, VALIDATOR_STAKING_MINIMUM_KARI,
+};
+use p2p_protocol::node::{NodeConfig, get_peer_count, propagate_block, start_node, stop_node};
 
 pub mod create_genesis_block;
-use create_genesis_block::create_genesis_block;
+pub mod vm_integration;
 
+use create_genesis_block::create_genesis_block;
+pub use vm_integration::{
+    ContractEvent, VM_PROCESSOR, VMTransactionProcessor, VMTransactionResult, VMTransactionType,
+    call_contract_global, deploy_contract_global, query_contract_global,
+};
 
 // Function to parse and normalize address
 fn parse_address(address: &str) -> Result<Address, String> {
-    Address::from_str(address)
-        .map_err(|_| format!("Invalid address format: {}", address))
+    Address::from_str(address).map_err(|_| format!("Invalid address format: {}", address))
 }
 
 // Add pending transactions queue
@@ -39,8 +49,8 @@ pub fn add_pending_transaction(transaction: Transaction) -> bool {
             // Update pending transaction count for gas calculation
             update_pending_transaction_count(queue.len());
             true
-        },
-        Err(_) => false
+        }
+        Err(_) => false,
     }
 }
 
@@ -50,26 +60,32 @@ pub fn process_transfer(
     to_address: &str,
     amount: u64,
     password: &str,
-    priority_boost: Option<u64>,  // Add optional priority boost
-    tx: &mpsc::Sender<String>
+    priority_boost: Option<u64>, // Add optional priority boost
+    tx: &mpsc::Sender<String>,
 ) -> Result<Transaction, String> {
     // Parse addresses
     let from = match normalize_address(from_address) {
         Ok(addr) => addr,
         Err(e) => return Err(format!("Invalid sender address: {}", e)),
     };
-    
+
     let to = match normalize_address(to_address) {
-        Ok(addr) => addr, 
+        Ok(addr) => addr,
         Err(e) => return Err(format!("Invalid receiver address: {}", e)),
     };
-    
+
     // Calculate gas fee dynamically
     let gas_fee = calculate_gas_fee(priority_boost);
     let gas_fee_display = format_gas_fee_display(gas_fee);
-    
+
     // Execute transfer using string representation and password for signing
-    match transfer_tokens(&from.to_hex_literal(), &to.to_hex_literal(), amount, password, gas_fee) {
+    match transfer_tokens(
+        &from.to_hex_literal(),
+        &to.to_hex_literal(),
+        amount,
+        password,
+        gas_fee,
+    ) {
         Ok(transaction) => {
             // Verify signature right after creation for better debugging
             let signature_status = if transaction.signature.is_empty() {
@@ -84,7 +100,7 @@ pub fn process_transfer(
                     }
                 }
             };
-            
+
             // Add to pending transactions
             if add_pending_transaction(transaction.clone()) {
                 // Direct string formatting instead of JSON
@@ -102,15 +118,15 @@ pub fn process_transfer(
                     !transaction.signature.is_empty(),
                     signature_status
                 );
-                
+
                 let _ = tx.try_send(tx_status);
-                
+
                 // Force save blockchain state to ensure transaction persistence
                 match mona_blockchain::blockchain::save_blockchain() {
                     Ok(_) => info!("Transaction recorded and blockchain state saved"),
                     Err(e) => warn!("Transaction recorded but failed to save state: {}", e),
                 }
-                
+
                 // Return transaction
                 Ok(transaction)
             } else {
@@ -119,11 +135,11 @@ pub fn process_transfer(
                     true => {
                         info!("Transaction bypassed queue and directly included in blockchain");
                         Ok(transaction)
-                    },
-                    false => Err("Failed to add transaction to blockchain".to_string())
+                    }
+                    false => Err("Failed to add transaction to blockchain".to_string()),
                 }
             }
-        },
+        }
         Err(e) => {
             // Direct string formatting for error
             let error_msg = format!(
@@ -136,9 +152,9 @@ pub fn process_transfer(
                 gas_fee_display,
                 crate::utils::calculate_total_transaction_cost(amount, gas_fee)
             );
-            
+
             let _ = tx.try_send(error_msg);
-            
+
             // Return error
             Err(format!("{}", e))
         }
@@ -166,7 +182,7 @@ fn force_transaction_inclusion(transaction: &Transaction) -> bool {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-        
+
     // Create block data - use direct string formatting instead of JSON
     let block_data = format!(
         "{{\"block_type\":\"forced_transaction\",\"timestamp\":{},\"transactions\":[{{\"id\":\"{}\",\"sender\":\"{}\",\"receiver\":\"{}\",\"amount\":{},\"gas_fee\":{},\"timestamp\":{}}}]}}",
@@ -192,13 +208,13 @@ fn force_transaction_inclusion(transaction: &Transaction) -> bool {
 
     // Add block to chain
     BLOCKCHAIN_DATA.add_block(emergency_block);
-    
+
     // Save the blockchain immediately
     match save_blockchain() {
         Ok(_) => {
             info!("Emergency transaction block created and saved");
             true
-        },
+        }
         Err(e) => {
             error!("Failed to save emergency transaction block: {}", e);
             false
@@ -206,11 +222,7 @@ fn force_transaction_inclusion(transaction: &Transaction) -> bool {
     }
 }
 
-pub fn run_blockchain(
-    running: Arc<Mutex<bool>>, 
-    address: String,
-    tx: mpsc::Sender<String>
-) {
+pub fn run_blockchain(running: Arc<Mutex<bool>>, address: String, tx: mpsc::Sender<String>) {
     // System password for automated transactions - could be set via config
     let _system_password = "kanari_system";
 
@@ -234,7 +246,10 @@ pub fn run_blockchain(
             let error_msg = format!(
                 "{{\"event\":\"blockchain_error\",\"error\":\"Invalid node address: {}\",\"timestamp\":{}}}",
                 e,
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
             );
             let _ = tx.try_send(error_msg);
             return;
@@ -251,13 +266,13 @@ pub fn run_blockchain(
     } else {
         info!("Staking system initialized");
     }
-    
+
     // Initialize node networking if multiple nodes are supported
     let node_config = NodeConfig {
         node_id: format!("node-{}", normalized_address[..8].to_string()),
         blockchain_address: normalized_address.clone(),
         listen_ip: "0.0.0.0".to_string(), // Listen on all interfaces, not just localhost
-        listen_port: 51303, // Use fixed default port instead of dynamic calculation
+        listen_port: 51303,               // Use fixed default port instead of dynamic calculation
         discovery_nodes: vec![
             // List of discovery nodes for peer discovery
             "devnet.kanari.site:51303".to_string(),
@@ -267,14 +282,22 @@ pub fn run_blockchain(
         max_peers: 50, // Increased max peers for better network connectivity
         is_validator: is_validator(&node_address), // Dynamically check if this node is a validator
         use_tls: false, // TLS disabled by default
-        cert_path: Some(format!("{}/certs/node.crt", common::get_kari_dir().display())),
-        key_path: Some(format!("{}/certs/node.key", common::get_kari_dir().display())),
+        cert_path: Some(format!(
+            "{}/certs/node.crt",
+            common::get_kari_dir().display()
+        )),
+        key_path: Some(format!(
+            "{}/certs/node.key",
+            common::get_kari_dir().display()
+        )),
     };
-    
+
     // Log node network configuration
-    info!("Node network configuration: {}:{} (validator: {})", 
-          node_config.listen_ip, node_config.listen_port, node_config.is_validator);
-    
+    info!(
+        "Node network configuration: {}:{} (validator: {})",
+        node_config.listen_ip, node_config.listen_port, node_config.is_validator
+    );
+
     // Start node networking
     if let Err(e) = start_node(node_config, tx.clone()) {
         warn!("Failed to start node networking: {}", e);
@@ -293,7 +316,10 @@ pub fn run_blockchain(
         normalized_address,
         VALIDATOR_STAKING_MINIMUM_KARI,
         NODE_STAKING_MINIMUM_KARI,
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     );
     let _ = tx.try_send(init_status);
 
@@ -307,16 +333,19 @@ pub fn run_blockchain(
         // Enhanced blockchain status
         let blocks = BLOCKCHAIN_DATA.iter();
         let last_block = blocks.last().unwrap();
-        
+
         let status_msg = format!(
             "{{\"event\":\"blockchain_loaded\",\"blocks\":{},\"last_block\":{{\"index\":{},\"hash\":\"{}\",\"timestamp\":{}}},\"timestamp\":{}}}",
             BLOCKCHAIN_DATA.len(),
             last_block.index,
             last_block.hash,
             last_block.timestamp,
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
         );
-        
+
         let _ = tx.try_send(status_msg);
 
         // Check balance using both original and normalized address for troubleshooting
@@ -328,7 +357,10 @@ pub fn run_blockchain(
                     normalized_address, balance_in_kari, coin.symbol, balance, coin.symbol
                 );
             }
-            Err(e) => warn!("Failed to get balance for address {}: {}", normalized_address, e),
+            Err(e) => warn!(
+                "Failed to get balance for address {}: {}",
+                normalized_address, e
+            ),
         }
 
         // Debug: Also check with original address if they're different
@@ -340,7 +372,10 @@ pub fn run_blockchain(
                         address, balance, coin.symbol
                     );
                 }
-                Err(e) => debug!("Failed to get balance for original address {}: {}", address, e),
+                Err(e) => debug!(
+                    "Failed to get balance for original address {}: {}",
+                    address, e
+                ),
             }
         }
     } else {
@@ -349,10 +384,11 @@ pub fn run_blockchain(
         BLOCKCHAIN_DATA.add_block(genesis_block.clone());
 
         // Direct string formatting for genesis info
-        let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp(genesis_block.timestamp as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "Unknown time".to_string());
-            
+        let datetime =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(genesis_block.timestamp as i64, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "Unknown time".to_string());
+
         let genesis_msg = format!(
             "{{\"event\":\"genesis_created\",\"block\":{{\"index\":{},\"hash\":\"{}\",\"timestamp\":{},\"datetime\":\"{}\"}},\"coin\":{{\"name\":\"{}\",\"symbol\":\"{}\",\"decimals\":{}}},\"minter\":\"{}\",\"total_supply\":{{\"amount\":{},\"display\":{},\"symbol\":\"{}\"}}}}",
             genesis_block.index,
@@ -367,14 +403,14 @@ pub fn run_blockchain(
             TOTAL_SUPPLY_KARI,
             coin.symbol
         );
-        
+
         let _ = tx.try_send(genesis_msg);
 
         // Update balances with normalized address
         {
             let mut balances = BALANCES.lock().unwrap();
             balances.insert(normalized_address.clone(), coin.total_supply);
-            
+
             // Update pool balance if exists
             if let Ok(pool_addr) = normalize_address(POOL_ADDRESS) {
                 let pool_addr_str = pool_addr.to_hex_literal();
@@ -383,9 +419,12 @@ pub fn run_blockchain(
                 if let Some(balance) = balances.get_mut(&normalized_address) {
                     *balance -= POOL_RESERVED_KA;
                 }
-                info!("Reserved {} KARI for pool address: {}", POOL_RESERVED_KARI, pool_addr_str);
+                info!(
+                    "Reserved {} KARI for pool address: {}",
+                    POOL_RESERVED_KARI, pool_addr_str
+                );
             }
-            
+
             // Debug: Output all balances
             debug!("Initial balances after genesis:");
             for (addr, bal) in balances.iter() {
@@ -405,22 +444,28 @@ pub fn run_blockchain(
     }
 
     // Start block production loop
-    info!("Starting block production with node address: {}", normalized_address);
-    
+    info!(
+        "Starting block production with node address: {}",
+        normalized_address
+    );
+
     // Block production loop
     loop {
         if !*running.lock().unwrap() {
             info!("Blockchain simulation stopped");
-            
+
             // Stop node networking
             if let Err(e) = stop_node() {
                 warn!("Error stopping node: {}", e);
             }
-            
+
             // Direct formatting for shutdown
             let shutdown_msg = format!(
                 "{{\"event\":\"blockchain_stopped\",\"timestamp\":{}}}",
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
             );
             let _ = tx.try_send(shutdown_msg);
             break;
@@ -442,28 +487,33 @@ pub fn run_blockchain(
                 Ok(mut queue) => {
                     // Take up to 100000 transactions for this block
                     let mut block_txs = Vec::new();
-                    
+
                     // Log transaction queue status
-                    info!("Processing transaction queue with {} pending transactions", queue.len());
-                    
+                    info!(
+                        "Processing transaction queue with {} pending transactions",
+                        queue.len()
+                    );
+
                     while let Some(tx) = queue.pop_front() {
-                        info!("Including transaction: {} -> {}, amount: {}", 
-                            tx.sender, tx.receiver, tx.amount);
+                        info!(
+                            "Including transaction: {} -> {}, amount: {}",
+                            tx.sender, tx.receiver, tx.amount
+                        );
                         block_txs.push(tx);
                         if block_txs.len() >= 100000 {
                             break;
                         }
                     }
-                    
+
                     if !block_txs.is_empty() {
                         info!("Added {} transactions to current block", block_txs.len());
                     }
-                    
+
                     // Update the pending transaction count for gas fee calculation
                     update_pending_transaction_count(queue.len());
-                    
+
                     block_txs
-                },
+                }
                 Err(_) => {
                     error!("Failed to lock pending transactions queue");
                     Vec::new() // Empty vector on error
@@ -482,13 +532,13 @@ pub fn run_blockchain(
                 tx.timestamp
             )
         }).collect();
-        
+
         // Create new block data with transactions
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-            
+
         let block_data = format!(
             "{{\"block_type\":\"transaction\",\"index\":{},\"coin\":\"{}\",\"timestamp\":{},\"miner\":\"{}\",\"transactions\":[{}],\"metadata\":{{\"network\":\"testnet\",\"client_version\":\"{}\",\"previous_block_hash\":\"{}\"}}}}",
             prev_block.index + 1,
@@ -505,7 +555,7 @@ pub fn run_blockchain(
             prev_block.index + 1,
             block_data,
             prev_block.hash.clone(),
-            0,          // No new tokens in regular blocks
+            0,                    // No new tokens in regular blocks
             transactions.clone(), // Include transactions in the block - explicitly clone
             normalized_address.clone(),
             Blake3Algorithm::new(),
@@ -513,16 +563,20 @@ pub fn run_blockchain(
 
         // Add block to chain and ensure we save the state
         BLOCKCHAIN_DATA.add_block(new_block.clone());
-        
+
         // Propagate block to connected peers
         if get_peer_count() > 0 {
             if let Err(e) = propagate_block(&new_block) {
                 warn!("Failed to propagate block to peers: {}", e);
             } else {
-                info!("Block {} propagated to {} peers", new_block.index, get_peer_count());
+                info!(
+                    "Block {} propagated to {} peers",
+                    new_block.index,
+                    get_peer_count()
+                );
             }
         }
-        
+
         // Process staking rewards
         let staking_rewards = match process_rewards(new_block.index) {
             Ok(rewards) => rewards,
@@ -531,22 +585,33 @@ pub fn run_blockchain(
                 0
             }
         };
-        
+
         // Check if the node operator is staking as validator
         let validator_status = is_validator(&node_address);
 
         // If we included transactions, provide detailed logs
         if !transactions.is_empty() {
-            info!("Block {} includes {} transactions:", new_block.index, transactions.len());
+            info!(
+                "Block {} includes {} transactions:",
+                new_block.index,
+                transactions.len()
+            );
             for (i, tx) in transactions.iter().enumerate() {
-                info!("  {}: {} -> {} ({})", i+1, tx.sender, tx.receiver, tx.amount);
+                info!(
+                    "  {}: {} -> {} ({})",
+                    i + 1,
+                    tx.sender,
+                    tx.receiver,
+                    tx.amount
+                );
             }
         }
 
         // Convert timestamp to human-readable format
-        let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp(new_block.timestamp as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "Unknown time".to_string());
+        let datetime =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(new_block.timestamp as i64, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "Unknown time".to_string());
 
         // Enhanced block status update - direct formatting
         let status_msg = format!(
@@ -565,17 +630,17 @@ pub fn run_blockchain(
             staking_rewards as f64 / KA_PER_KARI as f64,
             match crate::staking::get_pool_remaining_balance() {
                 Ok(balance) => balance,
-                Err(_) => 0
+                Err(_) => 0,
             },
             match crate::staking::get_pool_remaining_balance() {
                 Ok(balance) => balance as f64 / KA_PER_KARI as f64,
-                Err(_) => 0.0
+                Err(_) => 0.0,
             },
             POOL_ADDRESS,
             get_peer_count(),
             format!("node-{}", &normalized_address[..8])
         );
-        
+
         let _ = tx.try_send(status_msg);
 
         // Save blockchain state - make sure it happens reliably after transaction block
@@ -586,18 +651,16 @@ pub fn run_blockchain(
                     new_block.index,
                     &new_block.hash[..16]
                 );
-            },
+            }
             Err(e) => {
                 error!("Failed to save blockchain: {}", e);
                 // Notify clients of save error
                 let error_msg = format!(
                     "{{\"event\":\"blockchain_error\",\"error\":\"Failed to save blockchain: {}\",\"block_index\":{},\"timestamp\":{}}}",
-                    e,
-                    new_block.index,
-                    current_time
+                    e, new_block.index, current_time
                 );
                 let _ = tx.try_send(error_msg);
-            },
+            }
         }
 
         // Enhanced balance checking
@@ -615,34 +678,32 @@ pub fn run_blockchain(
                         new_block.index,
                         current_time
                     );
-                    
+
                     let _ = tx.try_send(balance_msg);
-                    
+
                     // Log balance info
                     debug!(
                         "Current balance for {} is {} {}A",
                         normalized_address, balance, coin.symbol
                     );
-                },
+                }
                 Err(e) => {
                     warn!("Failed to get balance: {}", e);
                     let error_msg = format!(
                         "{{\"event\":\"balance_error\",\"error\":\"Failed to get balance: {}\",\"address\":\"{}\",\"timestamp\":{}}}",
-                        e,
-                        normalized_address,
-                        current_time
+                        e, normalized_address, current_time
                     );
                     let _ = tx.try_send(error_msg);
-                },
+                }
             }
-            
+
             // Debug: Enhanced log of all balances
             if let Ok(balances) = BALANCES.lock() {
                 debug!("Current balances in system ({} accounts):", balances.len());
                 for (addr, bal) in balances.iter() {
                     debug!("  {} => {}", addr, bal);
                 }
-                
+
                 let balance_report = format!(
                     "{{\"event\":\"system_balances\",\"account_count\":{},\"timestamp\":{}}}",
                     balances.len(),

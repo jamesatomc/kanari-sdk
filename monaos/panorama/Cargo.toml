@@ -13,8 +13,8 @@ description.workspace = true
 
 [dependencies]
 lazy_static.workspace = true
-once_cell.workspace = true  # Add once_cell dependency
-clap.workspace = true  # Add clap for CLI argument parsing
+once_cell.workspace = true   # Add once_cell dependency
+clap.workspace = true        # Add clap for CLI argument parsing
 
 # Cryptography
 sha2.workspace = true
@@ -42,7 +42,7 @@ digest.workspace = true
 hex.workspace = true
 chrono.workspace = true
 dirs.workspace = true
-log.workspace = true    
+log.workspace = true
 env_logger.workspace = true
 colored.workspace = true
 thiserror.workspace = true
@@ -64,3 +64,6 @@ consensus-pos.workspace = true
 network.workspace = true
 
 crossbeam.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

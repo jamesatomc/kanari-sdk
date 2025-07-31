@@ -1,15 +1,11 @@
+use bincode;
+use log::{debug, error, info, warn};
+use rocksdb::{DB, Error as RocksError, Options};
 use std::{fs, path::PathBuf, time::Duration};
 use thiserror::Error;
-use rocksdb::{DB, Error as RocksError, Options};
-use bincode;
-use log::{debug, info, warn, error};
 pub mod file_storage;
 
-pub use file_storage::{
-    FileStorage,
-    StorageError2,
-    FileMetadata
-};
+pub use file_storage::{FileMetadata, FileStorage, StorageError2};
 
 #[derive(Error, Debug)]
 pub enum StorageError {
@@ -39,11 +35,19 @@ pub struct RocksDBStorage {
     path: PathBuf,
 }
 
+impl std::fmt::Debug for RocksDBStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RocksDBStorage")
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
 impl RocksDBStorage {
     pub fn new(path: PathBuf) -> Result<Self, StorageError> {
         const MAX_RETRIES: u32 = 5;
         let mut backoff = Duration::from_millis(100);
-        
+
         info!("Initializing RocksDB at: {:?}", path);
         let mut attempts = 0;
         while attempts < MAX_RETRIES {
@@ -69,15 +73,18 @@ impl RocksDBStorage {
             opts.set_use_fsync(true);
             opts.set_write_buffer_size(64 * 1024 * 1024); // 64MB
             opts.set_compaction_style(rocksdb::DBCompactionStyle::Level);
-            
+
             match DB::open(&opts, &path) {
                 Ok(db) => {
                     info!("RocksDB successfully opened at {:?}", path);
                     return Ok(Self { db, path });
-                },
+                }
                 Err(e) => {
                     attempts += 1;
-                    warn!("Failed to open DB (attempt {}/{}): {}", attempts, MAX_RETRIES, e);
+                    warn!(
+                        "Failed to open DB (attempt {}/{}): {}",
+                        attempts, MAX_RETRIES, e
+                    );
                     if attempts < MAX_RETRIES {
                         std::thread::sleep(backoff);
                         backoff *= 2; // Exponential backoff
@@ -86,10 +93,13 @@ impl RocksDBStorage {
             }
         }
 
-        error!("Failed to initialize RocksDB after {} attempts", MAX_RETRIES);
+        error!(
+            "Failed to initialize RocksDB after {} attempts",
+            MAX_RETRIES
+        );
         Err(StorageError::InitializationError(MAX_RETRIES))
     }
-    
+
     // Get the path to the database
     pub fn path(&self) -> &PathBuf {
         &self.path
@@ -112,7 +122,7 @@ impl BlockchainStorage for RocksDBStorage {
             Ok(_) => {
                 debug!("Successfully saved {} bytes of data", value.len());
                 Ok(())
-            },
+            }
             Err(e) => {
                 error!("Failed to save data: {}", e);
                 Err(StorageError::DbError(e))
@@ -126,11 +136,11 @@ impl BlockchainStorage for RocksDBStorage {
             Ok(Some(data)) => {
                 debug!("Successfully loaded {} bytes of data", data.len());
                 Ok(Some(data))
-            },
+            }
             Ok(None) => {
                 debug!("No data found for key");
                 Ok(None)
-            },
+            }
             Err(e) => {
                 error!("Failed to load data: {}", e);
                 Err(StorageError::DbError(e))
@@ -144,21 +154,21 @@ impl BlockchainStorage for RocksDBStorage {
             Ok(_) => {
                 debug!("Database successfully flushed");
                 Ok(())
-            },
+            }
             Err(e) => {
                 error!("Failed to flush database: {}", e);
                 Err(StorageError::DbError(e))
             }
         }
     }
-    
+
     fn delete_data(&self, key: &[u8]) -> Result<(), StorageError> {
         debug!("Deleting data with key of {} bytes", key.len());
         match self.db.delete(key) {
             Ok(_) => {
                 debug!("Successfully deleted data");
                 Ok(())
-            },
+            }
             Err(e) => {
                 error!("Failed to delete data: {}", e);
                 Err(StorageError::DbError(e))
@@ -169,20 +179,20 @@ impl BlockchainStorage for RocksDBStorage {
     fn list_keys_with_prefix(&self, prefix: &[u8]) -> Result<Vec<Vec<u8>>, StorageError> {
         debug!("Listing keys with prefix of {} bytes", prefix.len());
         let mut result = Vec::new();
-        
+
         let iter = self.db.prefix_iterator(prefix);
         for item in iter {
             match item {
                 Ok((key, _)) => {
                     result.push(key.to_vec());
-                },
+                }
                 Err(e) => {
                     error!("Error iterating over keys: {}", e);
                     return Err(StorageError::DbError(e));
                 }
             }
         }
-        
+
         debug!("Found {} keys with prefix", result.len());
         Ok(result)
     }
@@ -192,33 +202,33 @@ impl BlockchainStorage for RocksDBStorage {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    
+
     #[test]
     fn test_rocks_db_storage_basic() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().to_path_buf();
-        
+
         // Create storage
         let storage = RocksDBStorage::new(db_path).unwrap();
-        
+
         // Test saving data
         let key = b"test_key";
         let value = b"test_value";
         storage.save_data(key, value).unwrap();
-        
+
         // Test loading data
         let loaded = storage.load_data(key).unwrap();
         assert_eq!(loaded, Some(value.to_vec()));
-        
+
         // Test missing key
         let missing = storage.load_data(b"nonexistent").unwrap();
         assert_eq!(missing, None);
-        
+
         // Test delete
         storage.delete_data(key).unwrap();
         let deleted = storage.load_data(key).unwrap();
         assert_eq!(deleted, None);
-        
+
         // Test flush
         storage.flush().unwrap();
     }

@@ -2,10 +2,10 @@ name: Rust
 
 on:
   push:
-    branches: [ "kanari-sdk" ]
+    branches: ["rm"]
     tags: "v*"
   pull_request:
-    branches: [ "kanari-sdk" ]
+    branches: ["rm"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,167 +20,168 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary_names: ['kari', 'kari-move-analyzer']
-            artifact_names: ['kari-linux-x64', 'kari-move-analyzer-linux-x64']
-          - os: windows-latest 
+            binary_names: ["kari", "kari-move-analyzer"]
+            artifact_names: ["kari-linux-x64", "kari-move-analyzer-linux-x64"]
+          - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_names: ['kari.exe', 'kari-move-analyzer.exe']
-            artifact_names: ['kari-windows-x64', 'kari-move-analyzer-windows-x64']
+            binary_names: ["kari.exe", "kari-move-analyzer.exe"]
+            artifact_names:
+              ["kari-windows-x64", "kari-move-analyzer-windows-x64"]
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary_names: ['kari', 'kari-move-analyzer']
-            artifact_names: ['kari-macos-arm64', 'kari-move-analyzer-macos-arm64']
+            binary_names: ["kari", "kari-move-analyzer"]
+            artifact_names:
+              ["kari-macos-arm64", "kari-move-analyzer-macos-arm64"]
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'  # Add this to fetch submodules
-        
-    - name: Cache Rust dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive" # Add this to fetch submodules
 
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Install Linux dependencies
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          cmake \
-          gcc \
-          libssl-dev \
-          pkg-config \
-          libclang-dev
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            gcc \
+            libssl-dev \
+            pkg-config \
+            libclang-dev
 
-    - name: Install Windows dependencies
-      if: matrix.os == 'windows-latest'
-      run: |
-        choco install visualstudio2019buildtools
-        choco install visualstudio2019-workload-vctools
-        rustup default nightly-x86_64-pc-windows-msvc
-        
-    - name: Setup Windows environment
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        $ReleasePath = "target\${{ matrix.target }}\release"
-        New-Item -ItemType Directory -Force -Path $ReleasePath
-        $env:Path += ";C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Redist\MSVC\14.29.30133\x64"
-        
-        # Copy DLLs after build completes
-        if (Test-Path "C:\Windows\System32\vcruntime140.dll") {
-            Copy-Item "C:\Windows\System32\vcruntime140.dll" -Destination $ReleasePath
-        }
-        if (Test-Path "C:\Windows\System32\msvcp140.dll") {
-            Copy-Item "C:\Windows\System32\msvcp140.dll" -Destination $ReleasePath
-        }
+      - name: Install Windows dependencies
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install visualstudio2019buildtools
+          choco install visualstudio2019-workload-vctools
+          rustup default nightly-x86_64-pc-windows-msvc
 
-    - name: Install macOS dependencies
-      if: matrix.os == 'macos-latest'
-      run: |
-        brew install openssl@3
-        brew install pkg-config
+      - name: Setup Windows environment
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ReleasePath = "target\${{ matrix.target }}\release"
+          New-Item -ItemType Directory -Force -Path $ReleasePath
+          $env:Path += ";C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Redist\MSVC\14.29.30133\x64"
 
-    - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: nightly
-        target: ${{ matrix.target }}
-        override: true
+          # Copy DLLs after build completes
+          if (Test-Path "C:\Windows\System32\vcruntime140.dll") {
+              Copy-Item "C:\Windows\System32\vcruntime140.dll" -Destination $ReleasePath
+          }
+          if (Test-Path "C:\Windows\System32\msvcp140.dll") {
+              Copy-Item "C:\Windows\System32\msvcp140.dll" -Destination $ReleasePath
+          }
 
-    - name: Build
-      run: cargo build --release --target ${{ matrix.target }} --verbose
-      env:
-        OPENSSL_DIR: ${{ matrix.os == 'macos-latest' && '/usr/local/opt/openssl@3' || '/usr' }}
-        OPENSSL_LIB_DIR: ${{ matrix.os == 'macos-latest' && '/usr/local/opt/openssl@3/lib' || '/usr/lib/x86_64-linux-gnu' }}
-        OPENSSL_INCLUDE_DIR: ${{ matrix.os == 'macos-latest' && '/usr/local/opt/openssl@3/include' || '/usr/include' }}
-    
-    # - name: Test
-    #   run: cargo test --target ${{ matrix.target }} --verbose
-    #   env:
-    #     OPENSSL_DIR: /usr/local/opt/openssl@3
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install openssl@3
+          brew install pkg-config
 
-    - name: Debug binary location
-      if: matrix.os == 'windows-latest'
-      run: |
-        dir target\${{ matrix.target }}\release\
-      shell: cmd
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          target: ${{ matrix.target }}
+          override: true
 
-    - name: Debug binary location
-      if: matrix.os != 'windows-latest'
-      run: ls -la target/${{ matrix.target }}/release/
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+        env:
+          OPENSSL_DIR: ${{ matrix.os == 'macos-latest' && '/usr/local/opt/openssl@3' || '/usr' }}
+          OPENSSL_LIB_DIR: ${{ matrix.os == 'macos-latest' && '/usr/local/opt/openssl@3/lib' || '/usr/lib/x86_64-linux-gnu' }}
+          OPENSSL_INCLUDE_DIR: ${{ matrix.os == 'macos-latest' && '/usr/local/opt/openssl@3/include' || '/usr/include' }}
 
-    - name: Compress artifacts (Linux/MacOS)
-      if: matrix.os != 'windows-latest'
-      run: |
-        cd target/${{ matrix.target }}/release
-        tar -czf ${{ matrix.artifact_names[0] }}.tar.gz ${{ matrix.binary_names[0] }}
-        tar -czf ${{ matrix.artifact_names[1] }}.tar.gz ${{ matrix.binary_names[1] }}
+      # - name: Test
+      #   run: cargo test --target ${{ matrix.target }} --verbose
+      #   env:
+      #     OPENSSL_DIR: /usr/local/opt/openssl@3
 
-    - name: Compress artifacts (Windows)
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        $ReleasePath = "target\${{ matrix.target }}\release"
-        Set-Location $ReleasePath
-        
-        # Compress kari
-        $Files = @()
-        if (Test-Path "${{ matrix.binary_names[0] }}") { 
-            $Files += "${{ matrix.binary_names[0] }}" 
-        }
-        if (Test-Path "vcruntime140.dll") { 
-            $Files += "vcruntime140.dll" 
-        }
-        if (Test-Path "msvcp140.dll") { 
-            $Files += "msvcp140.dll" 
-        }
-        Compress-Archive -Path $Files -DestinationPath "${{ matrix.artifact_names[0] }}.zip" -Force
+      - name: Debug binary location
+        if: matrix.os == 'windows-latest'
+        run: |
+          dir target\${{ matrix.target }}\release\
+        shell: cmd
 
-        # Compress kari-move-analyzer
-        $Files = @("${{ matrix.binary_names[1] }}")
-        if (Test-Path "vcruntime140.dll") { 
-            $Files += "vcruntime140.dll" 
-        }
-        if (Test-Path "msvcp140.dll") { 
-            $Files += "msvcp140.dll" 
-        }
-        Compress-Archive -Path $Files -DestinationPath "${{ matrix.artifact_names[1] }}.zip" -Force
+      - name: Debug binary location
+        if: matrix.os != 'windows-latest'
+        run: ls -la target/${{ matrix.target }}/release/
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.artifact_names[0] }}
-        path: target/${{ matrix.target }}/release/${{ matrix.artifact_names[0] }}.*
-        retention-days: 5
+      - name: Compress artifacts (Linux/MacOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ${{ matrix.artifact_names[0] }}.tar.gz ${{ matrix.binary_names[0] }}
+          tar -czf ${{ matrix.artifact_names[1] }}.tar.gz ${{ matrix.binary_names[1] }}
 
-    - name: Upload move-analyzer artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.artifact_names[1] }}
-        path: target/${{ matrix.target }}/release/${{ matrix.artifact_names[1] }}.*
-        retention-days: 5
+      - name: Compress artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ReleasePath = "target\${{ matrix.target }}\release"
+          Set-Location $ReleasePath
+
+          # Compress kari
+          $Files = @()
+          if (Test-Path "${{ matrix.binary_names[0] }}") {
+              $Files += "${{ matrix.binary_names[0] }}"
+          }
+          if (Test-Path "vcruntime140.dll") {
+              $Files += "vcruntime140.dll"
+          }
+          if (Test-Path "msvcp140.dll") {
+              $Files += "msvcp140.dll"
+          }
+          Compress-Archive -Path $Files -DestinationPath "${{ matrix.artifact_names[0] }}.zip" -Force
+
+          # Compress kari-move-analyzer
+          $Files = @("${{ matrix.binary_names[1] }}")
+          if (Test-Path "vcruntime140.dll") {
+              $Files += "vcruntime140.dll"
+          }
+          if (Test-Path "msvcp140.dll") {
+              $Files += "msvcp140.dll"
+          }
+          Compress-Archive -Path $Files -DestinationPath "${{ matrix.artifact_names[1] }}.zip" -Force
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_names[0] }}
+          path: target/${{ matrix.target }}/release/${{ matrix.artifact_names[0] }}.*
+          retention-days: 5
+
+      - name: Upload move-analyzer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_names[1] }}
+          path: target/${{ matrix.target }}/release/${{ matrix.artifact_names[1] }}.*
+          retention-days: 5
 
   release:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: kari-*
           merge-multiple: true
-  
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:

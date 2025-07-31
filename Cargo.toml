@@ -2,10 +2,10 @@
 # Workspace configuration for the "kanari-sdk" project.
 # Defines the overall structure and settings for the workspace.
 # name = "kanari-sdk"
-resolver = "2"                   # Use the version 2 feature resolver for more consistent feature resolution.
+resolver = "2" # Use the version 2 feature resolver for more consistent feature resolution.
 
 # Exclude List: Directories to be excluded from the workspace build.
-# This can be useful for excluding third-party code or components 
+# This can be useful for excluding third-party code or components
 # that are not directly part of the workspace's build process.
 # exclude = [
 #     "third_party/move"           # Exclude the 'third_party/move' directory from workspace builds.
@@ -14,72 +14,87 @@ resolver = "2"                   # Use the version 2 feature resolver for more c
 # Members List: Crates that are part of this workspace.
 # These are the core components of the "kanari-sdk" project.
 members = [
-    "crates/kari",               # Core crate for the Kanari SDK.
-    "consensus/pos",             # Crate implementing Proof-of-Stake consensus.
-    "crates/core/network",       # Crate for network functionalities.
-    "crates/core/p2p",           # Crate for peer-to-peer networking.
-    "crates/core/wallet/key",    # Crate for key management and wallet functionalities.
-    "crates/rpc/rpc-api",        # Crate defining the RPC API for Kanari.
-    "crates/command",            # Crate for command-line interface utilities.
-    "crates/common",             # Common utilities and types used across the workspace.
+    "crates/kari",            # Core crate for the Kanari SDK.
+    "consensus/pos",          # Crate implementing Proof-of-Stake consensus.
+    "crates/core/network",    # Crate for network functionalities.
+    "crates/core/p2p",        # Crate for peer-to-peer networking.
+    "crates/core/wallet/key", # Crate for key management and wallet functionalities.
+    "crates/rpc/rpc-api",     # Crate defining the RPC API for Kanari.
+    "crates/command",         # Crate for command-line interface utilities.
+    "crates/common",          # Common utilities and types used across the workspace.
     # "build-support",             # Crate for build scripts and workspace setup.
 
     # Move Crates: Crates specifically related to MoveVM integration.
-    "monaos/*",                  # Include all crates under the 'monaos' directory, likely storage or Move related.
+    "monaos/*", # Include all crates under the 'monaos' directory, likely storage or Move related.
 ]
 
 # Build script configuration
 [workspace.metadata.build-script]
-submodules = ["third_party/move"]  # List of submodules that should be initialized
+submodules = [
+    "third_party/move",
+] # List of submodules that should be initialized
 
 # Profile Configurations: Define different build profiles for various scenarios.
-[profile.bench]                  # Profile for benchmarking.
-debug = true                     # Include debug information for profiling.
-opt-level = 3                    # Maximum optimization level for performance.
-lto = "thin"                     # Enable Link-Time Optimization (thin LTO for faster linking).
-codegen-units = 1                # Reduce codegen units to improve LTO effectiveness (may increase compile time).
+[profile.bench] # Profile for benchmarking.
+debug = true      # Include debug information for profiling.
+opt-level = 3     # Maximum optimization level for performance.
+lto = "thin"      # Enable Link-Time Optimization (thin LTO for faster linking).
+codegen-units = 1 # Reduce codegen units to improve LTO effectiveness (may increase compile time).
 
-[profile.dev]                    # Profile for development builds.
-debug = false                    # Disable debug information for easier debugging.
-opt-level = 0                    # No optimization for faster compile times.
-split-debuginfo = "unpacked"     # Configure debug info splitting for better debugger experience.
-debug-assertions = true          # Enable debug assertions for development builds.
-overflow-checks = true           # Enable overflow checks for development builds.
-lto = false                      # Disable Link-Time Optimization for faster builds.
-panic = 'unwind'                 # Enable unwinding for panic handling.
-incremental = true               # Enable incremental compilation for faster builds.
-codegen-units = 256              # Increase codegen units for faster parallel compilation.
+[profile.dev] # Profile for development builds.
+debug = false                # Disable debug information for easier debugging.
+opt-level = 0                # No optimization for faster compile times.
+split-debuginfo = "unpacked" # Configure debug info splitting for better debugger experience.
+debug-assertions = true      # Enable debug assertions for development builds.
+overflow-checks = true       # Enable overflow checks for development builds.
+lto = false                  # Disable Link-Time Optimization for faster builds.
+panic = 'unwind'             # Enable unwinding for panic handling.
+incremental = true           # Enable incremental compilation for faster builds.
+codegen-units = 256          # Increase codegen units for faster parallel compilation.
 
-[profile.ci]                     # Profile for Continuous Integration builds.
-inherits = "test"                # Inherit settings from the 'test' profile (if defined, otherwise defaults).
-debug = 0                        # Disable debug information for potentially faster and smaller builds.
-incremental = false              # Disable incremental compilation for cleaner and more reliable CI builds.
-codegen-units = 16               # Increase codegen units for potentially faster parallel compilation in CI.
-opt-level = 1                    # Moderate optimization level for a balance of speed and performance.
+[profile.ci] # Profile for Continuous Integration builds.
+inherits = "test"   # Inherit settings from the 'test' profile (if defined, otherwise defaults).
+debug = 0           # Disable debug information for potentially faster and smaller builds.
+incremental = false # Disable incremental compilation for cleaner and more reliable CI builds.
+codegen-units = 16  # Increase codegen units for potentially faster parallel compilation in CI.
+opt-level = 1       # Moderate optimization level for a balance of speed and performance.
 
-[profile.release]                # Profile for release builds.
-opt-level = 'z'                  # Optimize for size.
-debug = false                    # Disable debug information for release binaries.
-debug-assertions = false         # Disable debug assertions for release builds.
-overflow-checks = false          # Disable overflow checks for release builds.
-lto = true                       # Enable full Link-Time Optimization for maximum performance and smaller binaries.
-panic = 'abort'                  # Remove unwinding code for panic handling.
-codegen-units = 1                # Reduce codegen units to improve LTO effectiveness.
-strip = true                     # Strip debug symbols from the final binary to reduce size.
+[profile.release] # Profile for release builds.
+opt-level = 'z'          # Optimize for size.
+debug = false            # Disable debug information for release binaries.
+debug-assertions = false # Disable debug assertions for release builds.
+overflow-checks = false  # Disable overflow checks for release builds.
+lto = true               # Enable full Link-Time Optimization for maximum performance and smaller binaries.
+panic = 'abort'          # Remove unwinding code for panic handling.
+codegen-units = 1        # Reduce codegen units to improve LTO effectiveness.
+strip = true             # Strip debug symbols from the final binary to reduce size.
 
 # Workspace Package Configuration: Metadata for the entire workspace as a package.
 # This information is used when publishing the SDK as a crate.
 [workspace.package]
-edition = "2024"                                                                                                   # Use Rust 2024 edition.
-categories = ["development-tools"]                                                                                 # Categorize as development tools on crates.io.
-keywords = ["blockchain", "sdk", "move", "monaOS", "monaVM", "rust", "ifps", "storage", "wallet", "framework"]     # Keywords for crates.io search.
-homepage = "https://kanari.network"                                                                                # Project homepage.
-documentation = "https://docs.kanari.network"                                                                      # Link to project documentation.
-version = "0.1.3"                                                                                                  # Current version of the SDK.
-authors = ["Kanari Network"]                                                                                       # Authors of the SDK.
-license = "Apache-2.0"                                                                                             # License information.
-repository = "https://github.com/kanari-network/kanari-sdk"                                                        # Link to the code repository.
-description = "Kanari Network SDK"                                                                                 # Short description of the SDK.
+edition = "2024" # Use Rust 2024 edition.
+categories = [
+    "development-tools",
+] # Categorize as development tools on crates.io.
+keywords = [
+    "blockchain",
+    "sdk",
+    "evm",
+    "monaOS",
+    "monaVM",
+    "rust",
+    "ifps",
+    "storage",
+    "wallet",
+    "framework",
+] # Keywords for crates.io search.
+homepage = "https://kanari.site" # Project homepage.
+documentation = "https://docs.kanari.site" # Link to project documentation.
+version = "0.1.3" # Current version of the SDK.
+authors = ["Kanari Network"] # Authors of the SDK.
+license = "Apache-2.0" # License information.
+repository = "https://github.com/kanari-network/kanari-sdk" # Link to the code repository.
+description = "Kanari Network SDK" # Short description of the SDK.
 
 # Workspace Dependencies: Dependencies that are shared across multiple crates in the workspace.
 # Centralized dependency management for consistent versions.
@@ -91,7 +106,7 @@ blake3 = "1.8.1"
 crypto = "0.5.1"
 digest = "0.10.7"
 hex = "0.4.3"
-rand = "0.8.5"  # version 0.8.5 is not compatible with the move-package crate
+rand = "0.8.5"                                            # version 0.8.5 is not compatible with the move-package crate
 sha2 = "0.10.9"
 sha3 = "0.10.8"
 uuid = { version = "1.17.0", features = ["v4", "serde"] }
@@ -101,7 +116,10 @@ bcs = "0.1.4"
 bincode = "1.3.3"
 mime_guess = "2.0.5"
 serde = { version = "1.0.217", features = ["derive", "rc"] }
-serde_json = { version = "1.0.134", features = ["preserve_order", "arbitrary_precision"] }
+serde_json = { version = "1.0.134", features = [
+    "preserve_order",
+    "arbitrary_precision",
+] }
 serde_yaml = "0.9.34-deprecated"
 semver = { version = "1.0.26" }
 toml = "0.8.22"
@@ -114,7 +132,7 @@ jsonrpc-core = "18.0"
 jsonrpc-http-server = "18.0"
 tokio = { version = "1", features = ["full"] }
 url = "2.5.4"
-reqwest = { version = "0.12.18"}
+reqwest = { version = "0.12.18" }
 base64 = "0.22.1"
 # Error Handling & Diagnostics
 anyhow = "1.0.98"
@@ -124,7 +142,7 @@ lazy_static = "1.5.0"
 log = "0.4.26"
 thiserror = "2.0.12"
 tracing = "0.1.41"
-primitive-types = "0.13.1" # For u256 and u512 types
+primitive-types = "0.13.1"    # For u256 and u512 types
 
 # CLI & User Interface
 clap = "4.5.37"
@@ -160,25 +178,25 @@ datatest-stable = "0.3.2"
 # Path Definitions for Workspace Members: Define paths for each crate in the workspace.
 # Allows referencing these crates as dependencies within other workspace crates using their names.
 # Path List
-kari                                = { path = "crates/kari" } 
+kari = { path = "crates/kari" }
 
 # Consensus Path List
-panorama                            = { path = "monaos/panorama" }
-consensus-pos                       = { path = "consensus/pos" }
+panorama = { path = "monaos/panorama" }
+consensus-pos = { path = "consensus/pos" }
 
 # Core Path List
-network                             = { path = "crates/core/network" }
-p2p-protocol                        = { path = "crates/core/p2p" }
-key                                 = { path = "crates/core/wallet/key" }
-command                             = { path = "crates/command" }
-common                              = { path = "crates/common" }
+network = { path = "crates/core/network" }
+p2p-protocol = { path = "crates/core/p2p" }
+key = { path = "crates/core/wallet/key" }
+command = { path = "crates/command" }
+common = { path = "crates/common" }
 
 # RPC Path List
-rpc-api                             = { path = "crates/rpc/rpc-api" }
+rpc-api = { path = "crates/rpc/rpc-api" }
 
 # MonaOS Path List
-mona-crypto                         = { path = "monaos/mona-crypto" }
-mona-storage                        = { path = "monaos/mona-storage" } 
-mona-enum-compat-util               = { path = "monaos/mona-enum-compat-util" }
-mona-types                          = { path = "monaos/mona-types" }
-mona-blockchain                     = { path = "monaos/mona-blockchain" }
+mona-crypto = { path = "monaos/mona-crypto" }
+mona-storage = { path = "monaos/mona-storage" }
+mona-enum-compat-util = { path = "monaos/mona-enum-compat-util" }
+mona-types = { path = "monaos/mona-types" }
+mona-blockchain = { path = "monaos/mona-blockchain" }
