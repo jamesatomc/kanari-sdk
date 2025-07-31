@@ -3,9 +3,10 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize}; // Import Serialize and Deserialize
-                                     // Add this at the top with other imports
-use move_core_types::account_address::AccountAddress;
+use serde::{Deserialize, Serialize};
+
+use crate::account_address::AccountAddress; // Import Serialize and Deserialize
+                                 
 
 // Add this implementation at the end of the file, right before or after the std::error::Error impl
 impl From<AccountAddress> for Address {

@@ -1,8 +1,0 @@
-[package]
-name = "Bar"
-
-[addresses]
-B = "_"
-
-[dev-dependencies]
-MoveStdlib = { local = "../../../../../move-stdlib" }

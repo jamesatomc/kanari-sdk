@@ -1,8 +1,0 @@
-[package]
-name = "print_values"
-
-[addresses]
-std = "0x1"
-
-[dependencies]
-MoveNursery = { local = "../../../../move-stdlib/nursery" }

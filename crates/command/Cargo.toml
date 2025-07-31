@@ -47,9 +47,3 @@ consensus-pos.workspace = true
 network.workspace = true
 p2p-protocol.workspace = true
 rpc-api.workspace = true
-
-# Workspace Dependencies - Move VM
-kari-move.workspace = true
-move-vm-test-utils = { workspace = true }
-move-core-types = { workspace = true }
-move-package = { workspace = true }

@@ -1,7 +1,6 @@
 use colored::Colorize;
 use command::env_cli::handle_env_command;
 use command::keytool_cli::handle_keytool_command;
-use command::move_cli::handle_move_command;
 use command::server_cli::handle_server_command;
 
 use std::process::exit;
@@ -31,11 +30,6 @@ const COMMANDS: &[CommandInfo] = &[
         name: "public",
         alias: None,
         description: "Manage Web3 public files and IPFS storage",
-    },
-    CommandInfo {
-        name: "move",
-        alias: None,
-        description: "Execute and manage Move VM smart contracts",
     },
     CommandInfo {
         name: "keytool",
@@ -117,7 +111,6 @@ async fn main() {
         Some("public") => {
             let _ = handle_public_command();
         }
-        Some("move") => handle_move_command(),
         Some("keytool") => {
             let _ = handle_keytool_command();
         }

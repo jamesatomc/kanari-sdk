@@ -7,16 +7,14 @@ resolver = "2"                   # Use the version 2 feature resolver for more c
 # Exclude List: Directories to be excluded from the workspace build.
 # This can be useful for excluding third-party code or components 
 # that are not directly part of the workspace's build process.
-exclude = [
-    "third_party/move"           # Exclude the 'third_party/move' directory from workspace builds.
-]
+# exclude = [
+#     "third_party/move"           # Exclude the 'third_party/move' directory from workspace builds.
+# ]
 
 # Members List: Crates that are part of this workspace.
 # These are the core components of the "kanari-sdk" project.
 members = [
     "crates/kari",               # Core crate for the Kanari SDK.
-    "crates/kari-move",          # Crate related to MoveVM integration within Kanari.
-    "crates/kari-move-analyzer", # Crate for MoveVM bytecode analysis.
     "consensus/pos",             # Crate implementing Proof-of-Stake consensus.
     "crates/core/network",       # Crate for network functionalities.
     "crates/core/p2p",           # Crate for peer-to-peer networking.
@@ -24,7 +22,6 @@ members = [
     "crates/rpc/rpc-api",        # Crate defining the RPC API for Kanari.
     "crates/command",            # Crate for command-line interface utilities.
     "crates/common",             # Common utilities and types used across the workspace.
-    "framework",                 # High-level framework crate for the SDK.
     # "build-support",             # Crate for build scripts and workspace setup.
 
     # Move Crates: Crates specifically related to MoveVM integration.
@@ -164,8 +161,6 @@ datatest-stable = "0.3.2"
 # Allows referencing these crates as dependencies within other workspace crates using their names.
 # Path List
 kari                                = { path = "crates/kari" } 
-kari-move                           = { path = "crates/kari-move" }
-kari-move-analyzer                  = { path = "crates/kari-move-analyzer" }
 
 # Consensus Path List
 panorama                            = { path = "monaos/panorama" }
@@ -187,53 +182,3 @@ mona-storage                        = { path = "monaos/mona-storage" }
 mona-enum-compat-util               = { path = "monaos/mona-enum-compat-util" }
 mona-types                          = { path = "monaos/mona-types" }
 mona-blockchain                     = { path = "monaos/mona-blockchain" }
-
-# Framework Move Path List
-framework                           = { path = "framework" }
-
-# Move SUI Path List: Paths defined for Move related crates, even though 'third_party/move' is excluded.
-# These paths are likely used for dependency resolution or reference within the workspace, 
-# even if they are not directly built as part of the workspace in the default configuration.
-bytecode-interpreter-crypto         = { path = "third_party/move/crates/bytecode-interpreter-crypto" }
-enum-compat-util                    = { path = "third_party/move/crates/enum-compat-util" }
-invalid-mutations                   = { path = "third_party/move/crates/invalid-mutations" }
-module-generation                   = { path = "third_party/move/crates/module-generation" }
-move-abstract-stack                 = { path = "third_party/move/crates/move-abstract-stack" }
-move-binary-format                  = { path = "third_party/move/crates/move-binary-format" }
-move-borrow-graph                   = { path = "third_party/move/crates/move-borrow-graph" }
-move-bytecode-source-map            = { path = "third_party/move/crates/move-bytecode-source-map" }
-move-bytecode-utils                 = { path = "third_party/move/crates/move-bytecode-utils" }
-move-bytecode-verifier              = { path = "third_party/move/crates/move-bytecode-verifier" }
-move-bytecode-verifier-meter        = { path = "third_party/move/crates/move-bytecode-verifier-meter" }
-move-bytecode-viewer                = { path = "third_party/move/crates/move-bytecode-viewer" }
-move-cli                            = { path = "third_party/move/crates/move-cli" }
-move-command-line-common            = { path = "third_party/move/crates/move-command-line-common" }
-move-compiler                       = { path = "third_party/move/crates/move-compiler" }
-move-core-types                     = { path = "third_party/move/crates/move-core-types" }
-move-coverage                       = { path = "third_party/move/crates/move-coverage" }
-move-disassembler                   = { path = "third_party/move/crates/move-disassembler" }
-move-docgen                         = { path = "third_party/move/crates/move-docgen" }
-move-errmapgen                      = { path = "third_party/move/crates/move-errmapgen" }
-move-ir-compiler                    = { path = "third_party/move/crates/move-ir-compiler" }
-move-ir-to-bytecode                 = { path = "third_party/move/crates/move-ir-to-bytecode" }
-move-ir-to-bytecode-syntax          = { path = "third_party/move/crates/move-ir-to-bytecode-syntax" }
-move-ir-types                       = { path = "third_party/move/crates/move-ir-types" }
-move-model                          = { path = "third_party/move/crates/move-model" }
-move-package                        = { path = "third_party/move/crates/move-package" }
-move-proc-macros                    = { path = "third_party/move/crates/move-proc-macros" }
-move-prover                         = { path = "third_party/move/crates/move-prover" }
-move-prover-test-utils              = { path = "third_party/move/crates/move-prover-test-utils" }
-move-read-write-set-types           = { path = "third_party/move/crates/move-read-write-set-types" }
-move-stackless-bytecode             = { path = "third_party/move/crates/move-stackless-bytecode" }
-move-stackless-bytecode-interpreter = { path = "third_party/move/crates/move-stackless-bytecode-interpreter" }
-move-stdlib                         = { path = "third_party/move/crates/move-stdlib" }
-move-stdlib-natives                 = { path = "third_party/move/crates/move-stdlib-natives" }
-move-symbol-pool                    = { path = "third_party/move/crates/move-symbol-pool" }
-move-transactional-test-runner      = { path = "third_party/move/crates/move-transactional-test-runner" }
-move-unit-test                      = { path = "third_party/move/crates/move-unit-test" }
-move-vm-config                      = { path = "third_party/move/crates/move-vm-config" }
-move-vm-profiler                    = { path = "third_party/move/crates/move-vm-profiler" }
-move-vm-runtime                     = { path = "third_party/move/crates/move-vm-runtime" }
-move-vm-test-utils                  = { path = "third_party/move/crates/move-vm-test-utils" }
-move-vm-types                       = { path = "third_party/move/crates/move-vm-types" }
-prover_bytecode                     = { path = "third_party/move/crates/move-stackless-bytecode", package = "move-stackless-bytecode" }

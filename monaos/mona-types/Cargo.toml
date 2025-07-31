@@ -13,21 +13,11 @@ description.workspace = true
 
 
 [dependencies]
-# The `move-core-types` crate contains the core types of the Move language.
-# Move dependencies (optional)
-move-binary-format = { workspace = true, optional = true }
-move-bytecode-utils = { workspace = true, optional = true }
-move-command-line-common = { workspace = true, optional = true }
-move-core-types = { workspace = true}
-move-vm-test-utils = { workspace = true, optional = true }
-move-vm-types = { workspace = true, optional = true }
-move-vm-profiler = { workspace = true, optional = true }
-
-
 mona-enum-compat-util.workspace = true
 log.workspace = true
 lazy_static.workspace = true
 bcs.workspace = true
+rand.workspace = true
 serde.workspace = true
 sha2.workspace = true
 sha3.workspace = true
@@ -35,13 +25,6 @@ hex.workspace = true
 primitive-types.workspace = true
 thiserror.workspace = true
 
-[features]
-# This feature is used to include the gas profiler in the mona-types crate.
-gas-profiler = [
-    "move-vm-profiler/gas-profiler",
-    "move-vm-types/gas-profiler",
-    "move-vm-test-utils/gas-profiler",
-]
 
 [dev-dependencies]
 hex-literal = "1.0.0"
