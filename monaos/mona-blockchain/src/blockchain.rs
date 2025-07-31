@@ -262,126 +262,30 @@ pub fn get_address_balance(address: &Address) -> Result<u64, BlockchainError> {
 
 // Improved submit_transaction function with better logging
 pub fn submit_transaction(transaction: block::Transaction) -> Result<(), BlockchainError> {
-    // Get transaction type for better logging
-    let tx_type = transaction.get_transaction_type();
-    
-    log::info!(
-        "Submitting transaction: {} (type: {}, id: {})",
-        tx_type,
-        transaction.transaction_id,
-        hex::encode(&transaction.transaction_id.as_bytes()[..8])
-    );
-    
-    // Provide detailed VM transaction info if applicable
-    if tx_type == "VM_FUNCTION_CALL" {
-        if let Some(data) = &transaction.data {
-            if let Ok(data_str) = std::str::from_utf8(data) {
-                if data_str.starts_with("VM:") {
-                    let parts: Vec<&str> = data_str.split(':').collect();
-                    if parts.len() >= 3 {
-                        log::info!(
-                            "VM function call: module={}, function={}", 
-                            parts.get(1).unwrap_or(&"unknown"), 
-                            parts.get(2).unwrap_or(&"unknown")
-                        );
-                    }
-                }
-            }
-        }
-    }
-    
     // Add to pending transaction queue
     let mut transactions = match PENDING_TRANSACTIONS.lock() {
         Ok(t) => t,
         Err(_) => return Err(BlockchainError::Transaction("Failed to lock pending transactions".to_string()))
     };
-    
     transactions.push_back(transaction);
     log::info!("Transaction added to pending queue. Queue size: {}", transactions.len());
-    
     Ok(())
 }
 
 // Enhanced function to prioritize VM function calls
 pub fn get_next_block_transactions(max_count: usize) -> Vec<block::Transaction> {
     let mut result = Vec::new();
-    
     // Try to get pending transactions
     if let Ok(mut queue) = PENDING_TRANSACTIONS.lock() {
-        // Log queue size for debugging
-        info!("Processing pending transaction queue, size: {}", queue.len());
-        
-        // First pass: prioritize modules, then VM function calls
-        let mut vm_module_deployments = VecDeque::new();
-        let mut vm_function_calls = VecDeque::new();
-        let mut regular_txs = VecDeque::new();
-        
-        // Scan through all transactions to sort by priority
         while let Some(tx) = queue.pop_front() {
-            // Check transaction type and prioritize accordingly
-            if let Some(data) = &tx.data {
-                if let Ok(data_str) = std::str::from_utf8(data) {
-                    // Highest priority - module deployments
-                    if data_str.starts_with("VM_MODULE:") {
-                        info!("Found VM module deployment transaction: {}", tx.transaction_id);
-                        vm_module_deployments.push_back(tx);
-                        continue;
-                    }
-                    // Medium priority - VM function calls
-                    else if data_str.starts_with("VM:") || data_str.contains("::") {
-                        info!("Found VM function call transaction: {}", tx.transaction_id);
-                        vm_function_calls.push_back(tx);
-                        continue;
-                    }
-                }
-            }
-            
-            // Lowest priority - regular transactions
-            regular_txs.push_back(tx);
-        }
-        
-        // Add VM module deployments first (highest priority)
-        while !vm_module_deployments.is_empty() && result.len() < max_count {
-            if let Some(tx) = vm_module_deployments.pop_front() {
-                info!("Including VM module deployment: {}", tx.transaction_id);
-                result.push(tx);
+            result.push(tx);
+            if result.len() >= max_count {
+                break;
             }
         }
-        
-        // Add VM function calls next (medium priority)
-        while !vm_function_calls.is_empty() && result.len() < max_count {
-            if let Some(tx) = vm_function_calls.pop_front() {
-                info!("Including VM function call: {}", tx.transaction_id);
-                result.push(tx);
-            }
-        }
-        
-        // Finally add regular transactions (lowest priority)
-        while !regular_txs.is_empty() && result.len() < max_count {
-            if let Some(tx) = regular_txs.pop_front() {
-                result.push(tx);
-            }
-        }
-        
-        // Return any unused transactions back to the queue in order of priority
-        for tx in vm_module_deployments {
-            queue.push_front(tx); // Add back to front for highest priority
-        }
-        
-        for tx in vm_function_calls {
-            queue.push_back(tx); // Medium priority
-        }
-        
-        for tx in regular_txs {
-            queue.push_back(tx); // Lowest priority
-        }
-        
-        info!("Selected {} transactions for next block ({} remain in queue)", 
-             result.len(), queue.len());
     } else {
         warn!("Failed to lock transaction queue, creating empty block");
     }
-    
     result
 }
 
