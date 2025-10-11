@@ -8,10 +8,10 @@ use mona_blockchain::blockchain::{load_blockchain, save_blockchain};
 use mona_blockchain::chain_id::CHAIN_ID;
 use rpc_api::start_rpc_server;
 
-use tokio::sync::mpsc;
-use tokio::time::{Duration, sleep};
-use tokio::sync::watch;
 use atty::Stream;
+use tokio::sync::mpsc;
+use tokio::sync::watch;
+use tokio::time::{Duration, sleep};
 
 use mona_crypto::{check_wallet_exists, list_wallet_files};
 use serde_yaml::Value;

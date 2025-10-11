@@ -1,9 +1,0 @@
-[package]
-name = "KanariFramework"
-
-[dependencies]
-MoveStdlib = { local = "../../../framework/packages/move-stdlib" }
-
-[addresses]
-std =  "0x1"
-kanari_framework = "0x2"

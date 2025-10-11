@@ -1,9 +1,0 @@
-[package]
-name = "criterion-cpu-time"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-criterion.workspace = true
-libc = "0.2.172"
-windows-sys = { version = "0.59.0", features = ["Win32_System_Threading", "Win32_Foundation"] }

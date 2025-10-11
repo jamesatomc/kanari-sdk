@@ -1,26 +1,37 @@
-Move is a smart contract programming language that captures the essence of safe programming with digital assets. Move is designed around the following values:
 
-1. **Secure by default**
-   
-Insecure languages are a serious barrier both to accessible smart contract development and to mainstream adoption of digital assets. The first duty of a smart contract language is to prevent as many potential safety issues as possible (e.g. re-entrancy, missing access control checks, arithmetic overflow, ...) by construction. Any changes to Move should preserve or enhance its existing security guarantees.
+[![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
+[![Discord chat](https://img.shields.io/discord/903339070925721652.svg?logo=discord&style=flat-square)](https://discord.gg/M95qX3KnG8)
 
-2. **Expressive by nature**
-   
-Move must enable programmers to write any smart contract they can imagine. But we care as much about the way it feels to write Move as we do about what Move allows you to do--the language should be rich enough that the features needed for a task are available, and minimal enough that the choice is obvious. The Move toolchain should be a productivity enhancer and a thought partner.
+![Move logo](assets/color/SVG/Move_Logo_Design_Digital_Final_-01.svg)
 
-3. **Intuitive for all**
-   
-Smart contracts are only one part of a useful application. Move should understand the broader context of its usage and design with both the smart contract developer and the application developer in mind. It should be easy for developers to learn how to read Move-managed state, build Move powered transactions, and write new Move code.
+# The Move Language
 
-The core technical elements of Move are:
+Move is a programming language for writing safe smart contracts originally developed at Facebook to power the Diem blockchain. Move is designed to be a platform-agnostic language to enable common libraries, tooling, and developer communities across diverse blockchains with vastly different data and execution models. Move's ambition is to become the "JavaScript of web3" in terms of ubiquity--when developers want to quickly write safe code involving assets, it should be written in Move.
 
-- Safe, familiar, and flexible abstractions for digital assets via programmable *objects*.
-- A rich *ability* system (inspired by linear types) that gives programmers extreme control of how values are created, destroyed, stored, copied, and transferred.
-- A *module/* system with strong encapsulation features to enable code reuse while maintaining this control.
-- *Dynamic fields* for creating hierarchical relationships between objects.
-- *Programmable transaction blocks* (PTBs) to enable atomic client-side composition of Move-powered APIs.
+This repository is the official home of the Move virtual machine, bytecode verifier, compiler, prover, package manager, and book. For Move code examples and papers, check out [awesome-move](https://github.com/MystenLabs/awesome-move).
 
-Move was born in 2018 as part of Facebook's Libra project. It was publicly revealed in 2019, the first Move-powered network launched in 2020. As of April 2024, there are numerous Move-powered chains in production with several more in the works. Move is an embedded language with a platform-agnostic core, which means it takes on a slightly different personality in each chain that uses it.
+## Quickstart
 
+### Build the [Docker](https://www.docker.com/community/open-source/) Image for the Command Line Tool
 
-kanari-move windows/unix
+```
+docker build -t move/cli -f docker/move-cli/Dockerfile .
+```
+
+### Build a Test Project
+
+```
+cd ./language/documentation/tutorial/step_1/BasicCoin
+docker run -v `pwd`:/project move/cli build
+```
+
+Follow the [language/documentation/tutorial](./language/documentation/tutorial/README.md) to set up move for development.
+
+## Community
+
+* Join us on the [Move Discord](https://discord.gg/cPUmhe24Mz).
+* Browse code and content from the community at [awesome-move](https://github.com/MystenLabs/awesome-move).
+
+## License
+
+Move is licensed as [Apache 2.0](https://github.com/move-language/move/blob/main/LICENSE).
