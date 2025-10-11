@@ -25,7 +25,11 @@ members = [
     # "build-support",             # Crate for build scripts and workspace setup.
 
     # Move Crates: Crates specifically related to MoveVM integration.
-    "monaos/*",                  # Include all crates under the 'monaos' directory, likely storage or Move related.
+    "monaos/*", # Include all crates under the 'monaos' directory, likely storage or Move related.
+    "crates/moveos-compiler", 
+    "crates/moveos-verifier",      
+
+    "frameworks/*", # Include all framework crates, likely Move standard libraries or similar.           
 ]
 
 # Build script configuration
@@ -100,12 +104,13 @@ uuid = { version = "1.17.0", features = ["v4", "serde"] }
 bcs = "0.1.4"
 bincode = "1.3.3"
 mime_guess = "2.0.5"
-serde = { version = "1.0.217", features = ["derive", "rc"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = { version = "1.0.134", features = ["preserve_order", "arbitrary_precision"] }
 serde_yaml = "0.9.34-deprecated"
 semver = { version = "1.0.26" }
-toml = "0.8.22"
-toml_edit = "0.22.26"
+toml = "0.9.8"
+toml_edit = "0.23.7"
+include_dir = "0.7.4"
 
 # Async & Network Programming
 async-trait = "0.1"
@@ -122,10 +127,11 @@ codespan-reporting = "0.11.1"
 env_logger = "0.11.6"
 lazy_static = "1.5.0"
 log = "0.4.26"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["time"] }
-primitive-types = "0.13.1" # For u256 and u512 types
+primitive-types = "0.14.0" # For u256 and u512 types
+termcolor = "1.1.0"
 
 # CLI & User Interface
 clap = "4.5.37"
@@ -137,7 +143,7 @@ lsp-types = "0.97.0"
 dirs = "6.0.0"
 dunce = "1.0.5"
 tempfile = "3.3.0"
-vfs = "0.10.0"
+vfs = "0.12.2"
 walkdir = "2.3.2"
 
 # Data Structures & Algorithms
@@ -185,6 +191,16 @@ mona-types                          = { path = "monaos/mona-types" }
 mona-blockchain                     = { path = "monaos/mona-blockchain" }
 
 # Framework Path List
+framework-builder                 = { path = "frameworks/framework-builder" }
+framework-release                 = { path = "frameworks/framework-release" }
+framework-types                   = { path = "frameworks/framework-types" }
+
+
+moveos-types                     = { git = "https://github.com/rooch-network/rooch.git", tag = "v0.11.0" }
+moveos-stdlib                    = { git = "https://github.com/rooch-network/rooch.git", tag = "v0.11.0" }
+
+moveos-compiler                  = { path = "crates/moveos-compiler" }
+moveos-verifier                  = { path = "crates/moveos-verifier" }
 
 # Note: the BEGIN and END comments below are required for external tooling. Do not remove.
 # BEGIN MOVE DEPENDENCIES

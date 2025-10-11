@@ -1,0 +1,26 @@
+---
+compiled_package_info:
+  package_name: KanariLibrary
+  address_alias_instantiation:
+    kanari_library: "0000000000000000000000000000000000000000000000000000000000000006"
+    moveos_std: "0000000000000000000000000000000000000000000000000000000000000002"
+    rooch_framework: "0000000000000000000000000000000000000000000000000000000000000003"
+    std: "0000000000000000000000000000000000000000000000000000000000000001"
+    vm_reserved: "0000000000000000000000000000000000000000000000000000000000000000"
+  source_digest: 6DD52EF467E2F40D65BCC6580138B34C62A4BDB63615A04122EFFFE0D10951A2
+  build_flags:
+    dev_mode: false
+    test_mode: false
+    generate_docs: false
+    generate_abis: false
+    install_dir: ~
+    force_recompilation: false
+    additional_named_addresses: {}
+    architecture: ~
+    fetch_deps_only: false
+    skip_fetch_latest_git_deps: false
+    bytecode_version: ~
+dependencies:
+  - MoveStdlib
+  - MoveosStdlib
+  - RoochFramework
