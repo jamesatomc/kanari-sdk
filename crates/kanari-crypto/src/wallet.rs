@@ -208,13 +208,16 @@ pub fn save_wallet(
     // Load or create the keystore
     let mut keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
 
+    // Format address with 0x prefix for consistency
+    let address_str = format!("0x{}", hex::encode(address.to_vec()));
+    
     // Add the wallet to the keystore with the address as the key
     keystore
-        .add_wallet(&address.to_string(), encrypted_data)
+        .add_wallet(&address_str, encrypted_data)
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
 
     // Also update the active_address in kanari.yaml
-    update_active_address(&address.to_string())?;
+    update_active_address(&address_str)?;
 
     Ok(())
 }

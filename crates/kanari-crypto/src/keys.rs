@@ -275,7 +275,8 @@ fn generate_dilithium2_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    let address = format!("0xpqc{}", &hex_encoded[..40]); // PQC address prefix
+    // Use valid hex characters for address - take first 64 hex chars (32 bytes)
+    let address = format!("0x{}", &hex_encoded[..64]);
     let raw_private_key = hex::encode(secret_key_bytes);
     let private_key = format!("kanapqc{}", raw_private_key);
 
@@ -295,7 +296,8 @@ fn generate_dilithium3_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    let address = format!("0xpqc{}", &hex_encoded[..40]);
+    // Use valid hex characters for address - take first 64 hex chars (32 bytes)
+    let address = format!("0x{}", &hex_encoded[..64]);
     let raw_private_key = hex::encode(secret_key_bytes);
     let private_key = format!("kanapqc{}", raw_private_key);
 
@@ -315,7 +317,8 @@ fn generate_dilithium5_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    let address = format!("0xpqc{}", &hex_encoded[..40]);
+    // Use valid hex characters for address - take first 64 hex chars (32 bytes)
+    let address = format!("0x{}", &hex_encoded[..64]);
     let raw_private_key = hex::encode(secret_key_bytes);
     let private_key = format!("kanapqc{}", raw_private_key);
 
@@ -335,7 +338,8 @@ fn generate_sphincs_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    let address = format!("0xpqc{}", &hex_encoded[..40]);
+    // Use valid hex characters for address - take first 64 hex chars (32 bytes)
+    let address = format!("0x{}", &hex_encoded[..64]);
     let raw_private_key = hex::encode(secret_key_bytes);
     let private_key = format!("kanapqc{}", raw_private_key);
 
@@ -362,19 +366,18 @@ fn generate_hybrid_ed25519_dilithium3_keypair() -> Result<KeyPair, KeyError> {
 
     // Combine private keys
     let ed25519_raw = extract_raw_key(&ed25519_pair.private_key);
-    let dilithium3_raw = extract_raw_key(&dilithium3_pair.private_key)
-        .strip_prefix("pqc")
-        .unwrap_or("");
+    // Extract dilithium3 raw key (remove "kanapqc" prefix to get just the hex)
+    let dilithium3_with_prefix = &dilithium3_pair.private_key;
+    let dilithium3_raw = dilithium3_with_prefix.strip_prefix("kanapqc").unwrap_or(dilithium3_with_prefix);
     let combined_private = format!("kanahybrid{}:{}", ed25519_raw, dilithium3_raw);
 
-    // Use hybrid address prefix - safely take first 20 bytes of hash
-    let pub_bytes = combined_public.as_bytes();
-    let hash_input = if pub_bytes.len() >= 20 {
-        &pub_bytes[..20]
-    } else {
-        pub_bytes
-    };
-    let address = format!("0xhybrid{}", hex::encode(hash_input));
+    // Generate hybrid address using SHA3-256 hash of combined public key
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(combined_public.as_bytes());
+    let hash_result = hasher.finalize();
+    // Use full 32 bytes (64 hex chars) for valid address
+    let address = format!("0x{}", hex::encode(&hash_result[..]));
 
     Ok(KeyPair {
         private_key: combined_private,
@@ -395,21 +398,18 @@ fn generate_hybrid_k256_dilithium3_keypair() -> Result<KeyPair, KeyError> {
 
     // Combine private keys
     let k256_raw = extract_raw_key(&k256_pair.private_key);
-    let dilithium3_raw = extract_raw_key(&dilithium3_pair.private_key)
-        .strip_prefix("pqc")
-        .ok_or(KeyError::GenerationFailed(
-            "Invalid PQC key format".to_string(),
-        ))?;
+    // Extract dilithium3 raw key (remove "kanapqc" prefix to get just the hex)
+    let dilithium3_with_prefix = &dilithium3_pair.private_key;
+    let dilithium3_raw = dilithium3_with_prefix.strip_prefix("kanapqc").unwrap_or(dilithium3_with_prefix);
     let combined_private = format!("kanahybrid{}:{}", k256_raw, dilithium3_raw);
 
-    // Use hybrid address prefix - safely take first 20 bytes of hash
-    let pub_bytes = combined_public.as_bytes();
-    let hash_input = if pub_bytes.len() >= 20 {
-        &pub_bytes[..20]
-    } else {
-        pub_bytes
-    };
-    let address = format!("0xhybrid{}", hex::encode(hash_input));
+    // Generate hybrid address using SHA3-256 hash of combined public key
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(combined_public.as_bytes());
+    let hash_result = hasher.finalize();
+    // Use full 32 bytes (64 hex chars) for valid address
+    let address = format!("0x{}", hex::encode(&hash_result[..]));
 
     Ok(KeyPair {
         private_key: combined_private,
