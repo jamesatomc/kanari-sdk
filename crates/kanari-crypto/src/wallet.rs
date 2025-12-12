@@ -162,11 +162,18 @@ pub fn save_wallet(
         ));
     }
 
-    // Enforce strong password requirements for security (includes length check >= 16)
-    if !crate::is_password_strong(password) {
+    // Require a sensible minimum length (8 chars) and warn if password isn't strong
+    if password.len() < 8 {
         return Err(WalletError::EncryptionError(
-            "Password does not meet security requirements: must be at least 16 characters and contain uppercase, lowercase, numbers, and special characters".to_string()
+            "Password must be at least 8 characters long".to_string(),
         ));
+    }
+
+    // Warn if password is not strong (recommendation only)
+    if !crate::is_password_strong(password) {
+        log::warn!(
+            "Warning: Password does not meet recommended strength requirements (16+ chars, mixed case, numbers, special chars)"
+        );
     }
 
     if private_key.is_empty() {
