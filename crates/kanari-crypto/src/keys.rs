@@ -6,9 +6,9 @@
 //! **Quantum-Safe**: Includes NIST-standardized post-quantum algorithms.
 
 use bip39::{Language, Mnemonic};
+use move_core_types::account_address::AccountAddress;
 use rand::rngs::OsRng;
 use std::fmt;
-use move_core_types::account_address::AccountAddress;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -368,7 +368,9 @@ fn generate_hybrid_ed25519_dilithium3_keypair() -> Result<KeyPair, KeyError> {
     let ed25519_raw = extract_raw_key(&ed25519_pair.private_key);
     // Extract dilithium3 raw key (remove "kanapqc" prefix to get just the hex)
     let dilithium3_with_prefix = &dilithium3_pair.private_key;
-    let dilithium3_raw = dilithium3_with_prefix.strip_prefix("kanapqc").unwrap_or(dilithium3_with_prefix);
+    let dilithium3_raw = dilithium3_with_prefix
+        .strip_prefix("kanapqc")
+        .unwrap_or(dilithium3_with_prefix);
     let combined_private = format!("kanahybrid{}:{}", ed25519_raw, dilithium3_raw);
 
     // Generate hybrid address using SHA3-256 hash of combined public key
@@ -400,7 +402,9 @@ fn generate_hybrid_k256_dilithium3_keypair() -> Result<KeyPair, KeyError> {
     let k256_raw = extract_raw_key(&k256_pair.private_key);
     // Extract dilithium3 raw key (remove "kanapqc" prefix to get just the hex)
     let dilithium3_with_prefix = &dilithium3_pair.private_key;
-    let dilithium3_raw = dilithium3_with_prefix.strip_prefix("kanapqc").unwrap_or(dilithium3_with_prefix);
+    let dilithium3_raw = dilithium3_with_prefix
+        .strip_prefix("kanapqc")
+        .unwrap_or(dilithium3_with_prefix);
     let combined_private = format!("kanahybrid{}:{}", k256_raw, dilithium3_raw);
 
     // Generate hybrid address using SHA3-256 hash of combined public key
@@ -648,9 +652,17 @@ pub fn detect_curve_type(address: &str) -> Option<CurveType> {
         Err(_) => return None,
     };
 
-    // Do not assume 32-byte values are Ed25519 immediately — they may be
-    // compressed EC public keys for K256/P256. We'll check EC keys first
-    // and fall back to Ed25519 if EC checks fail.
+    // For Ed25519, public keys are always 32 bytes exactly
+    if decoded_hex.len() == 32 {
+        // Try to construct an Ed25519 key
+        let mut key_array = [0u8; 32];
+        if decoded_hex.len() == 32 {
+            key_array.copy_from_slice(&decoded_hex);
+            if Ed25519VerifyingKey::from_bytes(&key_array).is_ok() {
+                return Some(CurveType::Ed25519);
+            }
+        }
+    }
 
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
         return None;
@@ -684,28 +696,12 @@ pub fn detect_curve_type(address: &str) -> Option<CurveType> {
         }
     };
 
-    let ec_result = match (k256_key_valid, p256_key_valid) {
+    match (k256_key_valid, p256_key_valid) {
         (true, false) => Some(CurveType::K256),
         (false, true) => Some(CurveType::P256),
         (true, true) => Some(CurveType::K256), // Default to K256 if both valid
         (false, false) => None,
-    };
-
-    if ec_result.is_some() {
-        return ec_result;
     }
-
-    // If neither EC validation succeeded but the decoded data is 32 bytes,
-    // it's likely an Ed25519 public key — try to validate it as such.
-    if decoded_hex.len() == 32 {
-        let mut key_array = [0u8; 32];
-        key_array.copy_from_slice(&decoded_hex);
-        if Ed25519VerifyingKey::from_bytes(&key_array).is_ok() {
-            return Some(CurveType::Ed25519);
-        }
-    }
-
-    None
 }
 
 /// Generate a new Kanari address with the specified mnemonic length and curve type
@@ -824,6 +820,16 @@ mod tests {
         // Test detection with address
         let detected = detect_curve_type(&keypair.address);
         assert_eq!(detected, Some(CurveType::K256), "Should detect K256");
+    }
+
+    #[test]
+    fn test_detect_curve_type_p256() {
+        // Generate a P256 keypair
+        let keypair = generate_keypair(CurveType::P256).unwrap();
+
+        // Test detection with address
+        let detected = detect_curve_type(&keypair.address);
+        assert_eq!(detected, Some(CurveType::P256), "Should detect P256");
     }
 
     #[test]

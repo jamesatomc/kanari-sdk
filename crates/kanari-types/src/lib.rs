@@ -18,7 +18,6 @@ pub mod crypto;
 pub mod deny_list;
 pub mod object;
 
-
 // Build a NativeFunction easily
 fn make_native<F>(f: F) -> NativeFunction
 where

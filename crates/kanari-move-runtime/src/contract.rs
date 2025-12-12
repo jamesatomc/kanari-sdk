@@ -392,7 +392,9 @@ mod tests {
         let mut abi = ContractABI::new();
 
         let func = FunctionSignature {
-            name: kanari_types::transfer::TransferModule::function_names().public_transfer.to_string(),
+            name: kanari_types::transfer::TransferModule::function_names()
+                .public_transfer
+                .to_string(),
             is_entry: true,
             type_params: vec![],
             parameters: vec![
@@ -438,7 +440,11 @@ mod tests {
         registry.register(contract);
 
         assert_eq!(registry.count(), 1);
-        assert!(registry.get_contract("0x1", kanari_types::coin::CoinModule::COIN_MODULE).is_some());
+        assert!(
+            registry
+                .get_contract("0x1", kanari_types::coin::CoinModule::COIN_MODULE)
+                .is_some()
+        );
         assert_eq!(registry.get_contracts_by_address("0x1").len(), 1);
     }
 
@@ -468,13 +474,21 @@ mod tests {
             kanari_types::transfer::TransferModule::function_names().public_transfer,
             "0x2",
         )?
-            .with_gas_limit(200_000)
-            .with_gas_price(2000);
+        .with_gas_limit(200_000)
+        .with_gas_price(2000);
 
-        assert_eq!(call.function, kanari_types::transfer::TransferModule::function_names().public_transfer.to_string());
+        assert_eq!(
+            call.function,
+            kanari_types::transfer::TransferModule::function_names()
+                .public_transfer
+                .to_string()
+        );
         assert_eq!(call.gas_limit, 200_000);
         assert_eq!(call.gas_price, 2000);
-        assert_eq!(call.module_name(), kanari_types::coin::CoinModule::COIN_MODULE.to_string());
+        assert_eq!(
+            call.module_name(),
+            kanari_types::coin::CoinModule::COIN_MODULE.to_string()
+        );
 
         Ok(())
     }

@@ -29,7 +29,9 @@ use pqcrypto_kyber::kyber768;
 use pqcrypto_kyber::kyber1024;
 
 #[cfg(feature = "pqc")]
-use pqcrypto_traits::kem::{PublicKey as KemPublicKey, SecretKey as KemSecretKey, SharedSecret, Ciphertext};
+use pqcrypto_traits::kem::{
+    Ciphertext, PublicKey as KemPublicKey, SecretKey as KemSecretKey, SharedSecret,
+};
 
 /// Encryption scheme selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -317,7 +319,9 @@ pub fn secure_erase(data: &mut [u8]) {
 // ==========================
 #[cfg(feature = "pqc")]
 /// Generate a Kyber keypair and return raw bytes of (public_key, secret_key)
-pub fn pqc_generate_keypair(scheme: EncryptionScheme) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
+pub fn pqc_generate_keypair(
+    scheme: EncryptionScheme,
+) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
     match scheme {
         EncryptionScheme::Kyber768 => {
             let (pk, sk) = kyber768::keypair();
@@ -327,7 +331,9 @@ pub fn pqc_generate_keypair(scheme: EncryptionScheme) -> Result<(Vec<u8>, Vec<u8
             let (pk, sk) = kyber1024::keypair();
             Ok((pk.as_bytes().to_vec(), sk.as_bytes().to_vec()))
         }
-        _ => Err(EncryptionError::PqcError("Unsupported PQC scheme for key generation".to_string())),
+        _ => Err(EncryptionError::PqcError(
+            "Unsupported PQC scheme for key generation".to_string(),
+        )),
     }
 }
 
@@ -351,7 +357,9 @@ pub fn pqc_encapsulate_from_public_key(
             let (ct, ss) = kyber1024::encapsulate(&pk);
             Ok((ct.as_bytes().to_vec(), ss.as_bytes().to_vec()))
         }
-        _ => Err(EncryptionError::PqcError("Unsupported PQC scheme for encapsulation".to_string())),
+        _ => Err(EncryptionError::PqcError(
+            "Unsupported PQC scheme for encapsulation".to_string(),
+        )),
     }
 }
 
@@ -379,7 +387,9 @@ pub fn pqc_decapsulate_from_secret(
             let ss = kyber1024::decapsulate(&ct, &sk);
             Ok(ss.as_bytes().to_vec())
         }
-        _ => Err(EncryptionError::PqcError("Unsupported PQC scheme for decapsulation".to_string())),
+        _ => Err(EncryptionError::PqcError(
+            "Unsupported PQC scheme for decapsulation".to_string(),
+        )),
     }
 }
 

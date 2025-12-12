@@ -210,7 +210,7 @@ pub fn save_wallet(
 
     // Format address with 0x prefix for consistency
     let address_str = format!("0x{}", hex::encode(address.to_vec()));
-    
+
     // Add the wallet to the keystore with the address as the key
     keystore
         .add_wallet(&address_str, encrypted_data)
@@ -239,7 +239,10 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
     // Normalize address: keystore stores addresses with `0x` prefix, but callers
     // may pass the raw hex string. Try both forms so load is tolerant.
     let key_variants = if address.starts_with("0x") {
-        vec![address.to_string(), address.trim_start_matches("0x").to_string()]
+        vec![
+            address.to_string(),
+            address.trim_start_matches("0x").to_string(),
+        ]
     } else {
         vec![format!("0x{}", address), address.to_string()]
     };
@@ -252,8 +255,8 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
         }
     }
 
-    let encrypted_data_ref = encrypted_data_opt
-        .ok_or_else(|| WalletError::NotFound(address.to_string()))?;
+    let encrypted_data_ref =
+        encrypted_data_opt.ok_or_else(|| WalletError::NotFound(address.to_string()))?;
 
     // Decrypt wallet data
     let decrypted = encryption::decrypt_data(encrypted_data_ref, password)
@@ -705,7 +708,8 @@ mod tests {
 
     #[test]
     fn test_save_wallet_rejects_empty_private_key() {
-        let address = AccountAddress::from_str("0x1234567890123456789012345678901234567890").unwrap();
+        let address =
+            AccountAddress::from_str("0x1234567890123456789012345678901234567890").unwrap();
 
         let result = save_wallet(
             &address,

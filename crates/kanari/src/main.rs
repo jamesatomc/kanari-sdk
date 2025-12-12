@@ -28,7 +28,7 @@ enum Commands {
         /// Password for wallet encryption
         #[arg(short, long)]
         password: String,
-        /// Curve type (ed25519, k256, p256, dilithium2, dilithium3, dilithium5)
+        /// Curve type (ed25519, k256, p256, dilithium2, dilithium3, dilithium5, sphincs+, ed25519+dilithium3, k256+dilithium3)
         #[arg(short, long, default_value = "ed25519")]
         curve: String,
         /// Number of seed words (12 or 24)
@@ -148,7 +148,8 @@ fn main() -> Result<()> {
                 (kp.private_key, kp.address, mnemonic)
             };
 
-            let address = AccountAddress::from_str(&address_str).context("Generated invalid address")?;
+            let address =
+                AccountAddress::from_str(&address_str).context("Generated invalid address")?;
 
             // Save wallet
             save_wallet(&address, &private_key, &seed_phrase, &password, curve_type)
@@ -198,18 +199,21 @@ fn main() -> Result<()> {
             show_secrets,
         } => {
             let wallet = load_wallet(&address, &password).context("Failed to load wallet")?;
-            
+
             println!("\n╔════════════════════════════════════════════════════════════════╗");
             println!("║              KANARI WALLET INFORMATION                         ║");
             println!("╚════════════════════════════════════════════════════════════════╝\n");
-            
+
             println!("Address:");
             println!("   0x{}\n", hex::encode(wallet.address.to_vec()));
-            
+
             println!("Cryptography:");
             println!("   Algorithm: {}", wallet.curve_type);
-            println!("   Security Level: {}/5", wallet.curve_type.security_level());
-            
+            println!(
+                "   Security Level: {}/5",
+                wallet.curve_type.security_level()
+            );
+
             if wallet.curve_type.is_post_quantum() {
                 if wallet.curve_type.is_hybrid() {
                     println!("   Type: Hybrid (Classical + Post-Quantum)");
@@ -222,13 +226,13 @@ fn main() -> Result<()> {
                 println!("   Type: Classical Elliptic Curve Cryptography");
                 println!("   Protection: Vulnerable to future Quantum Computers");
             }
-            
+
             if show_secrets {
                 println!("\nSENSITIVE INFORMATION (Keep Secret!):");
                 println!("─────────────────────────────────────────────────────────────────");
                 println!("Private Key:");
                 println!("   {}\n", wallet.private_key);
-                
+
                 if !wallet.seed_phrase.is_empty() {
                     println!("Seed Phrase (BIP39 Mnemonic):");
                     println!("   {}\n", wallet.seed_phrase);
@@ -237,7 +241,7 @@ fn main() -> Result<()> {
                     println!("   Not available - Post-Quantum keys use direct generation");
                     println!("   PQC algorithms don't support BIP39/BIP32 derivation\n");
                 }
-                
+
                 println!("CRITICAL WARNING:");
                 println!("   NEVER share your private key or seed phrase with anyone!");
                 println!("   Anyone with this information can steal ALL your funds");
@@ -246,9 +250,9 @@ fn main() -> Result<()> {
                 println!("\nTip: Use --show-secrets to view private key and seed phrase");
                 println!("   Warning: Only use this in a secure, private environment");
             }
-            
+
             println!("\n════════════════════════════════════════════════════════════════\n");
-            
+
             Ok(())
         }
 

@@ -6,8 +6,8 @@ pub mod gas;
 pub mod move_runtime;
 pub mod move_runtime_extensions;
 pub mod object_storage;
-pub mod storage;
 pub mod state;
+pub mod storage;
 
 // #[cfg(test)]
 // mod tests;
@@ -24,5 +24,5 @@ pub use gas::{GasConfig, GasError, GasEstimate, GasMeter, GasOperation, Transact
 pub use kanari_crypto::keys::CurveType;
 pub use move_runtime::MoveRuntime;
 pub use move_runtime_extensions::RuntimeStats;
-pub use storage::move_vm_state::MoveVMState;
 pub use state::{Account, StateManager};
+pub use storage::move_vm_state::MoveVMState;
