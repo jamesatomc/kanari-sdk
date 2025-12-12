@@ -11,6 +11,7 @@ use rand::rngs::OsRng;
 use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use k256::{
     PublicKey as K256PublicKey, SecretKey as K256SecretKey,
@@ -137,11 +138,82 @@ pub enum KeyError {
 }
 
 /// Result of key generation containing private key, public key, and address
+/// 
+/// Security: Private key is automatically zeroized when dropped.
+/// Clone is intentionally not implemented to prevent key material duplication.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct KeyPair {
     pub private_key: String,
     pub public_key: String,
     pub address: String,
     pub curve_type: CurveType,
+}
+
+impl Drop for KeyPair {
+    fn drop(&mut self) {
+        // Securely wipe private key from memory
+        unsafe {
+            self.private_key.as_bytes_mut().zeroize();
+        }
+    }
+}
+
+impl Zeroize for KeyPair {
+    fn zeroize(&mut self) {
+        unsafe {
+            self.private_key.as_bytes_mut().zeroize();
+        }
+        self.public_key.zeroize();
+        self.address.zeroize();
+    }
+}
+
+impl KeyPair {
+    /// Get private key (use with caution - creates a copy in memory)
+    pub fn get_private_key(&self) -> String {
+        self.private_key.clone()
+    }
+
+    /// Get public key
+    pub fn get_public_key(&self) -> String {
+        self.public_key.clone()
+    }
+
+    /// Get address
+    pub fn get_address(&self) -> String {
+        self.address.clone()
+    }
+
+    /// Get a tagged address that includes curve type information
+    /// Format: "curve_type:address" (e.g., "K256:0xabc123...")
+    /// This is the recommended way to store addresses for reliable curve detection
+    pub fn tagged_address(&self) -> String {
+        format!("{:?}:{}", self.curve_type, self.address)
+    }
+
+    /// Parse a tagged address back into curve type and address
+    /// Returns None if the address is not in tagged format
+    pub fn parse_tagged_address(tagged: &str) -> Option<(CurveType, String)> {
+        let parts: Vec<&str> = tagged.split(':').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let curve_type = match parts[0] {
+            "K256" => CurveType::K256,
+            "P256" => CurveType::P256,
+            "Ed25519" => CurveType::Ed25519,
+            "Dilithium2" => CurveType::Dilithium2,
+            "Dilithium3" => CurveType::Dilithium3,
+            "Dilithium5" => CurveType::Dilithium5,
+            "SphincsPlusSha256Robust" => CurveType::SphincsPlusSha256Robust,
+            "Ed25519Dilithium3" => CurveType::Ed25519Dilithium3,
+            "K256Dilithium3" => CurveType::K256Dilithium3,
+            _ => return None,
+        };
+
+        Some((curve_type, parts[1].to_string()))
+    }
 }
 
 /// Prefix used for Kanari private keys
@@ -644,66 +716,6 @@ pub fn generate_mnemonic(word_count: usize) -> Result<String, KeyError> {
     Ok(mnemonic.to_string())
 }
 
-/// Detect likely curve type for a given address
-pub fn detect_curve_type(address: &str) -> Option<CurveType> {
-    let address_hex = address.trim_start_matches("0x");
-    let decoded_hex = match hex::decode(address_hex) {
-        Ok(hex) => hex,
-        Err(_) => return None,
-    };
-
-    // For Ed25519, public keys are always 32 bytes exactly
-    if decoded_hex.len() == 32 {
-        // Try to construct an Ed25519 key
-        let mut key_array = [0u8; 32];
-        if decoded_hex.len() == 32 {
-            key_array.copy_from_slice(&decoded_hex);
-            if Ed25519VerifyingKey::from_bytes(&key_array).is_ok() {
-                return Some(CurveType::Ed25519);
-            }
-        }
-    }
-
-    if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
-        return None;
-    }
-
-    let k256_key_valid = if decoded_hex.len() == 64 {
-        let mut public_key_bytes = Vec::with_capacity(65);
-        public_key_bytes.push(0x04);
-        public_key_bytes.extend_from_slice(&decoded_hex);
-        K256VerifyingKey::from_sec1_bytes(&public_key_bytes).is_ok()
-    } else {
-        let mut compressed_bytes = vec![0x02];
-        compressed_bytes.extend_from_slice(&decoded_hex[0..32]);
-        K256VerifyingKey::from_sec1_bytes(&compressed_bytes).is_ok() || {
-            compressed_bytes[0] = 0x03;
-            K256VerifyingKey::from_sec1_bytes(&compressed_bytes).is_ok()
-        }
-    };
-
-    let p256_key_valid = if decoded_hex.len() == 64 {
-        let mut public_key_bytes = Vec::with_capacity(65);
-        public_key_bytes.push(0x04);
-        public_key_bytes.extend_from_slice(&decoded_hex);
-        VerifyingKey::from_sec1_bytes(&public_key_bytes).is_ok()
-    } else {
-        let mut compressed_bytes = vec![0x02];
-        compressed_bytes.extend_from_slice(&decoded_hex[0..32]);
-        VerifyingKey::from_sec1_bytes(&compressed_bytes).is_ok() || {
-            compressed_bytes[0] = 0x03;
-            VerifyingKey::from_sec1_bytes(&compressed_bytes).is_ok()
-        }
-    };
-
-    match (k256_key_valid, p256_key_valid) {
-        (true, false) => Some(CurveType::K256),
-        (false, true) => Some(CurveType::P256),
-        (true, true) => Some(CurveType::K256), // Default to K256 if both valid
-        (false, false) => None,
-    }
-}
-
 /// Generate a new Kanari address with the specified mnemonic length and curve type
 pub fn generate_karix_address(
     mnemonic_length: usize,
@@ -715,7 +727,7 @@ pub fn generate_karix_address(
     // Generate keypair from mnemonic
     let keypair = keypair_from_mnemonic(&seed_phrase, curve_type, "")?;
 
-    Ok((keypair.private_key, keypair.address, seed_phrase))
+    Ok((keypair.get_private_key(), keypair.get_address(), seed_phrase))
 }
 
 /// Import a wallet from a seed phrase
@@ -724,7 +736,7 @@ pub fn import_from_seed_phrase(
     curve_type: CurveType,
 ) -> Result<(String, String, String), String> {
     keypair_from_mnemonic(phrase, curve_type, "")
-        .map(|keypair| (keypair.private_key, keypair.public_key, keypair.address))
+        .map(|keypair| (keypair.get_private_key(), keypair.get_public_key(), keypair.get_address()))
         .map_err(|e| e.to_string())
 }
 
@@ -734,7 +746,7 @@ pub fn import_from_private_key(
     curve_type: CurveType,
 ) -> Result<(String, String, String), String> {
     keypair_from_private_key(private_key, curve_type)
-        .map(|keypair| (keypair.private_key, keypair.public_key, keypair.address))
+        .map(|keypair| (keypair.get_private_key(), keypair.get_public_key(), keypair.get_address()))
         .map_err(|e| e.to_string())
 }
 
@@ -796,68 +808,6 @@ mod tests {
 
         assert_eq!(hash_input.len(), 3, "Should use full length if < 20");
         assert_eq!(hash_input, b"abc");
-    }
-
-    // ============================================================================
-    // Bug #9: Logic Error in detect_curve_type (Medium)
-    // ============================================================================
-
-    #[test]
-    fn test_detect_curve_type_ed25519() {
-        // Generate an Ed25519 keypair
-        let keypair = generate_keypair(CurveType::Ed25519).unwrap();
-
-        // Test detection with address
-        let detected = detect_curve_type(&keypair.address);
-        assert_eq!(detected, Some(CurveType::Ed25519), "Should detect Ed25519");
-    }
-
-    #[test]
-    fn test_detect_curve_type_k256() {
-        // Generate a K256 keypair
-        let keypair = generate_keypair(CurveType::K256).unwrap();
-
-        // Test detection with address
-        let detected = detect_curve_type(&keypair.address);
-        assert_eq!(detected, Some(CurveType::K256), "Should detect K256");
-    }
-
-    #[test]
-    fn test_detect_curve_type_p256() {
-        // Generate a P256 keypair
-        let keypair = generate_keypair(CurveType::P256).unwrap();
-
-        // Test detection with address
-        let detected = detect_curve_type(&keypair.address);
-        assert_eq!(detected, Some(CurveType::P256), "Should detect P256");
-    }
-
-    #[test]
-    fn test_detect_curve_type_invalid() {
-        // Test with invalid address
-        let detected = detect_curve_type("0xinvalid");
-        assert_eq!(detected, None, "Should return None for invalid address");
-
-        // Test with empty address
-        let detected = detect_curve_type("0x");
-        assert_eq!(detected, None, "Should return None for empty address");
-    }
-
-    #[test]
-    fn test_detect_curve_type_no_redundant_check() {
-        // This test verifies the fix for redundant length check bug
-        // The bug was: if decoded_hex.len() == 32 { if decoded_hex.len() == 32 { ... } }
-
-        // Generate Ed25519 key (32 bytes)
-        let keypair = generate_keypair(CurveType::Ed25519).unwrap();
-        let address_hex = keypair.address.trim_start_matches("0x");
-        let decoded = hex::decode(address_hex).unwrap();
-
-        assert_eq!(decoded.len(), 32, "Ed25519 public key should be 32 bytes");
-
-        // The function should work correctly without redundant check
-        let detected = detect_curve_type(&keypair.address);
-        assert!(detected.is_some(), "Should detect curve type");
     }
 
     // ============================================================================
@@ -1042,5 +992,122 @@ mod tests {
             result.is_err(),
             "PQC should not support mnemonic derivation yet"
         );
+    }
+
+    // ============================================================================
+    // Tagged Address Tests (Security Enhancement)
+    // ============================================================================
+
+    #[test]
+    fn test_tagged_address_generation() {
+        let keypair = generate_keypair(CurveType::K256).unwrap();
+        let tagged = keypair.tagged_address();
+
+        // Should have format "CurveType:0xaddress"
+        assert!(tagged.starts_with("K256:"));
+        assert!(tagged.contains(&keypair.address));
+    }
+
+    #[test]
+    fn test_tagged_address_parsing() {
+        let keypair = generate_keypair(CurveType::Ed25519).unwrap();
+        let tagged = keypair.tagged_address();
+
+        // Parse it back
+        let (curve_type, address) = KeyPair::parse_tagged_address(&tagged).unwrap();
+
+        assert_eq!(curve_type, CurveType::Ed25519);
+        assert_eq!(address, keypair.address);
+    }
+
+    #[test]
+    fn test_tagged_address_all_curves() {
+        let curves = vec![
+            CurveType::K256,
+            CurveType::P256,
+            CurveType::Ed25519,
+            CurveType::Dilithium3,
+        ];
+
+        for curve in curves {
+            let keypair = generate_keypair(curve).unwrap();
+            let tagged = keypair.tagged_address();
+
+            // Should parse back correctly
+            let (parsed_curve, parsed_address) = KeyPair::parse_tagged_address(&tagged)
+                .expect(&format!("Failed to parse tagged address for {:?}", curve));
+
+            assert_eq!(parsed_curve, curve);
+            assert_eq!(parsed_address, keypair.address);
+        }
+    }
+
+    #[test]
+    fn test_tagged_address_invalid_format() {
+        // Test with untagged address
+        let result = KeyPair::parse_tagged_address("0xabc123");
+        assert!(result.is_none(), "Should return None for untagged address");
+
+        // Test with invalid curve type
+        let result = KeyPair::parse_tagged_address("InvalidCurve:0xabc123");
+        assert!(
+            result.is_none(),
+            "Should return None for invalid curve type"
+        );
+
+        // Test with empty string
+        let result = KeyPair::parse_tagged_address("");
+        assert!(result.is_none(), "Should return None for empty string");
+    }
+
+    #[test]
+    fn test_safe_signature_verification() {
+        // Test that verify_signature_safe works correctly even when curve type is ambiguous
+
+        // Generate keypairs for all classical curves
+        let k256 = generate_keypair(CurveType::K256).unwrap();
+        let p256 = generate_keypair(CurveType::P256).unwrap();
+        let ed25519 = generate_keypair(CurveType::Ed25519).unwrap();
+
+        let message = b"test message for safe verification";
+
+        // Sign with each curve
+        use crate::signatures::{sign_message, verify_signature_safe};
+
+        let k256_sig = sign_message(&k256.private_key, message, CurveType::K256).unwrap();
+        let p256_sig = sign_message(&p256.private_key, message, CurveType::P256).unwrap();
+        let ed25519_sig = sign_message(&ed25519.private_key, message, CurveType::Ed25519).unwrap();
+
+        // verify_signature_safe should work for all without knowing curve type
+        assert!(
+            verify_signature_safe(&k256.address, message, &k256_sig).unwrap(),
+            "K256 signature should verify with safe method"
+        );
+        assert!(
+            verify_signature_safe(&p256.address, message, &p256_sig).unwrap(),
+            "P256 signature should verify with safe method"
+        );
+        assert!(
+            verify_signature_safe(&ed25519.address, message, &ed25519_sig).unwrap(),
+            "Ed25519 signature should verify with safe method"
+        );
+    }
+
+    #[test]
+    fn test_tagged_address_verification() {
+        // Test that tagged addresses provide reliable verification
+
+        let keypair = generate_keypair(CurveType::K256).unwrap();
+        let message = b"test with tagged address";
+
+        use crate::signatures::{sign_message, verify_signature};
+
+        let signature = sign_message(&keypair.private_key, message, CurveType::K256).unwrap();
+
+        // Use tagged address for verification
+        let tagged = keypair.tagged_address();
+        let result = verify_signature(&tagged, message, &signature).unwrap();
+
+        assert!(result, "Signature should verify with tagged address");
     }
 }

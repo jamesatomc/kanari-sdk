@@ -350,7 +350,7 @@ pub fn create_hd_wallet(
     // Construct Wallet; store the derivation path in the seed_phrase field
     let wallet = Wallet::new(
         address,
-        key_pair.private_key,
+        key_pair.get_private_key(),
         derivation_path.to_string(),
         curve,
     );
@@ -617,7 +617,7 @@ mod tests {
 
         let wallet = Wallet::new(
             AccountAddress::from_str(&keypair.address).unwrap(),
-            keypair.private_key,
+            keypair.get_private_key(),
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
             CurveType::K256,
         );
@@ -870,7 +870,7 @@ mod tests {
             let keypair = generate_keypair(curve).unwrap();
             let wallet = Wallet::new(
                 AccountAddress::from_str(&keypair.address).unwrap(),
-                keypair.private_key,
+                keypair.get_private_key(),
                 "seed".to_string(),
                 curve,
             );

@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::string::ToString;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 // Post-Quantum Cryptography - Kyber KEM
 #[cfg(feature = "pqc")]
@@ -303,15 +304,9 @@ pub fn decrypt_string(
 }
 
 /// Securely erase sensitive data from memory
-/// Uses black_box to prevent compiler optimization
+/// Uses zeroize crate for secure memory clearing
 pub fn secure_erase(data: &mut [u8]) {
-    for byte in data.iter_mut() {
-        unsafe {
-            std::ptr::write_volatile(byte, 0);
-        }
-    }
-    // Ensure the compiler doesn't optimize away the clearing
-    std::hint::black_box(data);
+    data.zeroize();
 }
 
 // ==========================

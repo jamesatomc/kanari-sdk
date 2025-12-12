@@ -81,6 +81,11 @@ secp256k1 = { version = "0.31.1", features = ["recovery"] }
 aes-gcm = "0.10.3"
 base64 = "0.22.1"
 
+# Memory security
+zeroize = { version = "1.8.1", features = ["derive"] }
+secrecy = "0.8.0"
+subtle = "2.6.1"
+
 # Post-Quantum Cryptography (PQC) - NIST Standards
 pqcrypto-dilithium = "0.5"  # Post-quantum signatures
 pqcrypto-kyber = "0.8.1"      # Post-quantum key encapsulation

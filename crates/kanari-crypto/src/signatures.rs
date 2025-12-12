@@ -46,16 +46,10 @@ pub enum SignatureError {
 }
 
 /// Zero out sensitive data in memory
-/// Uses black_box to prevent compiler optimization
+/// Uses zeroize crate for secure memory clearing
 pub fn secure_clear(data: &mut [u8]) {
-    for byte in data.iter_mut() {
-        // Use volatile write to prevent compiler optimization
-        unsafe {
-            std::ptr::write_volatile(byte, 0);
-        }
-    }
-    // Ensure the compiler doesn't optimize away the clearing
-    std::hint::black_box(data);
+    use zeroize::Zeroize;
+    data.zeroize();
 }
 
 /// Sign a message with a given private key and curve type
@@ -156,6 +150,12 @@ fn sign_message_ed25519(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>
 }
 
 /// Verify a signature against a message using an address
+///
+/// This function attempts to parse tagged addresses (e.g., "K256:0xabc...") first.
+/// If the address is not tagged, it falls back to trying all classical curve types.
+///
+/// For maximum reliability, use tagged addresses or `verify_signature_safe()`.
+/// For best performance when curve type is known, use `verify_signature_with_curve()`.
 pub fn verify_signature(
     address: &str,
     message: &[u8],
@@ -165,10 +165,39 @@ pub fn verify_signature(
         return Err(SignatureError::InvalidFormat("Empty signature".to_string()));
     }
 
-    // Sanitize address
+    // Try to parse as tagged address first (most reliable)
+    if let Some((curve_type, addr)) = crate::keys::KeyPair::parse_tagged_address(address) {
+        debug!("Using tagged address with curve type: {:?}", curve_type);
+        return verify_signature_with_curve(&addr, message, signature, curve_type);
+    }
+
+    // Fallback: Try all classical curves (safe but slower)
+    debug!("No tagged address found, trying all curve types");
+    verify_signature_safe(address, message, signature)
+}
+
+/// Safely verify a signature by trying all supported classical curve types
+///
+/// This function tries all curve types, making it slower but more reliable.
+/// Returns true if verification succeeds with any curve.
+///
+/// **Security:** This is the safest option when curve type is unknown.
+/// **Performance:** Slower than `verify_signature_with_curve()` but more reliable.
+///
+/// For PQC/hybrid schemes, use `verify_signature_with_curve()` with explicit curve type.
+pub fn verify_signature_safe(
+    address: &str,
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, SignatureError> {
+    if signature.is_empty() {
+        return Err(SignatureError::InvalidFormat("Empty signature".to_string()));
+    }
+
     let clean_address = address.trim_start_matches("0x");
 
-    // Try all curve types without requiring the user to specify
+    // Try all classical curves in priority order: K256 > P256 > Ed25519
+    // Return true on first successful verification
     if let Ok(true) = verify_signature_k256(clean_address, message, signature) {
         debug!("K256 signature verification succeeded");
         return Ok(true);
@@ -184,7 +213,7 @@ pub fn verify_signature(
         return Ok(true);
     }
 
-    // If all verifications failed but did not error, the signature is invalid
+    // All verifications failed or errored
     debug!("Signature verification failed for all curve types");
     Ok(false)
 }
@@ -658,5 +687,69 @@ mod tests {
                 size
             );
         }
+    }
+
+    #[test]
+    fn test_verify_signature_safe_all_curves() {
+        // Test that verify_signature_safe works for all classical curves
+        let curves = vec![CurveType::K256, CurveType::P256, CurveType::Ed25519];
+
+        for curve in curves {
+            let keypair = generate_keypair(curve).unwrap();
+            let message = b"Safe verification test";
+
+            let signature = sign_message(&keypair.private_key, message, curve).unwrap();
+
+            // verify_signature_safe should work without knowing the curve
+            let result = verify_signature_safe(&keypair.address, message, &signature).unwrap();
+            assert!(result, "Safe verification failed for {:?}", curve);
+        }
+    }
+
+    #[test]
+    fn test_verify_signature_with_tagged_address() {
+        // Test that verify_signature correctly uses tagged addresses
+        let keypair = generate_keypair(CurveType::Ed25519).unwrap();
+        let message = b"Tagged address test";
+
+        let signature = sign_message(&keypair.private_key, message, CurveType::Ed25519).unwrap();
+
+        // Use tagged address
+        let tagged = keypair.tagged_address();
+        let result = verify_signature(&tagged, message, &signature).unwrap();
+
+        assert!(result, "Verification with tagged address should succeed");
+    }
+
+    #[test]
+    fn test_verify_signature_fallback_to_safe() {
+        // Test that verify_signature falls back to safe mode for untagged addresses
+        let keypair = generate_keypair(CurveType::K256).unwrap();
+        let message = b"Fallback test";
+
+        let signature = sign_message(&keypair.private_key, message, CurveType::K256).unwrap();
+
+        // Use untagged address - should fallback to verify_signature_safe
+        let result = verify_signature(&keypair.address, message, &signature).unwrap();
+
+        assert!(
+            result,
+            "Verification with untagged address should succeed via fallback"
+        );
+    }
+
+    #[test]
+    fn test_verify_signature_safe_wrong_signature() {
+        // Test that verify_signature_safe correctly rejects invalid signatures
+        let keypair = generate_keypair(CurveType::K256).unwrap();
+        let message1 = b"Original message";
+        let message2 = b"Different message";
+
+        let signature = sign_message(&keypair.private_key, message1, CurveType::K256).unwrap();
+
+        // Verify with wrong message should fail
+        let result = verify_signature_safe(&keypair.address, message2, &signature).unwrap();
+
+        assert!(!result, "Safe verification should reject wrong message");
     }
 }
