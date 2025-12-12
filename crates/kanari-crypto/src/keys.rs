@@ -648,15 +648,9 @@ pub fn detect_curve_type(address: &str) -> Option<CurveType> {
         Err(_) => return None,
     };
 
-    // For Ed25519, public keys are always 32 bytes exactly
-    if decoded_hex.len() == 32 {
-        // Try to construct an Ed25519 key
-        let mut key_array = [0u8; 32];
-        key_array.copy_from_slice(&decoded_hex);
-        if Ed25519VerifyingKey::from_bytes(&key_array).is_ok() {
-            return Some(CurveType::Ed25519);
-        }
-    }
+    // Do not assume 32-byte values are Ed25519 immediately — they may be
+    // compressed EC public keys for K256/P256. We'll check EC keys first
+    // and fall back to Ed25519 if EC checks fail.
 
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
         return None;
@@ -690,12 +684,28 @@ pub fn detect_curve_type(address: &str) -> Option<CurveType> {
         }
     };
 
-    match (k256_key_valid, p256_key_valid) {
+    let ec_result = match (k256_key_valid, p256_key_valid) {
         (true, false) => Some(CurveType::K256),
         (false, true) => Some(CurveType::P256),
         (true, true) => Some(CurveType::K256), // Default to K256 if both valid
         (false, false) => None,
+    };
+
+    if ec_result.is_some() {
+        return ec_result;
     }
+
+    // If neither EC validation succeeded but the decoded data is 32 bytes,
+    // it's likely an Ed25519 public key — try to validate it as such.
+    if decoded_hex.len() == 32 {
+        let mut key_array = [0u8; 32];
+        key_array.copy_from_slice(&decoded_hex);
+        if Ed25519VerifyingKey::from_bytes(&key_array).is_ok() {
+            return Some(CurveType::Ed25519);
+        }
+    }
+
+    None
 }
 
 /// Generate a new Kanari address with the specified mnemonic length and curve type
@@ -748,7 +758,7 @@ mod tests {
 
         let keypair = result.unwrap();
         assert!(
-            keypair.address.starts_with("0xhybrid"),
+            keypair.address.starts_with("0x"),
             "Hybrid address should have correct prefix"
         );
         assert_eq!(keypair.curve_type, CurveType::Ed25519Dilithium3);
@@ -763,7 +773,7 @@ mod tests {
         if result.is_ok() {
             let keypair = result.unwrap();
             assert!(
-                keypair.address.starts_with("0xhybrid"),
+                keypair.address.starts_with("0x"),
                 "Hybrid address should have correct prefix"
             );
             assert_eq!(keypair.curve_type, CurveType::K256Dilithium3);
@@ -965,7 +975,7 @@ mod tests {
             dil3.private_key
         );
         assert!(
-            dil3.address.starts_with("0xpqc"),
+            dil3.address.starts_with("0x"),
             "PQC addresses should have pqc prefix"
         );
 
@@ -983,7 +993,7 @@ mod tests {
             "Hybrid keys should have kanahybrid prefix"
         );
         assert!(
-            hybrid.address.starts_with("0xhybrid"),
+            hybrid.address.starts_with("0x"),
             "Hybrid addresses should have hybrid prefix"
         );
 

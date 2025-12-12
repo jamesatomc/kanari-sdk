@@ -21,10 +21,15 @@ use std::fmt;
 use std::string::ToString;
 use thiserror::Error;
 
-// Post-Quantum Cryptography - Kyber KEM (commented out until implementation)
-// use pqcrypto_kyber::kyber768;
-// use pqcrypto_kyber::kyber1024;
-// use pqcrypto_traits::kem::{PublicKey as KemPublicKey, SecretKey as KemSecretKey, SharedSecret, Ciphertext};
+// Post-Quantum Cryptography - Kyber KEM
+#[cfg(feature = "pqc")]
+use pqcrypto_kyber::kyber768;
+
+#[cfg(feature = "pqc")]
+use pqcrypto_kyber::kyber1024;
+
+#[cfg(feature = "pqc")]
+use pqcrypto_traits::kem::{PublicKey as KemPublicKey, SecretKey as KemSecretKey, SharedSecret, Ciphertext};
 
 /// Encryption scheme selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -177,7 +182,7 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| EncryptionError::KeyDerivationError(e.to_string()))?;
 
-    // Fix for the temporary value dropped error - bind to variable first
+    // the temporary value dropped error - bind to variable first
     let hash = password_hash.hash.ok_or_else(|| {
         EncryptionError::KeyDerivationError("Argon2 hash output is missing".to_string())
     })?;
@@ -305,6 +310,77 @@ pub fn secure_erase(data: &mut [u8]) {
     }
     // Ensure the compiler doesn't optimize away the clearing
     std::hint::black_box(data);
+}
+
+// ==========================
+// Post-Quantum KEM helpers
+// ==========================
+#[cfg(feature = "pqc")]
+/// Generate a Kyber keypair and return raw bytes of (public_key, secret_key)
+pub fn pqc_generate_keypair(scheme: EncryptionScheme) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
+    match scheme {
+        EncryptionScheme::Kyber768 => {
+            let (pk, sk) = kyber768::keypair();
+            Ok((pk.as_bytes().to_vec(), sk.as_bytes().to_vec()))
+        }
+        EncryptionScheme::Kyber1024 => {
+            let (pk, sk) = kyber1024::keypair();
+            Ok((pk.as_bytes().to_vec(), sk.as_bytes().to_vec()))
+        }
+        _ => Err(EncryptionError::PqcError("Unsupported PQC scheme for key generation".to_string())),
+    }
+}
+
+#[cfg(feature = "pqc")]
+/// Encapsulate to a public key (provided as bytes) and return (ciphertext_bytes, shared_secret_bytes).
+/// Note: converting raw bytes back into pqcrypto types may fail for invalid inputs.
+pub fn pqc_encapsulate_from_public_key(
+    scheme: EncryptionScheme,
+    public_key_bytes: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
+    match scheme {
+        EncryptionScheme::Kyber768 => {
+            let pk = kyber768::PublicKey::from_bytes(public_key_bytes)
+                .map_err(|e| EncryptionError::PqcError(format!("Invalid public key: {:?}", e)))?;
+            let (ct, ss) = kyber768::encapsulate(&pk);
+            Ok((ct.as_bytes().to_vec(), ss.as_bytes().to_vec()))
+        }
+        EncryptionScheme::Kyber1024 => {
+            let pk = kyber1024::PublicKey::from_bytes(public_key_bytes)
+                .map_err(|e| EncryptionError::PqcError(format!("Invalid public key: {:?}", e)))?;
+            let (ct, ss) = kyber1024::encapsulate(&pk);
+            Ok((ct.as_bytes().to_vec(), ss.as_bytes().to_vec()))
+        }
+        _ => Err(EncryptionError::PqcError("Unsupported PQC scheme for encapsulation".to_string())),
+    }
+}
+
+#[cfg(feature = "pqc")]
+/// Decapsulate using secret key bytes and ciphertext bytes, returning the shared secret bytes.
+pub fn pqc_decapsulate_from_secret(
+    scheme: EncryptionScheme,
+    secret_key_bytes: &[u8],
+    ciphertext_bytes: &[u8],
+) -> Result<Vec<u8>, EncryptionError> {
+    match scheme {
+        EncryptionScheme::Kyber768 => {
+            let sk = kyber768::SecretKey::from_bytes(secret_key_bytes)
+                .map_err(|e| EncryptionError::PqcError(format!("Invalid secret key: {:?}", e)))?;
+            let ct = kyber768::Ciphertext::from_bytes(ciphertext_bytes)
+                .map_err(|e| EncryptionError::PqcError(format!("Invalid ciphertext: {:?}", e)))?;
+            let ss = kyber768::decapsulate(&ct, &sk);
+            Ok(ss.as_bytes().to_vec())
+        }
+        EncryptionScheme::Kyber1024 => {
+            let sk = kyber1024::SecretKey::from_bytes(secret_key_bytes)
+                .map_err(|e| EncryptionError::PqcError(format!("Invalid secret key: {:?}", e)))?;
+            let ct = kyber1024::Ciphertext::from_bytes(ciphertext_bytes)
+                .map_err(|e| EncryptionError::PqcError(format!("Invalid ciphertext: {:?}", e)))?;
+            let ss = kyber1024::decapsulate(&ct, &sk);
+            Ok(ss.as_bytes().to_vec())
+        }
+        _ => Err(EncryptionError::PqcError("Unsupported PQC scheme for decapsulation".to_string())),
+    }
 }
 
 #[cfg(test)]

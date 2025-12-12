@@ -236,13 +236,27 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
     // Load the keystore
     let keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
 
-    // Get the encrypted data for this wallet
-    let encrypted_data = keystore
-        .get_wallet(address)
+    // Normalize address: keystore stores addresses with `0x` prefix, but callers
+    // may pass the raw hex string. Try both forms so load is tolerant.
+    let key_variants = if address.starts_with("0x") {
+        vec![address.to_string(), address.trim_start_matches("0x").to_string()]
+    } else {
+        vec![format!("0x{}", address), address.to_string()]
+    };
+
+    let mut encrypted_data_opt: Option<&crate::encryption::EncryptedData> = None;
+    for key in key_variants.iter() {
+        if let Some(ed) = keystore.get_wallet(key) {
+            encrypted_data_opt = Some(ed);
+            break;
+        }
+    }
+
+    let encrypted_data_ref = encrypted_data_opt
         .ok_or_else(|| WalletError::NotFound(address.to_string()))?;
 
     // Decrypt wallet data
-    let decrypted = encryption::decrypt_data(encrypted_data, password)
+    let decrypted = encryption::decrypt_data(encrypted_data_ref, password)
         .map_err(|_| WalletError::InvalidPassword)?;
 
     // Decompress the decrypted data (handle both compressed and uncompressed formats)
