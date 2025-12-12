@@ -169,6 +169,98 @@ pub fn hash_data_with_algorithm(data: &[u8], algorithm: HashAlgorithm) -> Vec<u8
 // Add constant for recommended password length
 pub const MIN_RECOMMENDED_PASSWORD_LENGTH: usize = 16; // Increased for quantum era
 
+/// Check if a password meets strong security requirements
+/// Returns true if password is at least 16 characters and contains:
+/// - At least one uppercase letter
+/// - At least one lowercase letter
+/// - At least one digit
+/// - At least one special character
+pub fn is_password_strong(password: &str) -> bool {
+    if password.len() < MIN_RECOMMENDED_PASSWORD_LENGTH {
+        return false;
+    }
+
+    let has_uppercase = password.chars().any(|c| c.is_uppercase());
+    let has_lowercase = password.chars().any(|c| c.is_lowercase());
+    let has_digit = password.chars().any(|c| c.is_numeric());
+    let has_special = password.chars().any(|c| !c.is_alphanumeric());
+
+    has_uppercase && has_lowercase && has_digit && has_special
+}
+
+/// Rate limiter for security-sensitive operations
+/// Tracks failed attempts and enforces exponential backoff
+pub struct RateLimiter {
+    attempts: std::collections::HashMap<String, (u32, u64)>,
+    max_attempts: u32,
+    lockout_duration_secs: u64,
+}
+
+impl RateLimiter {
+    /// Create a new rate limiter
+    pub fn new(max_attempts: u32, lockout_duration_secs: u64) -> Self {
+        Self {
+            attempts: std::collections::HashMap::new(),
+            max_attempts,
+            lockout_duration_secs,
+        }
+    }
+
+    /// Check if an operation is allowed for the given identifier
+    pub fn check_allowed(&mut self, identifier: &str) -> bool {
+        let now = get_current_timestamp();
+        
+        if let Some((count, locked_until)) = self.attempts.get(identifier) {
+            if now < *locked_until {
+                return false; // Still locked out
+            }
+            if *count >= self.max_attempts {
+                // Reset after lockout period
+                self.attempts.remove(identifier);
+            }
+        }
+        
+        true
+    }
+
+    /// Record a failed attempt
+    pub fn record_failure(&mut self, identifier: &str) {
+        let now = get_current_timestamp();
+        
+        let (count, _) = self.attempts.get(identifier).unwrap_or(&(0, 0));
+        let new_count = count + 1;
+        
+        // Exponential backoff: 2^(attempts) seconds, capped at lockout_duration
+        let lockout = std::cmp::min(
+            2u64.pow(new_count),
+            self.lockout_duration_secs
+        );
+        
+        self.attempts.insert(
+            identifier.to_string(),
+            (new_count, now + lockout)
+        );
+    }
+
+    /// Record a successful attempt (resets the counter)
+    pub fn record_success(&mut self, identifier: &str) {
+        self.attempts.remove(identifier);
+    }
+
+    /// Get remaining lockout time in seconds
+    pub fn get_lockout_remaining(&self, identifier: &str) -> Option<u64> {
+        let now = get_current_timestamp();
+        
+        if let Some((_, locked_until)) = self.attempts.get(identifier) {
+            if now < *locked_until {
+                return Some(*locked_until - now);
+            }
+        }
+        
+        None
+    }
+}
+
 /// Security level used by this library
 pub const SECURITY_LEVEL: &str = "Maximum - Post-Quantum Ready with Hybrid Cryptography";
 
@@ -203,30 +295,4 @@ pub const fn security_info() -> &'static str {
     Always use post-quantum or hybrid schemes for long-term security!"
 }
 
-/// Checks if a password meets minimum security requirements
-#[must_use]
-pub fn is_password_strong(password: &str) -> bool {
-    if password.len() < MIN_RECOMMENDED_PASSWORD_LENGTH {
-        return false;
-    }
 
-    // Use a single pass to check all conditions (more efficient and resistant to timing attacks)
-    let mut has_uppercase = false;
-    let mut has_lowercase = false;
-    let mut has_digit = false;
-    let mut has_special = false;
-
-    for c in password.chars() {
-        if c.is_uppercase() {
-            has_uppercase = true;
-        } else if c.is_lowercase() {
-            has_lowercase = true;
-        } else if c.is_ascii_digit() {
-            has_digit = true;
-        } else if !c.is_alphanumeric() {
-            has_special = true;
-        }
-    }
-
-    has_uppercase && has_lowercase && has_digit && has_special
-}

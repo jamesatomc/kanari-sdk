@@ -141,8 +141,10 @@ pub enum KeyError {
 /// 
 /// Security: Private key is automatically zeroized when dropped.
 /// Clone is intentionally not implemented to prevent key material duplication.
+/// Private key is NOT serialized by default for security.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct KeyPair {
+    #[serde(skip_serializing)]
     pub private_key: String,
     pub public_key: String,
     pub address: String,
@@ -189,6 +191,17 @@ impl KeyPair {
     /// This is the recommended way to store addresses for reliable curve detection
     pub fn tagged_address(&self) -> String {
         format!("{:?}:{}", self.curve_type, self.address)
+    }
+
+    /// Create a serializable version that includes private key (use with caution)
+    /// This should only be used when explicitly needed for encrypted storage
+    pub fn to_serializable_with_private_key(&self) -> serde_json::Value {
+        serde_json::json!({
+            "private_key": self.private_key,
+            "public_key": self.public_key,
+            "address": self.address,
+            "curve_type": self.curve_type,
+        })
     }
 
     /// Parse a tagged address back into curve type and address

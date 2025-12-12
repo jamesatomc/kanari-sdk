@@ -46,10 +46,13 @@ pub enum SignatureError {
 }
 
 /// Zero out sensitive data in memory
-/// Uses zeroize crate for secure memory clearing
+/// Uses zeroize crate for secure memory clearing with compiler fence
+/// to prevent optimization that could leave sensitive data in memory
 pub fn secure_clear(data: &mut [u8]) {
     use zeroize::Zeroize;
     data.zeroize();
+    // Add a black_box to prevent compiler from optimizing away the zeroization
+    std::hint::black_box(data);
 }
 
 /// Sign a message with a given private key and curve type
@@ -83,11 +86,11 @@ fn sign_message_k256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|e| SignatureError::InvalidPrivateKey(e.to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
 
     // Create signing key from private key
     let secret_key = K256SecretKey::from_slice(&private_key_bytes)
-        .map_err(|e| SignatureError::InvalidPrivateKey(e.to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
     let signing_key = K256SigningKey::from(secret_key);
 
     // Sign the hashed message
@@ -107,11 +110,11 @@ fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|e| SignatureError::InvalidPrivateKey(e.to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
 
     // Create signing key from private key
     let secret_key = P256SecretKey::from_slice(&private_key_bytes)
-        .map_err(|e| SignatureError::InvalidPrivateKey(e.to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
     let signing_key = SigningKey::from(secret_key);
 
     // Sign the hashed message
@@ -126,13 +129,12 @@ fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 fn sign_message_ed25519(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|e| SignatureError::InvalidPrivateKey(e.to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
 
     if private_key_bytes.len() != 32 {
-        return Err(SignatureError::InvalidPrivateKey(format!(
-            "Invalid Ed25519 private key length: {}",
-            private_key_bytes.len()
-        )));
+        return Err(SignatureError::InvalidPrivateKey(
+            "Invalid key format".to_string()
+        ));
     }
 
     // Create a fixed-size array from the private key bytes
@@ -246,8 +248,8 @@ pub fn verify_signature_k256(
     signature: &[u8],
 ) -> Result<bool, SignatureError> {
     // Try to parse the signature from DER format
-    let signature = K256Signature::from_der(signature).map_err(|e| {
-        SignatureError::InvalidFormat(format!("Invalid K256 signature format: {}", e))
+    let signature = K256Signature::from_der(signature).map_err(|_| {
+        SignatureError::InvalidFormat("Invalid signature format".to_string())
     })?;
 
     // Hash the message with SHA3
@@ -257,14 +259,13 @@ pub fn verify_signature_k256(
 
     // Decode the address hex
     let decoded_hex = hex::decode(address_hex)
-        .map_err(|e| SignatureError::InvalidPublicKey(format!("Invalid hex in address: {}", e)))?;
+        .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
     // Handle both uncompressed (64 bytes) and compressed (32 bytes) public keys
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
-        return Err(SignatureError::InvalidPublicKey(format!(
-            "Invalid address length for K256: {}",
-            decoded_hex.len()
-        )));
+        return Err(SignatureError::InvalidPublicKey(
+            "Invalid address format".to_string()
+        ));
     }
 
     let mut had_valid_key = false;
@@ -310,7 +311,7 @@ pub fn verify_signature_k256(
     }
 
     Err(SignatureError::InvalidPublicKey(
-        "Unable to reconstruct K256 public key from address".to_string(),
+        "Invalid address format".to_string(),
     ))
 }
 
@@ -321,8 +322,8 @@ pub fn verify_signature_p256(
     signature: &[u8],
 ) -> Result<bool, SignatureError> {
     // Parse the signature
-    let signature = P256Signature::from_der(signature).map_err(|e| {
-        SignatureError::InvalidFormat(format!("Invalid P256 signature format: {}", e))
+    let signature = P256Signature::from_der(signature).map_err(|_| {
+        SignatureError::InvalidFormat("Invalid signature format".to_string())
     })?;
 
     // Hash the message with SHA3
@@ -332,14 +333,13 @@ pub fn verify_signature_p256(
 
     // Decode the address hex
     let decoded_hex = hex::decode(address_hex)
-        .map_err(|e| SignatureError::InvalidPublicKey(format!("Invalid hex in address: {}", e)))?;
+        .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
     // Handle both uncompressed (64 bytes) and compressed (32 bytes) public keys
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
-        return Err(SignatureError::InvalidPublicKey(format!(
-            "Invalid address length for P256: {}",
-            decoded_hex.len()
-        )));
+        return Err(SignatureError::InvalidPublicKey(
+            "Invalid address format".to_string()
+        ));
     }
 
     let mut had_valid_key = false;
@@ -385,7 +385,7 @@ pub fn verify_signature_p256(
     }
 
     Err(SignatureError::InvalidPublicKey(
-        "Unable to reconstruct P256 public key from address".to_string(),
+        "Invalid address format".to_string(),
     ))
 }
 
@@ -407,14 +407,13 @@ pub fn verify_signature_ed25519(
 
     // Decode the address hex (which should be the public key)
     let decoded_hex = hex::decode(address_hex)
-        .map_err(|e| SignatureError::InvalidPublicKey(format!("Invalid hex in address: {}", e)))?;
+        .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
     // For Ed25519, the address should be the 32-byte public key
     if decoded_hex.len() != 32 {
-        return Err(SignatureError::InvalidPublicKey(format!(
-            "Invalid address length for Ed25519: {}",
-            decoded_hex.len()
-        )));
+        return Err(SignatureError::InvalidPublicKey(
+            "Invalid address format".to_string()
+        ));
     }
 
     // Create a fixed-size array for the public key
@@ -422,8 +421,8 @@ pub fn verify_signature_ed25519(
     key_array.copy_from_slice(&decoded_hex);
 
     // Create verifying key from public key bytes
-    let verifying_key = Ed25519VerifyingKey::from_bytes(&key_array).map_err(|e| {
-        SignatureError::InvalidPublicKey(format!("Invalid Ed25519 public key: {}", e))
+    let verifying_key = Ed25519VerifyingKey::from_bytes(&key_array).map_err(|_| {
+        SignatureError::InvalidPublicKey("Invalid address format".to_string())
     })?;
 
     // Use constant time comparison when checking equality of signatures

@@ -67,10 +67,13 @@ pub enum WalletError {
 }
 
 /// Structure representing a wallet with private key and address
+/// Private key and seed phrase are sensitive and should be handled carefully
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Wallet {
     pub address: AccountAddress,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub private_key: String,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub seed_phrase: String,
     pub curve_type: CurveType,
 }

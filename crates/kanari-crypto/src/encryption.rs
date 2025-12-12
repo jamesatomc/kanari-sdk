@@ -220,15 +220,29 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
 
 /// Decrypt data with a password
 pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>, EncryptionError> {
+    // Validate ciphertext size to prevent memory exhaustion attacks
+    const MAX_CIPHERTEXT_SIZE: usize = 100 * 1024 * 1024; // 100MB
+    let ciphertext_size = if !encrypted.ciphertext.is_empty() {
+        encrypted.ciphertext.len()
+    } else {
+        encrypted.ciphertext_array.len()
+    };
+    
+    if ciphertext_size > MAX_CIPHERTEXT_SIZE {
+        return Err(EncryptionError::InvalidFormat(
+            "Ciphertext size exceeds maximum allowed".to_string()
+        ));
+    }
+
     // Get salt from the encrypted data
     let salt = SaltString::from_b64(&encrypted.salt)
-        .map_err(|e| EncryptionError::InvalidFormat(e.to_string()))?;
+        .map_err(|_| EncryptionError::InvalidFormat("Invalid salt format".to_string()))?;
 
     // Derive key from password and salt
     let params = argon2_params()?;
     let password_hash = Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| EncryptionError::KeyDerivationError(e.to_string()))?;
+        .map_err(|_| EncryptionError::KeyDerivationError("Key derivation failed".to_string()))?;
 
     // Fix for the temporary value dropped error
     let hash = password_hash.hash.ok_or_else(|| {

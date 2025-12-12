@@ -164,6 +164,20 @@ impl BackupManager {
         Ok(backup_path)
     }
 
+    /// Validate backup file before loading (size and basic checks)
+    fn validate_backup_file(&self, path: &Path) -> Result<(), BackupError> {
+        const MAX_BACKUP_SIZE: u64 = 50 * 1024 * 1024; // 50MB
+        
+        let metadata = fs::metadata(path)?;
+        if metadata.len() > MAX_BACKUP_SIZE {
+            return Err(BackupError::VerificationFailed(
+                "Backup file size exceeds maximum allowed".to_string()
+            ));
+        }
+        
+        Ok(())
+    }
+
     /// Restore keystore from backup
     pub fn restore_backup(
         &self,
@@ -175,6 +189,9 @@ impl BackupManager {
         if !backup_path.exists() {
             return Err(BackupError::NotFound(backup_path.display().to_string()));
         }
+
+        // Validate file size first
+        self.validate_backup_file(backup_path)?;
 
         // Read backup file
         let backup_data = fs::read_to_string(backup_path)?;
