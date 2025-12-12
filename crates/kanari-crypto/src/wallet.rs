@@ -162,18 +162,20 @@ pub fn save_wallet(
         ));
     }
 
-    // Require a sensible minimum length (8 chars) and warn if password isn't strong
-    if password.len() < 8 {
-        return Err(WalletError::EncryptionError(
-            "Password must be at least 8 characters long".to_string(),
-        ));
+    // Enforce a stronger minimum password policy
+    if password.len() < crate::MIN_RECOMMENDED_PASSWORD_LENGTH {
+        return Err(WalletError::EncryptionError(format!(
+            "Password must be at least {} characters long",
+            crate::MIN_RECOMMENDED_PASSWORD_LENGTH
+        )));
     }
 
-    // Warn if password is not strong (recommendation only)
+    // Require password to meet the strong password heuristic
     if !crate::is_password_strong(password) {
-        log::warn!(
-            "Warning: Password does not meet recommended strength requirements (16+ chars, mixed case, numbers, special chars)"
-        );
+        return Err(WalletError::EncryptionError(format!(
+            "Password does not meet strength requirements ({}+ chars, mixed case, digits, special chars)",
+            crate::MIN_RECOMMENDED_PASSWORD_LENGTH
+        )));
     }
 
     if private_key.is_empty() {
@@ -186,7 +188,7 @@ pub fn save_wallet(
     let formatted_private_key = if private_key.starts_with("kanari") {
         private_key.to_string()
     } else {
-        format!("kanari{private_key}")
+        format!("kanari{}", private_key)
     };
 
     // Create wallet object
@@ -240,16 +242,17 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
     // Load the keystore
     let keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
 
-    // Normalize address: keystore stores addresses with `0x` prefix, but callers
-    // may pass the raw hex string. Try both forms so load is tolerant.
-    let key_variants = if address.starts_with("0x") {
-        vec![
-            address.to_string(),
-            address.trim_start_matches("0x").to_string(),
-        ]
-    } else {
-        vec![format!("0x{}", address), address.to_string()]
-    };
+    // Normalize address: keystore may store addresses with or without `0x` prefix.
+    // Use central helper to produce candidate variants.
+    fn address_variants(addr: &str) -> Vec<String> {
+        if addr.starts_with("0x") {
+            vec![addr.to_string(), addr.trim_start_matches("0x").to_string()]
+        } else {
+            vec![format!("0x{}", addr), addr.to_string()]
+        }
+    }
+
+    let key_variants = address_variants(address);
 
     let mut encrypted_data_opt: Option<&crate::encryption::EncryptedData> = None;
     for key in key_variants.iter() {
@@ -269,22 +272,25 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
     // Decompress the decrypted data (handle both compressed and uncompressed formats)
     let decompressed_data = match compression::decompress_data(&decrypted) {
         Ok(data) => data,
-        Err(e) => {
-            // If decompression fails, the data might not be compressed
+        Err(_e) => {
+            // If decompression fails, attempt to parse the raw decrypted bytes as TOML
             // (compatibility with wallets created before compression was added)
-            if let Ok(str_data) = std::str::from_utf8(&decrypted) {
-                if str_data.starts_with("address") || str_data.contains("private_key") {
-                    // This appears to be valid uncompressed TOML data, use it directly
-                    decrypted
-                } else {
-                    return Err(WalletError::DecryptionError(format!(
-                        "Decompression failed and data isn't valid TOML: {e}"
-                    )));
+            match std::str::from_utf8(&decrypted) {
+                Ok(s) => match toml::from_str::<Wallet>(s) {
+                    Ok(_) => decrypted,
+                    Err(err) => {
+                        return Err(WalletError::DecryptionError(format!(
+                            "Decompression failed and parsing as TOML failed: {}. First 50 bytes: {:?}",
+                            err,
+                            &decrypted.get(..50.min(decrypted.len())).unwrap_or(&[])
+                        )));
+                    }
+                },
+                Err(_) => {
+                    return Err(WalletError::DecryptionError(
+                        "Failed to decompress or parse wallet data: non-UTF8 content".to_string(),
+                    ));
                 }
-            } else {
-                return Err(WalletError::DecryptionError(format!(
-                    "Failed to decompress or parse wallet data: {e}"
-                )));
             }
         }
     };
@@ -352,12 +358,12 @@ pub fn create_hd_wallet(
         .map_err(|e| WalletError::SerializationError(format!("Invalid derived address: {e}")))?;
 
     // Construct Wallet; store the derivation path in the seed_phrase field
-    let wallet = Wallet::new(
-        address,
-        key_pair.get_private_key(),
-        derivation_path.to_string(),
-        curve,
-    );
+    let priv_key = {
+        let zk = key_pair.export_private_key_secure();
+        zk.to_string()
+    };
+
+    let wallet = Wallet::new(address, priv_key, derivation_path.to_string(), curve);
 
     Ok(wallet)
 }
@@ -391,10 +397,11 @@ pub fn save_mnemonic(
         ));
     }
 
-    if password.len() < 8 {
-        return Err(WalletError::EncryptionError(
-            "Password must be at least 8 characters long".to_string(),
-        ));
+    if password.len() < crate::MIN_RECOMMENDED_PASSWORD_LENGTH {
+        return Err(WalletError::EncryptionError(format!(
+            "Password must be at least {} characters long",
+            crate::MIN_RECOMMENDED_PASSWORD_LENGTH
+        )));
     }
 
     // Warn if password is not strong (optional: make this mandatory)
@@ -568,6 +575,7 @@ pub fn get_selected_wallet() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MIN_RECOMMENDED_PASSWORD_LENGTH;
     use crate::keys::{CurveType, generate_keypair};
 
     // Helper to create a test wallet
@@ -575,9 +583,14 @@ mod tests {
         let keypair = generate_keypair(CurveType::K256).unwrap();
         let password = "TestPassword123!";
 
+        let priv_key = {
+            let zk = keypair.export_private_key_secure();
+            zk.to_string()
+        };
+
         let wallet = Wallet::new(
             AccountAddress::from_str(&keypair.address).unwrap(),
-            keypair.get_private_key(),
+            priv_key,
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
             CurveType::K256,
         );
@@ -625,7 +638,10 @@ mod tests {
         assert!(result.is_err(), "Password < 8 chars should be rejected");
         match result.unwrap_err() {
             WalletError::EncryptionError(msg) => {
-                assert!(msg.contains("at least 8 characters"));
+                assert!(msg.contains(&format!(
+                    "at least {} characters",
+                    MIN_RECOMMENDED_PASSWORD_LENGTH
+                )));
             }
             _ => panic!("Expected EncryptionError"),
         }
@@ -797,7 +813,7 @@ mod tests {
         // Test with kanari prefix
         let wallet1 = Wallet::new(
             address,
-            keypair.private_key.clone(),
+            keypair.private_key.to_string(),
             "seed".to_string(),
             CurveType::Ed25519,
         );
@@ -828,9 +844,14 @@ mod tests {
 
         for curve in curves {
             let keypair = generate_keypair(curve).unwrap();
+            let priv_key = {
+                let zk = keypair.export_private_key_secure();
+                zk.to_string()
+            };
+
             let wallet = Wallet::new(
                 AccountAddress::from_str(&keypair.address).unwrap(),
-                keypair.get_private_key(),
+                priv_key,
                 "seed".to_string(),
                 curve,
             );

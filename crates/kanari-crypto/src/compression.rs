@@ -16,13 +16,14 @@ pub fn compress_data(data: &[u8]) -> Result<Vec<u8>, io::Error> {
 
     // Use compression level 10 for good balance of speed/compression
     // (level 19 is too slow and can cause DoS)
-    let compressed = compress(data, 10).map_err(|e| io::Error::other(format!("Compression error: {}", e)))?;
-    
+    let compressed =
+        compress(data, 10).map_err(|e| io::Error::other(format!("Compression error: {}", e)))?;
+
     // Check compression ratio to detect anomalies
     if !compressed.is_empty() && data.len() / compressed.len() > 1000 {
         return Err(io::Error::other("Suspicious compression ratio detected"));
     }
-    
+
     Ok(compressed)
 }
 
@@ -31,15 +32,17 @@ pub fn decompress_data(data: &[u8]) -> Result<Vec<u8>, io::Error> {
     // 100MB maximum size limit to prevent decompression bombs
     // This allows for reasonable compression ratios (100:1) for text data
     const MAX_DECOMPRESSED_SIZE: usize = 100 * 1024 * 1024; // 100MB
-    
+
     let decompressed = decompress(data, MAX_DECOMPRESSED_SIZE)
         .map_err(|e| io::Error::other(format!("Decompression error: {}", e)))?;
-    
+
     // Verify decompression ratio is reasonable (max 1000:1)
     if !data.is_empty() && decompressed.len() / data.len() > 1000 {
-        return Err(io::Error::other("Suspicious decompression ratio detected - possible decompression bomb"));
+        return Err(io::Error::other(
+            "Suspicious decompression ratio detected - possible decompression bomb",
+        ));
     }
-    
+
     Ok(decompressed)
 }
 

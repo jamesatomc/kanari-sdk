@@ -3,6 +3,7 @@
 //! This module provides comprehensive audit logging for all cryptographic
 //! operations and security-sensitive events.
 
+use chrono::TimeZone;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -190,7 +191,9 @@ impl AuditEntry {
 
     /// Format as human-readable string
     pub fn to_string_formatted(&self) -> String {
-        let timestamp = chrono::DateTime::from_timestamp(self.timestamp as i64, 0)
+        let timestamp = chrono::Utc
+            .timestamp_opt(self.timestamp as i64, 0)
+            .single()
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| format!("timestamp:{}", self.timestamp));
 
@@ -294,7 +297,9 @@ impl AuditLogger {
 
 /// Get default audit log path
 pub fn get_default_audit_log_path() -> PathBuf {
-    let mut path = kanari_common::get_kari_dir();
+    let mut path = kanari_common::get_kanari_config_path();
+    // Use the config directory's parent as base (same approach as keystore)
+    path.pop();
     path.push("audit");
     path.push("security.log");
     path

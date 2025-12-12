@@ -5,10 +5,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
 use std::io;
 use std::path::PathBuf;
 use thiserror::Error;
 
+use fs2::FileExt;
 use kanari_common::get_kanari_config_path;
 
 use crate::encryption::EncryptedData;
@@ -73,6 +75,21 @@ pub struct Keystore {
     pub last_modified: Option<u64>,
 }
 
+// Guard that holds the lock file handle and unlocks on drop
+struct LockFileGuard {
+    file: File,
+    path: PathBuf,
+}
+
+impl Drop for LockFileGuard {
+    fn drop(&mut self) {
+        // Attempt to unlock; ignore errors
+        let _ = self.file.unlock();
+        // Remove lock file if possible
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 fn default_keystore_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
@@ -134,9 +151,29 @@ impl Keystore {
 
         let keystore_data = serde_json::to_string_pretty(self)?;
 
+        // Acquire an advisory lock using `fs2` on a dedicated lockfile.
+        let lock_path = keystore_path.with_extension("lock");
+        let lock_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&lock_path)
+            .map_err(|e| KeystoreError::IoError(e))?;
+
+        // Try to acquire exclusive lock without blocking
+        if let Err(_) = lock_file.try_lock_exclusive() {
+            return Err(KeystoreError::Locked);
+        }
+
+        // Keep the lockfile handle alive for the duration of this function
+        let _guard = LockFileGuard {
+            file: lock_file,
+            path: lock_path.clone(),
+        };
+
         // Atomic write: write to temp file first, sync, then rename
         let temp_path = keystore_path.with_extension("tmp");
-        
+
         // Write and sync to ensure data is persisted to disk before rename
         let mut file = fs::File::create(&temp_path)?;
         use std::io::Write;
@@ -146,6 +183,8 @@ impl Keystore {
 
         // Rename is atomic on most filesystems
         fs::rename(temp_path, keystore_path)?;
+
+        // Lock is released when `_guard` is dropped at function exit
 
         Ok(())
     }

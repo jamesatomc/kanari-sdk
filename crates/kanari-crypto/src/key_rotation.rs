@@ -44,7 +44,7 @@ impl Default for KeyRotationPolicy {
     fn default() -> Self {
         Self {
             max_age_days: 90, // Rotate every 90 days by default
-            auto_rotate: false,
+            auto_rotate: true,
             min_rotation_interval_hours: 24, // Don't rotate more than once per day
             keep_backup: true,
             backup_versions: 3,

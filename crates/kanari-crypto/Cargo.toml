@@ -51,6 +51,7 @@ aes-gcm.workspace = true
 
 # Memory security
 zeroize.workspace = true
+fs2 = "0.4"
 
 # Time handling for audit logging
 chrono = { workspace = true }

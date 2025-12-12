@@ -17,6 +17,7 @@ use argon2::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use std::fmt;
 use std::string::ToString;
 use thiserror::Error;
@@ -80,15 +81,15 @@ impl EncryptionScheme {
         match self {
             EncryptionScheme::Aes256Gcm => true,
             #[cfg(feature = "pqc")]
-            EncryptionScheme::Kyber768 
-                | EncryptionScheme::Kyber1024 
-                | EncryptionScheme::HybridAesKyber768
-                | EncryptionScheme::HybridAesKyber1024 => true,
+            EncryptionScheme::Kyber768
+            | EncryptionScheme::Kyber1024
+            | EncryptionScheme::HybridAesKyber768
+            | EncryptionScheme::HybridAesKyber1024 => true,
             #[cfg(not(feature = "pqc"))]
-            EncryptionScheme::Kyber768 
-                | EncryptionScheme::Kyber1024 
-                | EncryptionScheme::HybridAesKyber768
-                | EncryptionScheme::HybridAesKyber1024 => false,
+            EncryptionScheme::Kyber768
+            | EncryptionScheme::Kyber1024
+            | EncryptionScheme::HybridAesKyber768
+            | EncryptionScheme::HybridAesKyber1024 => false,
         }
     }
 }
@@ -201,17 +202,22 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
 
     // Derive a cryptographic key from the password
     let params = argon2_params()?;
-    let password_hash = Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let password_hash = argon
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| EncryptionError::KeyDerivationError(e.to_string()))?;
 
-    // the temporary value dropped error - bind to variable first
     let hash = password_hash.hash.ok_or_else(|| {
         EncryptionError::KeyDerivationError("Argon2 hash output is missing".to_string())
     })?;
-    let key_bytes = hash.as_bytes();
-    #[allow(deprecated)]
-    let key = Key::<Aes256Gcm>::from_slice(key_bytes);
+
+    // Put sensitive intermediate into a Zeroizing wrapper so it is cleared on drop
+    let key_bytes_vec = zeroize::Zeroizing::new(hash.as_bytes().to_vec());
+
+    // Derive a fixed 32-byte AES key from the Argon2 output using SHA3-256
+    let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
+    let derived_zero = zeroize::Zeroizing::new(derived_vec);
+    let key = Key::<Aes256Gcm>::from_slice(&derived_zero);
 
     // Generate a random nonce for AES-GCM
     let nonce_bytes = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -226,7 +232,8 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
 
     // Store values in a more compact base64 representation
     let ciphertext_b64 = general_purpose::STANDARD.encode(&ciphertext);
-    let nonce_b64 = general_purpose::STANDARD.encode(nonce_bytes);
+    let nonce_slice: &[u8] = nonce_bytes.as_ref();
+    let nonce_b64 = general_purpose::STANDARD.encode(nonce_slice);
 
     Ok(EncryptedData {
         ciphertext_array: Vec::new(),
@@ -242,13 +249,9 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
 pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>, EncryptionError> {
     // Validate ciphertext size to prevent memory exhaustion attacks
     const MAX_CIPHERTEXT_SIZE: usize = 100 * 1024 * 1024; // 100MB
-    let ciphertext_size = if !encrypted.ciphertext.is_empty() {
-        encrypted.ciphertext.len()
-    } else {
-        encrypted.ciphertext_array.len()
-    };
-
-    if ciphertext_size > MAX_CIPHERTEXT_SIZE {
+    // Decode ciphertext first (handles base64 or raw array) then check size in bytes
+    let ciphertext = encrypted.get_ciphertext()?;
+    if ciphertext.len() > MAX_CIPHERTEXT_SIZE {
         return Err(EncryptionError::InvalidFormat(
             "Ciphertext size exceeds maximum allowed".to_string(),
         ));
@@ -264,16 +267,17 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
         .hash_password(password.as_bytes(), &salt)
         .map_err(|_| EncryptionError::KeyDerivationError("Key derivation failed".to_string()))?;
 
-    // Fix for the temporary value dropped error
+    // Fix for the temporary value dropped error - ensure intermediates are zeroized
     let hash = password_hash.hash.ok_or_else(|| {
         EncryptionError::KeyDerivationError("Argon2 hash output is missing".to_string())
     })?;
-    let key_bytes = hash.as_bytes();
-    #[allow(deprecated)]
-    let key = Key::<Aes256Gcm>::from_slice(key_bytes);
 
-    // Get ciphertext and nonce from the encrypted data
-    let ciphertext = encrypted.get_ciphertext()?;
+    let key_bytes_vec = zeroize::Zeroizing::new(hash.as_bytes().to_vec());
+    let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
+    let derived_zero = zeroize::Zeroizing::new(derived_vec);
+    let key = Key::<Aes256Gcm>::from_slice(&derived_zero);
+
+    // We already decoded ciphertext above; get the nonce bytes now
     let nonce_bytes = encrypted.get_nonce()?;
 
     // Create nonce for decryption - need to convert Vec<u8> to Nonce
@@ -282,7 +286,6 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
             "Invalid nonce length".to_string(),
         ));
     }
-    #[allow(deprecated)]
     let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
 
     // Create cipher for decryption

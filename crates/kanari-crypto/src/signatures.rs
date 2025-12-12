@@ -24,6 +24,16 @@ use ed25519_dalek::{
     VerifyingKey as Ed25519VerifyingKey,
 };
 
+// PQC crates
+use pqcrypto_dilithium::dilithium2;
+use pqcrypto_dilithium::dilithium3;
+use pqcrypto_dilithium::dilithium5;
+use pqcrypto_sphincsplus::sphincssha2256fsimple;
+use pqcrypto_traits::sign::SecretKey as PqcSecretKeyTrait;
+use pqcrypto_traits::sign::{
+    DetachedSignature as PqcDetachedTrait, PublicKey as PqcPublicKeyTrait,
+};
+
 use crate::keys::CurveType;
 
 /// Digital signature errors
@@ -70,11 +80,119 @@ pub fn sign_message(
         CurveType::K256 => sign_message_k256(raw_key, message),
         CurveType::P256 => sign_message_p256(raw_key, message),
         CurveType::Ed25519 => sign_message_ed25519(raw_key, message),
-        // PQC and hybrid schemes need specialized handling
-        _ => Err(SignatureError::InvalidPrivateKey(
-            "Post-quantum and hybrid signatures require use of PQC-specific functions".to_string(),
-        )),
+        // For hybrid K256+Dilithium3, sign with the classical K256 private key part
+        CurveType::K256Dilithium3 => sign_message_hybrid_k256(raw_key, message),
+        // For hybrid Ed25519+Dilithium3, sign with the classical Ed25519 private key part
+        CurveType::Ed25519Dilithium3 => sign_message_hybrid_ed25519(raw_key, message),
+        // Handle pure PQC curves by delegating to PQC-specific signing functions
+        CurveType::Dilithium2 => sign_message_dilithium2(raw_key, message),
+        CurveType::Dilithium3 => sign_message_dilithium3(raw_key, message),
+        CurveType::Dilithium5 => sign_message_dilithium5(raw_key, message),
+        CurveType::SphincsPlusSha256Robust => sign_message_sphincs(raw_key, message),
     }
+}
+
+/// Sign a message using Dilithium2 private key (PQC)
+fn sign_message_dilithium2(
+    private_key_hex: &str,
+    message: &[u8],
+) -> Result<Vec<u8>, SignatureError> {
+    let raw = private_key_hex
+        .strip_prefix("kanapqc")
+        .unwrap_or(private_key_hex);
+    // Accept formats: "<secret_hex>" or "<secret_hex>:<public_hex>"
+    let secret_hex = raw.split_once(':').map(|(s, _)| s).unwrap_or(raw);
+    let sk_bytes = hex::decode(secret_hex)
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key hex".to_string()))?;
+    let sk = dilithium2::SecretKey::from_bytes(&sk_bytes).map_err(|_| {
+        SignatureError::InvalidPrivateKey("Invalid Dilithium2 private key".to_string())
+    })?;
+    let sig = dilithium2::detached_sign(message, &sk);
+    Ok(sig.as_bytes().to_vec())
+}
+
+/// Sign a message using Dilithium3 private key (PQC)
+fn sign_message_dilithium3(
+    private_key_hex: &str,
+    message: &[u8],
+) -> Result<Vec<u8>, SignatureError> {
+    let raw = private_key_hex
+        .strip_prefix("kanapqc")
+        .unwrap_or(private_key_hex);
+    // Accept formats: "<secret_hex>" or "<secret_hex>:<public_hex>"
+    let secret_hex = raw.split_once(':').map(|(s, _)| s).unwrap_or(raw);
+    let sk_bytes = hex::decode(secret_hex)
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key hex".to_string()))?;
+    let sk = dilithium3::SecretKey::from_bytes(&sk_bytes).map_err(|_| {
+        SignatureError::InvalidPrivateKey("Invalid Dilithium3 private key".to_string())
+    })?;
+    let sig = dilithium3::detached_sign(message, &sk);
+    Ok(sig.as_bytes().to_vec())
+}
+
+/// Sign a message using Dilithium5 private key (PQC)
+fn sign_message_dilithium5(
+    private_key_hex: &str,
+    message: &[u8],
+) -> Result<Vec<u8>, SignatureError> {
+    let raw = private_key_hex
+        .strip_prefix("kanapqc")
+        .unwrap_or(private_key_hex);
+    // Accept formats: "<secret_hex>" or "<secret_hex>:<public_hex>"
+    let secret_hex = raw.split_once(':').map(|(s, _)| s).unwrap_or(raw);
+    let sk_bytes = hex::decode(secret_hex)
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key hex".to_string()))?;
+    let sk = dilithium5::SecretKey::from_bytes(&sk_bytes).map_err(|_| {
+        SignatureError::InvalidPrivateKey("Invalid Dilithium5 private key".to_string())
+    })?;
+    let sig = dilithium5::detached_sign(message, &sk);
+    Ok(sig.as_bytes().to_vec())
+}
+
+/// Sign a message using SPHINCS+ private key (PQC)
+fn sign_message_sphincs(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
+    let raw = private_key_hex
+        .strip_prefix("kanapqc")
+        .unwrap_or(private_key_hex);
+    // Accept formats: "<secret_hex>" or "<secret_hex>:<public_hex>"
+    let secret_hex = raw.split_once(':').map(|(s, _)| s).unwrap_or(raw);
+    let sk_bytes = hex::decode(secret_hex)
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key hex".to_string()))?;
+    let sk = sphincssha2256fsimple::SecretKey::from_bytes(&sk_bytes).map_err(|_| {
+        SignatureError::InvalidPrivateKey("Invalid SPHINCS+ private key".to_string())
+    })?;
+    let sig = sphincssha2256fsimple::detached_sign(message, &sk);
+    Ok(sig.as_bytes().to_vec())
+}
+
+/// Hybrid helper: sign using the classical K256 part of a hybrid key
+fn sign_message_hybrid_k256(
+    hybrid_private: &str,
+    message: &[u8],
+) -> Result<Vec<u8>, SignatureError> {
+    let hybrid = hybrid_private
+        .strip_prefix("kanahybrid")
+        .unwrap_or(hybrid_private);
+    let parts: Vec<&str> = hybrid.split(':').collect();
+    let classical = parts.get(0).ok_or_else(|| {
+        SignatureError::InvalidPrivateKey("Invalid hybrid private key format".to_string())
+    })?;
+    sign_message_k256(classical, message)
+}
+
+/// Hybrid helper: sign using the classical Ed25519 part of a hybrid key
+fn sign_message_hybrid_ed25519(
+    hybrid_private: &str,
+    message: &[u8],
+) -> Result<Vec<u8>, SignatureError> {
+    let hybrid = hybrid_private
+        .strip_prefix("kanahybrid")
+        .unwrap_or(hybrid_private);
+    let parts: Vec<&str> = hybrid.split(':').collect();
+    let classical = parts.get(0).ok_or_else(|| {
+        SignatureError::InvalidPrivateKey("Invalid hybrid private key format".to_string())
+    })?;
+    sign_message_ed25519(classical, message)
 }
 
 /// Sign a message using K256 (secp256k1) private key
@@ -86,11 +204,11 @@ fn sign_message_k256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key".to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
 
     // Create signing key from private key
     let secret_key = K256SecretKey::from_slice(&private_key_bytes)
-        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key".to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
     let signing_key = K256SigningKey::from(secret_key);
 
     // Sign the hashed message
@@ -110,11 +228,11 @@ fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
 
     // Create signing key from private key
     let secret_key = P256SecretKey::from_slice(&private_key_bytes)
-        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
     let signing_key = SigningKey::from(secret_key);
 
     // Sign the hashed message
@@ -129,11 +247,11 @@ fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 fn sign_message_ed25519(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
     // Convert hex private key to bytes
     let private_key_bytes = hex::decode(private_key_hex)
-        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid key format".to_string()))?;
+        .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
 
     if private_key_bytes.len() != 32 {
         return Err(SignatureError::InvalidPrivateKey(
-            "Invalid key format".to_string(),
+            "Invalid private key".to_string(),
         ));
     }
 
@@ -233,11 +351,95 @@ pub fn verify_signature_with_curve(
         CurveType::K256 => verify_signature_k256(address_hex, message, signature),
         CurveType::P256 => verify_signature_p256(address_hex, message, signature),
         CurveType::Ed25519 => verify_signature_ed25519(address_hex, message, signature),
-        // PQC and hybrid schemes need specialized handling
-        _ => Err(SignatureError::InvalidFormat(
-            "Post-quantum and hybrid signature verification requires PQC-specific functions"
-                .to_string(),
-        )),
+        // For hybrid K256+Dilithium3, verify using the classical K256 public key part when provided
+        CurveType::K256Dilithium3 => {
+            // Address may be provided as "<classical_pub_hex>:<pqc_pub_hex>" or as the classical pub hex alone
+            let addr = address_hex;
+            let classical = if addr.contains(':') {
+                addr.split(':').next().unwrap_or(addr)
+            } else {
+                addr
+            };
+            verify_signature_k256(classical, message, signature)
+        }
+        // For hybrid Ed25519+Dilithium3, verify using the classical Ed25519 public key part when provided
+        CurveType::Ed25519Dilithium3 => {
+            let addr = address_hex;
+            let classical = if addr.contains(':') {
+                addr.split(':').next().unwrap_or(addr)
+            } else {
+                addr
+            };
+            verify_signature_ed25519(classical, message, signature)
+        }
+        // PQC verification using pqcrypto crates
+        CurveType::Dilithium2 => {
+            let pub_bytes = hex::decode(address_hex).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
+            })?;
+            let pk = dilithium2::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid Dilithium2 public key".to_string())
+            })?;
+            let sig_obj = dilithium2::DetachedSignature::from_bytes(signature).map_err(|_| {
+                SignatureError::InvalidFormat("Invalid signature bytes for Dilithium2".to_string())
+            })?;
+            let res = dilithium2::verify_detached_signature(&sig_obj, message, &pk);
+            match res {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+        CurveType::Dilithium3 => {
+            let pub_bytes = hex::decode(address_hex).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
+            })?;
+            let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
+            })?;
+            let sig_obj = dilithium3::DetachedSignature::from_bytes(signature).map_err(|_| {
+                SignatureError::InvalidFormat("Invalid signature bytes for Dilithium3".to_string())
+            })?;
+            let res = dilithium3::verify_detached_signature(&sig_obj, message, &pk);
+            match res {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+        CurveType::Dilithium5 => {
+            let pub_bytes = hex::decode(address_hex).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
+            })?;
+            let pk = dilithium5::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid Dilithium5 public key".to_string())
+            })?;
+            let sig_obj = dilithium5::DetachedSignature::from_bytes(signature).map_err(|_| {
+                SignatureError::InvalidFormat("Invalid signature bytes for Dilithium5".to_string())
+            })?;
+            let res = dilithium5::verify_detached_signature(&sig_obj, message, &pk);
+            match res {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+        CurveType::SphincsPlusSha256Robust => {
+            let pub_bytes = hex::decode(address_hex).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
+            })?;
+            let pk = sphincssha2256fsimple::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid SPHINCS+ public key".to_string())
+            })?;
+            let sig_obj =
+                sphincssha2256fsimple::DetachedSignature::from_bytes(signature).map_err(|_| {
+                    SignatureError::InvalidFormat(
+                        "Invalid signature bytes for SPHINCS+".to_string(),
+                    )
+                })?;
+            let res = sphincssha2256fsimple::verify_detached_signature(&sig_obj, message, &pk);
+            match res {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
     }
 }
 
@@ -666,9 +868,17 @@ mod tests {
         let keypair = generate_keypair(CurveType::Dilithium3).unwrap();
         let message = b"test";
 
-        // Should return error for PQC signatures via this API
-        let result = sign_message(&keypair.private_key, message, CurveType::Dilithium3);
-        assert!(result.is_err(), "PQC signing should use specialized API");
+        // PQC signing should be supported by the PQC-specific API
+        let signature = sign_message(&keypair.private_key, message, CurveType::Dilithium3).unwrap();
+        // Verify using explicit curve type
+        let verified = verify_signature_with_curve(
+            &keypair.public_key,
+            message,
+            &signature,
+            CurveType::Dilithium3,
+        )
+        .unwrap();
+        assert!(verified, "Dilithium3 signature should verify");
     }
 
     #[test]
