@@ -140,12 +140,12 @@ fn main() -> Result<()> {
                 || curve_type.is_hybrid()
             {
                 let kp = generate_keypair(curve_type).context("Failed to generate keypair")?;
-                (kp.private_key, kp.address, String::new())
+                (kp.get_private_key(), kp.get_address(), String::new())
             } else {
                 let mnemonic = generate_mnemonic(words).context("Failed to generate mnemonic")?;
                 let kp = keypair_from_mnemonic(&mnemonic, curve_type, "")
                     .context("Failed to derive keypair from mnemonic")?;
-                (kp.private_key, kp.address, mnemonic)
+                (kp.get_private_key(), kp.get_address(), mnemonic)
             };
 
             let address =

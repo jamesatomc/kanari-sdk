@@ -890,7 +890,7 @@ async fn handle_verify_module(_state: &RpcServerState, request: &RpcRequest) -> 
 async fn handle_simulate_function(_state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
     use kanari_rpc_api::CallFunctionRequest;
 
-    let call_data: CallFunctionRequest = match serde_json::from_value(request.params.clone()) {
+    let _call_data: CallFunctionRequest = match serde_json::from_value(request.params.clone()) {
         Ok(data) => data,
         Err(e) => {
             return RpcResponse {

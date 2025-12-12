@@ -138,7 +138,7 @@ pub enum KeyError {
 }
 
 /// Result of key generation containing private key, public key, and address
-/// 
+///
 /// Security: Private key is automatically zeroized when dropped.
 /// Clone is intentionally not implemented to prevent key material duplication.
 /// Private key is NOT serialized by default for security.
@@ -740,7 +740,11 @@ pub fn generate_karix_address(
     // Generate keypair from mnemonic
     let keypair = keypair_from_mnemonic(&seed_phrase, curve_type, "")?;
 
-    Ok((keypair.get_private_key(), keypair.get_address(), seed_phrase))
+    Ok((
+        keypair.get_private_key(),
+        keypair.get_address(),
+        seed_phrase,
+    ))
 }
 
 /// Import a wallet from a seed phrase
@@ -749,7 +753,13 @@ pub fn import_from_seed_phrase(
     curve_type: CurveType,
 ) -> Result<(String, String, String), String> {
     keypair_from_mnemonic(phrase, curve_type, "")
-        .map(|keypair| (keypair.get_private_key(), keypair.get_public_key(), keypair.get_address()))
+        .map(|keypair| {
+            (
+                keypair.get_private_key(),
+                keypair.get_public_key(),
+                keypair.get_address(),
+            )
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -759,7 +769,13 @@ pub fn import_from_private_key(
     curve_type: CurveType,
 ) -> Result<(String, String, String), String> {
     keypair_from_private_key(private_key, curve_type)
-        .map(|keypair| (keypair.get_private_key(), keypair.get_public_key(), keypair.get_address()))
+        .map(|keypair| {
+            (
+                keypair.get_private_key(),
+                keypair.get_public_key(),
+                keypair.get_address(),
+            )
+        })
         .map_err(|e| e.to_string())
 }
 

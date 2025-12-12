@@ -227,10 +227,10 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
     } else {
         encrypted.ciphertext_array.len()
     };
-    
+
     if ciphertext_size > MAX_CIPHERTEXT_SIZE {
         return Err(EncryptionError::InvalidFormat(
-            "Ciphertext size exceeds maximum allowed".to_string()
+            "Ciphertext size exceeds maximum allowed".to_string(),
         ));
     }
 

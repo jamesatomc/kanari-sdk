@@ -56,9 +56,6 @@ pub struct Keystore {
     /// Mnemonic phrase information
     pub mnemonic: MnemonicStore,
 
-    /// Temporary session keys
-    pub session_keys: HashMap<String, String>,
-
     /// Hashed master password for verification
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password_hash: Option<String>,
@@ -225,32 +222,6 @@ impl Keystore {
         Ok(())
     }
 
-    /// Add session key
-    pub fn add_session_key(&mut self, key: &str, value: &str) -> Result<(), KeystoreError> {
-        self.session_keys.insert(key.to_string(), value.to_string());
-        self.save()?;
-        Ok(())
-    }
-
-    /// Get session key
-    pub fn get_session_key(&self, key: &str) -> Option<&String> {
-        self.session_keys.get(key)
-    }
-
-    /// Remove session key
-    pub fn remove_session_key(&mut self, key: &str) -> Result<(), KeystoreError> {
-        self.session_keys.remove(key);
-        self.save()?;
-        Ok(())
-    }
-
-    /// Clear all session keys
-    pub fn clear_session_keys(&mut self) -> Result<(), KeystoreError> {
-        self.session_keys.clear();
-        self.save()?;
-        Ok(())
-    }
-
     /// Check if mnemonic exists
     pub fn has_mnemonic(&self) -> bool {
         self.mnemonic.mnemonic_phrase_encryption.is_some()
@@ -307,7 +278,6 @@ impl Keystore {
             total_keys: self.keys.len(),
             has_mnemonic: self.has_mnemonic(),
             mnemonic_addresses: self.mnemonic.addresses.len(),
-            session_keys: self.session_keys.len(),
             version: self.version.clone(),
             last_modified: self.last_modified,
         }
@@ -320,7 +290,6 @@ pub struct KeystoreStatistics {
     pub total_keys: usize,
     pub has_mnemonic: bool,
     pub mnemonic_addresses: usize,
-    pub session_keys: usize,
     pub version: String,
     pub last_modified: Option<u64>,
 }
@@ -415,7 +384,6 @@ mod tests {
         let keystore = Keystore::default();
         assert_eq!(keystore.keys.len(), 0);
         assert_eq!(keystore.mnemonic.addresses.len(), 0);
-        assert_eq!(keystore.session_keys.len(), 0);
     }
 
     #[test]
@@ -549,24 +517,6 @@ mod tests {
     }
 
     #[test]
-    fn test_keystore_session_keys() {
-        let mut keystore = Keystore::default();
-
-        keystore
-            .session_keys
-            .insert("key1".to_string(), "value1".to_string());
-        keystore
-            .session_keys
-            .insert("key2".to_string(), "value2".to_string());
-
-        assert_eq!(keystore.session_keys.len(), 2);
-        assert_eq!(
-            keystore.session_keys.get("key1"),
-            Some(&"value1".to_string())
-        );
-    }
-
-    #[test]
     fn test_keystore_statistics() {
         let mut keystore = Keystore::default();
 
@@ -578,16 +528,12 @@ mod tests {
             .insert("0x2".to_string(), create_test_encrypted_data());
         keystore.mnemonic.mnemonic_phrase_encryption = Some(create_test_encrypted_data());
         keystore.mnemonic.addresses = vec!["0x1".to_string()];
-        keystore
-            .session_keys
-            .insert("s1".to_string(), "v1".to_string());
 
         let stats = keystore.statistics();
 
         assert_eq!(stats.total_keys, 2);
         assert!(stats.has_mnemonic);
         assert_eq!(stats.mnemonic_addresses, 1);
-        assert_eq!(stats.session_keys, 1);
     }
 
     #[test]

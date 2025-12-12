@@ -149,15 +149,23 @@ pub fn all_natives(
                     // parse x-only pubkey and schnorr signature via secp256k1
                     use secp256k1::XOnlyPublicKey as XOnlyPub;
                     use secp256k1::schnorr::Signature as SchnorrSig;
-                    let xpk = match XOnlyPub::from_slice(&public_key) {
+
+                    // Convert to fixed-size array for from_byte_array
+                    let pub_array: [u8; 32] = match public_key.try_into() {
+                        Ok(arr) => arr,
+                        Err(_) => return Ok(NR::err(context.gas_used(), 5)), // ErrorInvalidXOnlyPubKey (wrong size)
+                    };
+                    let xpk = match XOnlyPub::from_byte_array(pub_array) {
                         Ok(x) => x,
                         Err(_) => return Ok(NR::err(context.gas_used(), 5)), // ErrorInvalidXOnlyPubKey
                     };
 
-                    let sch_sig = match SchnorrSig::from_slice(&signature) {
-                        Ok(s) => s,
-                        Err(_) => return Ok(NR::err(context.gas_used(), 7)), // ErrorInvalidSchnorrSignature
+                    // Convert to fixed-size array for from_byte_array
+                    let sig_array: [u8; 64] = match signature.try_into() {
+                        Ok(arr) => arr,
+                        Err(_) => return Ok(NR::err(context.gas_used(), 7)), // ErrorInvalidSchnorrSignature (wrong size)
                     };
+                    let sch_sig = SchnorrSig::from_byte_array(sig_array);
 
                     let secp = Secp256k1::new();
                     // secp256k1 crate's schnorr API verifies a 32-byte message

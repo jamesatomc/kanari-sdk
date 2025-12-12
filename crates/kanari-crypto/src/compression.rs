@@ -8,9 +8,15 @@ use zstd::bulk::{compress, decompress};
 
 /// Compress data using zstd with high compression level
 pub fn compress_data(data: &[u8]) -> Result<Vec<u8>, io::Error> {
-    // Use compression level 19 for very high compression ratio
-    // (default is 3, max is 22 but very slow)
-    compress(data, 19).map_err(|e| io::Error::other(format!("Compression error: {}", e)))
+    // Validate input size to prevent DoS attacks
+    const MAX_INPUT_SIZE: usize = 50 * 1024 * 1024; // 50MB
+    if data.len() > MAX_INPUT_SIZE {
+        return Err(io::Error::other("Input data too large for compression"));
+    }
+
+    // Use compression level 10 for good balance of speed/compression
+    // (level 19 is too slow and can cause DoS)
+    compress(data, 10).map_err(|e| io::Error::other(format!("Compression error: {}", e)))
 }
 
 /// Decompress data that was compressed with zstd

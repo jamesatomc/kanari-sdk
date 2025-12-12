@@ -167,14 +167,14 @@ impl BackupManager {
     /// Validate backup file before loading (size and basic checks)
     fn validate_backup_file(&self, path: &Path) -> Result<(), BackupError> {
         const MAX_BACKUP_SIZE: u64 = 50 * 1024 * 1024; // 50MB
-        
+
         let metadata = fs::metadata(path)?;
         if metadata.len() > MAX_BACKUP_SIZE {
             return Err(BackupError::VerificationFailed(
-                "Backup file size exceeds maximum allowed".to_string()
+                "Backup file size exceeds maximum allowed".to_string(),
             ));
         }
-        
+
         Ok(())
     }
 

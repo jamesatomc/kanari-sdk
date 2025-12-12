@@ -168,11 +168,11 @@ pub fn save_wallet(
         ));
     }
 
-    // Warn if password is not strong (optional: make this mandatory)
+    // Enforce strong password requirements for security
     if !crate::is_password_strong(password) {
-        log::warn!(
-            "Warning: Password does not meet recommended strength requirements (16+ chars, mixed case, numbers, special chars)"
-        );
+        return Err(WalletError::EncryptionError(
+            "Password does not meet security requirements: must be at least 16 characters and contain uppercase, lowercase, numbers, and special characters".to_string()
+        ));
     }
 
     if private_key.is_empty() {
@@ -474,50 +474,6 @@ pub fn remove_mnemonic() -> Result<(), WalletError> {
 
     keystore
         .remove_mnemonic()
-        .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-
-    Ok(())
-}
-
-// =========================================================================
-// Session Key Management Functions
-// =========================================================================
-
-/// Save session key
-pub fn save_session_key(key: &str, value: &str) -> Result<(), WalletError> {
-    let mut keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-
-    keystore
-        .add_session_key(key, value)
-        .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-
-    Ok(())
-}
-
-/// Load session key
-pub fn load_session_key(key: &str) -> Result<Option<String>, WalletError> {
-    let keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-
-    Ok(keystore.get_session_key(key).cloned())
-}
-
-/// Remove session key
-pub fn remove_session_key(key: &str) -> Result<(), WalletError> {
-    let mut keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-
-    keystore
-        .remove_session_key(key)
-        .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-
-    Ok(())
-}
-
-/// Clear all session keys
-pub fn clear_session_keys() -> Result<(), WalletError> {
-    let mut keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
-
-    keystore
-        .clear_session_keys()
         .map_err(|e| WalletError::KeystoreError(e.to_string()))?;
 
     Ok(())

@@ -15,7 +15,6 @@ pub mod backup;
 pub mod compression;
 pub mod encryption;
 pub mod hd_wallet;
-pub mod hsm;
 pub mod key_rotation;
 pub mod keys;
 pub mod keystore;
@@ -35,10 +34,9 @@ pub use encryption::{
 
 // Re-export wallet functionality
 pub use wallet::{
-    Wallet, WalletError, check_mnemonic_exists, check_wallet_exists, clear_session_keys,
-    get_mnemonic_addresses, get_selected_wallet, list_wallet_files, load_mnemonic,
-    load_session_key, load_wallet, remove_mnemonic, remove_session_key, save_mnemonic,
-    save_session_key, save_wallet, set_selected_wallet,
+    Wallet, WalletError, check_mnemonic_exists, check_wallet_exists, get_mnemonic_addresses,
+    get_selected_wallet, list_wallet_files, load_mnemonic, load_wallet, remove_mnemonic,
+    save_mnemonic, save_wallet, set_selected_wallet,
 };
 
 // Re-export keystore functionality
@@ -59,9 +57,6 @@ pub fn get_current_timestamp() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
-
-// Re-export HSM functionality
-pub use hsm::{HsmConfig, HsmError, HsmInterface, HsmProvider, SoftwareHsm, create_hsm};
 
 // Re-export key rotation functionality
 pub use key_rotation::{
@@ -209,7 +204,7 @@ impl RateLimiter {
     /// Check if an operation is allowed for the given identifier
     pub fn check_allowed(&mut self, identifier: &str) -> bool {
         let now = get_current_timestamp();
-        
+
         if let Some((count, locked_until)) = self.attempts.get(identifier) {
             if now < *locked_until {
                 return false; // Still locked out
@@ -219,27 +214,22 @@ impl RateLimiter {
                 self.attempts.remove(identifier);
             }
         }
-        
+
         true
     }
 
     /// Record a failed attempt
     pub fn record_failure(&mut self, identifier: &str) {
         let now = get_current_timestamp();
-        
+
         let (count, _) = self.attempts.get(identifier).unwrap_or(&(0, 0));
         let new_count = count + 1;
-        
+
         // Exponential backoff: 2^(attempts) seconds, capped at lockout_duration
-        let lockout = std::cmp::min(
-            2u64.pow(new_count),
-            self.lockout_duration_secs
-        );
-        
-        self.attempts.insert(
-            identifier.to_string(),
-            (new_count, now + lockout)
-        );
+        let lockout = std::cmp::min(2u64.pow(new_count), self.lockout_duration_secs);
+
+        self.attempts
+            .insert(identifier.to_string(), (new_count, now + lockout));
     }
 
     /// Record a successful attempt (resets the counter)
@@ -250,13 +240,13 @@ impl RateLimiter {
     /// Get remaining lockout time in seconds
     pub fn get_lockout_remaining(&self, identifier: &str) -> Option<u64> {
         let now = get_current_timestamp();
-        
+
         if let Some((_, locked_until)) = self.attempts.get(identifier) {
             if now < *locked_until {
                 return Some(*locked_until - now);
             }
         }
-        
+
         None
     }
 }
@@ -294,5 +284,3 @@ pub const fn security_info() -> &'static str {
     Security: Resistant to quantum computer attacks (Shor's and Grover's algorithms)
     Always use post-quantum or hybrid schemes for long-term security!"
 }
-
-
