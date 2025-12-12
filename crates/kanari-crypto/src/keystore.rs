@@ -134,9 +134,15 @@ impl Keystore {
 
         let keystore_data = serde_json::to_string_pretty(self)?;
 
-        // Atomic write: write to temp file first, then rename
+        // Atomic write: write to temp file first, sync, then rename
         let temp_path = keystore_path.with_extension("tmp");
-        fs::write(&temp_path, &keystore_data)?;
+        
+        // Write and sync to ensure data is persisted to disk before rename
+        let mut file = fs::File::create(&temp_path)?;
+        use std::io::Write;
+        file.write_all(keystore_data.as_bytes())?;
+        file.sync_all()?; // Ensure data is physically written to disk
+        drop(file);
 
         // Rename is atomic on most filesystems
         fs::rename(temp_path, keystore_path)?;

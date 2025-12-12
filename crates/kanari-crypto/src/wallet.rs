@@ -162,13 +162,7 @@ pub fn save_wallet(
         ));
     }
 
-    if password.len() < 8 {
-        return Err(WalletError::EncryptionError(
-            "Password must be at least 8 characters long".to_string(),
-        ));
-    }
-
-    // Enforce strong password requirements for security
+    // Enforce strong password requirements for security (includes length check >= 16)
     if !crate::is_password_strong(password) {
         return Err(WalletError::EncryptionError(
             "Password does not meet security requirements: must be at least 16 characters and contain uppercase, lowercase, numbers, and special characters".to_string()

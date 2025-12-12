@@ -74,6 +74,23 @@ impl EncryptionScheme {
             EncryptionScheme::Kyber1024 | EncryptionScheme::HybridAesKyber1024 => 5,
         }
     }
+
+    /// Check if this scheme is available (compile-time feature check)
+    pub fn is_available(&self) -> bool {
+        match self {
+            EncryptionScheme::Aes256Gcm => true,
+            #[cfg(feature = "pqc")]
+            EncryptionScheme::Kyber768 
+                | EncryptionScheme::Kyber1024 
+                | EncryptionScheme::HybridAesKyber768
+                | EncryptionScheme::HybridAesKyber1024 => true,
+            #[cfg(not(feature = "pqc"))]
+            EncryptionScheme::Kyber768 
+                | EncryptionScheme::Kyber1024 
+                | EncryptionScheme::HybridAesKyber768
+                | EncryptionScheme::HybridAesKyber1024 => false,
+        }
+    }
 }
 
 /// Error types for encryption operations
@@ -93,6 +110,9 @@ pub enum EncryptionError {
 
     #[error("Post-quantum encryption error: {0}")]
     PqcError(String),
+
+    #[error("Feature not available: {0} requires 'pqc' feature to be enabled")]
+    FeatureNotAvailable(String),
 }
 
 /// Structure representing encrypted data
