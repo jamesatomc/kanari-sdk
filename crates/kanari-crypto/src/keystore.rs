@@ -78,16 +78,15 @@ pub struct Keystore {
 // Guard that holds the lock file handle and unlocks on drop
 struct LockFileGuard {
     file: File,
+    path: PathBuf,
 }
 
 impl Drop for LockFileGuard {
     fn drop(&mut self) {
         // Attempt to unlock; ignore errors
         let _ = self.file.unlock();
-        // Do not remove the lock file here; removing a lockfile while other
-        // processes may be using it can cause races on some filesystems.
-        // The file can be left in place (empty or reused) and the advisory
-        // lock semantics are provided by the file handle itself.
+        // Remove lock file if possible
+        let _ = fs::remove_file(&self.path);
     }
 }
 
