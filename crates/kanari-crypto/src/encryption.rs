@@ -1,11 +1,8 @@
 //! Secure data encryption and decryption
 //!
 //! This module provides functions for encrypting and decrypting data using
-//! modern secure algorithms including post-quantum key encapsulation (Kyber).
 //!
 //! **Classical**: AES-256-GCM with Argon2 key derivation
-//! **Post-Quantum**: Kyber768/1024 key encapsulation mechanism (KEM)
-//! **Hybrid**: AES-256-GCM + Kyber for quantum-safe encryption
 
 use aes_gcm::{
     Aes256Gcm, Key,
@@ -17,23 +14,10 @@ use argon2::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
 use std::fmt;
 use std::string::ToString;
 use thiserror::Error;
 use zeroize::Zeroize;
-
-// Post-Quantum Cryptography - Kyber KEM
-#[cfg(feature = "pqc")]
-use pqcrypto_kyber::kyber768;
-
-#[cfg(feature = "pqc")]
-use pqcrypto_kyber::kyber1024;
-
-#[cfg(feature = "pqc")]
-use pqcrypto_traits::kem::{
-    Ciphertext, PublicKey as KemPublicKey, SecretKey as KemSecretKey, SharedSecret,
-};
 
 /// Encryption scheme selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -41,38 +25,18 @@ pub enum EncryptionScheme {
     /// AES-256-GCM (Classical, fast)
     #[default]
     Aes256Gcm,
-
-    /// Kyber768 KEM (Post-quantum, NIST Level 3)
-    Kyber768,
-
-    /// Kyber1024 KEM (Post-quantum, NIST Level 5, maximum security)
-    Kyber1024,
-
-    /// Hybrid: AES-256-GCM + Kyber768 (Best of both worlds)
-    HybridAesKyber768,
-
-    /// Hybrid: AES-256-GCM + Kyber1024 (Maximum security)
-    HybridAesKyber1024,
 }
 
 impl EncryptionScheme {
     /// Returns true if this scheme is quantum-resistant
     pub fn is_quantum_resistant(&self) -> bool {
-        matches!(
-            self,
-            EncryptionScheme::Kyber768
-                | EncryptionScheme::Kyber1024
-                | EncryptionScheme::HybridAesKyber768
-                | EncryptionScheme::HybridAesKyber1024
-        )
+        false
     }
 
     /// Get security level (1-5)
     pub fn security_level(&self) -> u8 {
         match self {
             EncryptionScheme::Aes256Gcm => 4,
-            EncryptionScheme::Kyber768 | EncryptionScheme::HybridAesKyber768 => 5,
-            EncryptionScheme::Kyber1024 | EncryptionScheme::HybridAesKyber1024 => 5,
         }
     }
 
@@ -80,16 +44,6 @@ impl EncryptionScheme {
     pub fn is_available(&self) -> bool {
         match self {
             EncryptionScheme::Aes256Gcm => true,
-            #[cfg(feature = "pqc")]
-            EncryptionScheme::Kyber768
-            | EncryptionScheme::Kyber1024
-            | EncryptionScheme::HybridAesKyber768
-            | EncryptionScheme::HybridAesKyber1024 => true,
-            #[cfg(not(feature = "pqc"))]
-            EncryptionScheme::Kyber768
-            | EncryptionScheme::Kyber1024
-            | EncryptionScheme::HybridAesKyber768
-            | EncryptionScheme::HybridAesKyber1024 => false,
         }
     }
 }
@@ -139,9 +93,6 @@ pub struct EncryptedData {
     nonce: String,
 
     salt: String,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tag: Option<String>,
 }
 
 impl EncryptedData {
@@ -192,8 +143,8 @@ impl fmt::Display for EncryptedData {
 
         write!(
             f,
-            "EncryptedData {{ ciphertext: [{}], nonce: [{}], salt: {}, tag: {:?} }}",
-            cipher_len, nonce_len, self.salt, self.tag
+            "EncryptedData {{ ciphertext: [{}], nonce: [{}], salt: {} }}",
+            cipher_len, nonce_len, self.salt
         )
     }
 }
@@ -232,11 +183,8 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
     // Put sensitive intermediate into a Zeroizing wrapper so it is cleared on drop
     let key_bytes_vec = zeroize::Zeroizing::new(hash.as_bytes().to_vec());
 
-    // Derive a fixed 32-byte AES key from the Argon2 output using SHA3-256
-    let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
-    let derived_zero = zeroize::Zeroizing::new(derived_vec);
-    // Clone the key material into an owned Key so we can zeroize the intermediate immediately
-    let key_owned = *Key::<Aes256Gcm>::from_slice(&derived_zero);
+    // Argon2 is configured to produce a 32-byte output; use it directly as AES key
+    let key_owned = *Key::<Aes256Gcm>::from_slice(&key_bytes_vec);
 
     // Generate a random nonce for AES-GCM
     let nonce_bytes = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -255,7 +203,7 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
     let nonce_b64 = general_purpose::STANDARD.encode(nonce_slice);
 
     // Zeroize intermediate derived key material as soon as possible
-    drop(derived_zero);
+    drop(key_bytes_vec);
 
     Ok(EncryptedData {
         ciphertext_array: Vec::new(),
@@ -263,7 +211,6 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
         nonce_array: Vec::new(),
         nonce: nonce_b64,
         salt: salt.to_string(),
-        tag: None,
     })
 }
 
@@ -310,9 +257,8 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
     })?;
 
     let key_bytes_vec = zeroize::Zeroizing::new(hash.as_bytes().to_vec());
-    let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
-    let derived_zero = zeroize::Zeroizing::new(derived_vec);
-    let key_owned = *Key::<Aes256Gcm>::from_slice(&derived_zero);
+    // Argon2 produces a 32-byte output; use it directly as AES key
+    let key_owned = *Key::<Aes256Gcm>::from_slice(&key_bytes_vec);
 
     // We already decoded ciphertext above; get the nonce bytes now
     let nonce_bytes = encrypted.get_nonce()?;
@@ -329,7 +275,7 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
     let cipher = Aes256Gcm::new(&key_owned);
 
     // Zeroize intermediate derived key material before decryption
-    drop(derived_zero);
+    drop(key_bytes_vec);
 
     // Decrypt the data
     cipher
@@ -341,10 +287,10 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
 // Uses OWASP recommended parameters for interactive applications
 fn argon2_params() -> Result<argon2::Params, EncryptionError> {
     argon2::Params::new(
-        47104, // Memory cost (46 MB) - OWASP minimum recommendation
-        3,     // Time cost (3 iterations) - improved security
-        1,     // Parallelism (1 thread)
-        None,  // No Output::BLOCK_SIZE in this version
+        47104,    // Memory cost (46 MB) - OWASP minimum recommendation
+        3,        // Time cost (3 iterations) - improved security
+        1,        // Parallelism (1 thread)
+        Some(32), // Produce 32-byte output to use directly as AES-256 key
     )
     .map_err(|e| EncryptionError::KeyDerivationError(format!("Invalid Argon2 parameters: {}", e)))
 }
@@ -359,7 +305,6 @@ pub fn upgrade_encrypted_data(old_data: EncryptedData) -> EncryptedData {
             nonce: general_purpose::STANDARD.encode(&old_data.nonce_array),
             nonce_array: Vec::new(),
             salt: old_data.salt,
-            tag: old_data.tag,
         }
     } else {
         old_data
@@ -384,85 +329,6 @@ pub fn decrypt_string(
 /// Uses zeroize crate for secure memory clearing
 pub fn secure_erase(data: &mut [u8]) {
     data.zeroize();
-}
-
-// ==========================
-// Post-Quantum KEM helpers
-// ==========================
-#[cfg(feature = "pqc")]
-/// Generate a Kyber keypair and return raw bytes of (public_key, secret_key)
-pub fn pqc_generate_keypair(
-    scheme: EncryptionScheme,
-) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
-    match scheme {
-        EncryptionScheme::Kyber768 => {
-            let (pk, sk) = kyber768::keypair();
-            Ok((pk.as_bytes().to_vec(), sk.as_bytes().to_vec()))
-        }
-        EncryptionScheme::Kyber1024 => {
-            let (pk, sk) = kyber1024::keypair();
-            Ok((pk.as_bytes().to_vec(), sk.as_bytes().to_vec()))
-        }
-        _ => Err(EncryptionError::PqcError(
-            "Unsupported PQC scheme for key generation".to_string(),
-        )),
-    }
-}
-
-#[cfg(feature = "pqc")]
-/// Encapsulate to a public key (provided as bytes) and return (ciphertext_bytes, shared_secret_bytes).
-/// Note: converting raw bytes back into pqcrypto types may fail for invalid inputs.
-pub fn pqc_encapsulate_from_public_key(
-    scheme: EncryptionScheme,
-    public_key_bytes: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>), EncryptionError> {
-    match scheme {
-        EncryptionScheme::Kyber768 => {
-            let pk = kyber768::PublicKey::from_bytes(public_key_bytes)
-                .map_err(|e| EncryptionError::PqcError(format!("Invalid public key: {:?}", e)))?;
-            let (ct, ss) = kyber768::encapsulate(&pk);
-            Ok((ct.as_bytes().to_vec(), ss.as_bytes().to_vec()))
-        }
-        EncryptionScheme::Kyber1024 => {
-            let pk = kyber1024::PublicKey::from_bytes(public_key_bytes)
-                .map_err(|e| EncryptionError::PqcError(format!("Invalid public key: {:?}", e)))?;
-            let (ct, ss) = kyber1024::encapsulate(&pk);
-            Ok((ct.as_bytes().to_vec(), ss.as_bytes().to_vec()))
-        }
-        _ => Err(EncryptionError::PqcError(
-            "Unsupported PQC scheme for encapsulation".to_string(),
-        )),
-    }
-}
-
-#[cfg(feature = "pqc")]
-/// Decapsulate using secret key bytes and ciphertext bytes, returning the shared secret bytes.
-pub fn pqc_decapsulate_from_secret(
-    scheme: EncryptionScheme,
-    secret_key_bytes: &[u8],
-    ciphertext_bytes: &[u8],
-) -> Result<Vec<u8>, EncryptionError> {
-    match scheme {
-        EncryptionScheme::Kyber768 => {
-            let sk = kyber768::SecretKey::from_bytes(secret_key_bytes)
-                .map_err(|e| EncryptionError::PqcError(format!("Invalid secret key: {:?}", e)))?;
-            let ct = kyber768::Ciphertext::from_bytes(ciphertext_bytes)
-                .map_err(|e| EncryptionError::PqcError(format!("Invalid ciphertext: {:?}", e)))?;
-            let ss = kyber768::decapsulate(&ct, &sk);
-            Ok(ss.as_bytes().to_vec())
-        }
-        EncryptionScheme::Kyber1024 => {
-            let sk = kyber1024::SecretKey::from_bytes(secret_key_bytes)
-                .map_err(|e| EncryptionError::PqcError(format!("Invalid secret key: {:?}", e)))?;
-            let ct = kyber1024::Ciphertext::from_bytes(ciphertext_bytes)
-                .map_err(|e| EncryptionError::PqcError(format!("Invalid ciphertext: {:?}", e)))?;
-            let ss = kyber1024::decapsulate(&ct, &sk);
-            Ok(ss.as_bytes().to_vec())
-        }
-        _ => Err(EncryptionError::PqcError(
-            "Unsupported PQC scheme for decapsulation".to_string(),
-        )),
-    }
 }
 
 #[cfg(test)]
@@ -699,7 +565,6 @@ mod tests {
             nonce: general_purpose::STANDARD.encode(b"short"), // Invalid: should be 12 bytes
             nonce_array: Vec::new(),
             salt: "salt".to_string(),
-            tag: None,
         };
 
         let result = decrypt_data(&encrypted, "password");
@@ -715,7 +580,6 @@ mod tests {
             nonce_array: vec![5, 6, 7, 8],
             nonce: String::new(),
             salt: "salt".to_string(),
-            tag: None,
         };
 
         let upgraded = upgrade_encrypted_data(old_data);
@@ -740,12 +604,8 @@ mod tests {
 
     #[test]
     fn test_encryption_scheme_properties() {
-        assert!(EncryptionScheme::Kyber768.is_quantum_resistant());
         assert!(!EncryptionScheme::Aes256Gcm.is_quantum_resistant());
-
         assert_eq!(EncryptionScheme::Aes256Gcm.security_level(), 4);
-        assert_eq!(EncryptionScheme::Kyber768.security_level(), 5);
-        assert_eq!(EncryptionScheme::HybridAesKyber1024.security_level(), 5);
     }
 
     #[test]

@@ -26,7 +26,7 @@ secp256k1 = { workspace = true, features = ["recovery"] }
 
 # Post-Quantum Cryptography (PQC) - NIST Standards
 pqcrypto-dilithium = { workspace = true, optional = true }   # Post-quantum signatures
-pqcrypto-kyber = { workspace = true, optional = true }       # Post-quantum key encapsulation
+# pqcrypto-kyber = { workspace = true, optional = true }       # Post-quantum key encapsulation
 pqcrypto-sphincsplus = { workspace = true, optional = true } # Hash-based signatures (ultra-secure)
 pqcrypto-traits = { workspace = true, optional = true }      # Common traits for PQC
 
@@ -71,7 +71,7 @@ tempfile = { workspace = true }
 default = ["blake3", "pqc"]
 # Enable optional PQC crates when `pqc` feature is activated
 pqc = [
-	"pqcrypto-kyber",
+	# "pqcrypto-kyber",
 	"pqcrypto-traits",
 	"pqcrypto-dilithium",
 	"pqcrypto-sphincsplus",
