@@ -99,7 +99,7 @@ pub struct BackupManager {
 
 impl Default for BackupManager {
     fn default() -> Self {
-        let mut backup_dir = kanari_common::get_kari_dir();
+        let mut backup_dir = kanari_common::get_kanari_dir();
         backup_dir.push("backups");
         Self { backup_dir }
     }

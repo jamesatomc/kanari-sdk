@@ -4,16 +4,16 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 // Path utility functions
-pub fn get_kari_dir() -> PathBuf {
+pub fn get_kanari_dir() -> PathBuf {
     let mut path = dirs::home_dir().expect("Unable to find home directory");
-    path.push(".kari");
-    fs::create_dir_all(&path).expect("Unable to create .kari directory");
+    path.push(".kanari");
+    fs::create_dir_all(&path).expect("Unable to create .kanari directory");
     path
 }
 
 /// Get path to the kanari.yaml configuration file
 pub fn get_kanari_config_path() -> PathBuf {
-    let mut config_dir = get_kari_dir();
+    let mut config_dir = get_kanari_dir();
     config_dir.push("kanari_config");
     fs::create_dir_all(&config_dir).expect("Unable to create kanari_config directory");
     config_dir.push("kanari.yaml");

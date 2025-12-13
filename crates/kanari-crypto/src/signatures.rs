@@ -57,6 +57,8 @@ pub enum SignatureError {
 
 /// Maximum allowed signature bytes to guard against resource exhaustion in parsing
 const MAX_SIGNATURE_SIZE: usize = 64 * 1024; // 64 KiB
+/// Maximum classical signature length we accept inside a hybrid combined signature
+const MAX_CLASSICAL_SIG_LEN: usize = 1024; // limit to 1 KiB to avoid DoS
 
 /// Zero out sensitive data in memory
 /// Uses zeroize crate for secure memory clearing with compiler fence
@@ -441,147 +443,98 @@ pub fn verify_signature_with_curve(
         CurveType::Ed25519 => verify_signature_ed25519(address_hex, message, signature),
         // For hybrid K256+Dilithium3, verify using the classical K256 public key part when provided
         CurveType::K256Dilithium3 => {
-            // Address may be provided as "<classical_pub_hex>:<pqc_pub_hex>" or as the classical pub hex alone
+            // Hybrid must be provided as combined address: "classical_pub_hex:pqc_pub_hex"
+            if !address_hex.contains(':') {
+                return Err(SignatureError::InvalidPublicKey(
+                    "Hybrid key requires combined address format: classical:pqc".to_string(),
+                ));
+            }
+
             let addr = address_hex;
-            let classical = if addr.contains(':') {
-                addr.split(':').next().unwrap_or(addr)
-            } else {
-                addr
-            };
-            // If signature is in combined format, parse and verify both parts
-            // Validate minimum size before accessing indices
-            if signature.len() >= 2 {
-                let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
-                // Validate bounds to prevent integer overflow and out-of-bounds access
-                if classical_len > 0
-                    && classical_len < signature.len()
-                    && signature.len() >= 2usize.saturating_add(classical_len)
-                    && 2 + classical_len <= signature.len()
-                {
-                    let classical_sig = &signature[2..2 + classical_len];
-                    let pqc_sig = &signature[2 + classical_len..];
+            let classical = addr.split(':').next().unwrap_or("");
 
-                    // Verify classical part
-                    let classical_ok =
-                        verify_signature_k256(classical, message, classical_sig).unwrap_or(false);
-
-                    // Verify PQC part only if pqc public key present in address
-                    let pqc_ok = if addr.contains(':') {
-                        let pqc_pub = addr.splitn(2, ':').nth(1).unwrap_or("");
-                        if !pqc_pub.is_empty() && !pqc_sig.is_empty() {
-                            // verify using Dilithium3
-                            let pub_bytes = hex::decode(pqc_pub).map_err(|_| {
-                                SignatureError::InvalidPublicKey(
-                                    "Invalid public key hex".to_string(),
-                                )
-                            })?;
-                            let pk =
-                                dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-                                    SignatureError::InvalidPublicKey(
-                                        "Invalid Dilithium3 public key".to_string(),
-                                    )
-                                })?;
-                            let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig)
-                                .map_err(|_| {
-                                    SignatureError::InvalidFormat(
-                                        "Invalid signature bytes for Dilithium3".to_string(),
-                                    )
-                                })?;
-                            dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok()
-                        } else {
-                            false
-                        }
-                    } else {
-                        // No PQC public key present in address - cannot verify PQC part
-                        false
-                    };
-
-                    // Require both parts to be valid when PQC public key is present; otherwise fall back to classical-only
-                    if addr.contains(':') {
-                        if classical_ok && pqc_ok {
-                            return Ok(true);
-                        }
-                        return Ok(false);
-                    } else if classical_ok {
-                        return Ok(true);
-                    }
-                }
+            // Require combined signature: first two bytes = classical len
+            if signature.len() < 2 {
+                return Ok(false);
+            }
+            let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
+            if classical_len == 0 || classical_len > MAX_CLASSICAL_SIG_LEN {
+                return Ok(false);
+            }
+            if 2usize.saturating_add(classical_len) > signature.len() {
+                return Ok(false);
             }
 
-            // Fallback: legacy behavior - verify using classical public key only
-            match verify_signature_k256(classical, message, signature) {
-                Ok(b) => Ok(b),
-                Err(_) => Ok(false),
+            let classical_sig = &signature[2..2 + classical_len];
+            let pqc_sig = &signature[2 + classical_len..];
+
+            // Verify classical part (must succeed)
+            let classical_ok =
+                verify_signature_k256(classical, message, classical_sig).unwrap_or(false);
+
+            // Verify PQC part (must succeed)
+            let pqc_pub = addr.splitn(2, ':').nth(1).unwrap_or("");
+            if pqc_pub.is_empty() || pqc_sig.is_empty() {
+                return Ok(false);
             }
+            let pub_bytes = hex::decode(pqc_pub).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
+            })?;
+            let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
+            })?;
+            let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
+                SignatureError::InvalidFormat("Invalid signature bytes for Dilithium3".to_string())
+            })?;
+            let pqc_ok = dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok();
+
+            Ok(classical_ok && pqc_ok)
         }
         // For hybrid Ed25519+Dilithium3, verify using the classical Ed25519 public key part when provided
         CurveType::Ed25519Dilithium3 => {
+            // Hybrid must be provided as combined address
+            if !address_hex.contains(':') {
+                return Err(SignatureError::InvalidPublicKey(
+                    "Hybrid key requires combined address format: classical:pqc".to_string(),
+                ));
+            }
+
             let addr = address_hex;
-            let classical = if addr.contains(':') {
-                addr.split(':').next().unwrap_or(addr)
-            } else {
-                addr
-            };
-            // If combined signature format used, parse and verify both classical and PQC parts
-            // Validate minimum size before accessing indices
-            if signature.len() >= 2 {
-                let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
-                // Validate bounds to prevent integer overflow and out-of-bounds access
-                if classical_len > 0
-                    && classical_len < signature.len()
-                    && signature.len() >= 2usize.saturating_add(classical_len)
-                    && 2 + classical_len <= signature.len()
-                {
-                    let classical_sig = &signature[2..2 + classical_len];
-                    let pqc_sig = &signature[2 + classical_len..];
+            let classical = addr.split(':').next().unwrap_or("");
 
-                    let classical_ok = verify_signature_ed25519(classical, message, classical_sig)
-                        .unwrap_or(false);
-
-                    let pqc_ok = if addr.contains(':') {
-                        let pqc_pub = addr.splitn(2, ':').nth(1).unwrap_or("");
-                        if !pqc_pub.is_empty() && !pqc_sig.is_empty() {
-                            let pub_bytes = hex::decode(pqc_pub).map_err(|_| {
-                                SignatureError::InvalidPublicKey(
-                                    "Invalid public key hex".to_string(),
-                                )
-                            })?;
-                            let pk =
-                                dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-                                    SignatureError::InvalidPublicKey(
-                                        "Invalid Dilithium3 public key".to_string(),
-                                    )
-                                })?;
-                            let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig)
-                                .map_err(|_| {
-                                    SignatureError::InvalidFormat(
-                                        "Invalid signature bytes for Dilithium3".to_string(),
-                                    )
-                                })?;
-                            dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                    if addr.contains(':') {
-                        if classical_ok && pqc_ok {
-                            return Ok(true);
-                        }
-                        return Ok(false);
-                    } else if classical_ok {
-                        return Ok(true);
-                    }
-                }
+            if signature.len() < 2 {
+                return Ok(false);
+            }
+            let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
+            if classical_len == 0 || classical_len > MAX_CLASSICAL_SIG_LEN {
+                return Ok(false);
+            }
+            if 2usize.saturating_add(classical_len) > signature.len() {
+                return Ok(false);
             }
 
-            // Fallback: legacy behavior - verify using classical public key only
-            match verify_signature_ed25519(classical, message, signature) {
-                Ok(b) => Ok(b),
-                Err(_) => Ok(false),
+            let classical_sig = &signature[2..2 + classical_len];
+            let pqc_sig = &signature[2 + classical_len..];
+
+            let classical_ok =
+                verify_signature_ed25519(classical, message, classical_sig).unwrap_or(false);
+
+            let pqc_pub = addr.splitn(2, ':').nth(1).unwrap_or("");
+            if pqc_pub.is_empty() || pqc_sig.is_empty() {
+                return Ok(false);
             }
+            let pub_bytes = hex::decode(pqc_pub).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
+            })?;
+            let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
+                SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
+            })?;
+            let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
+                SignatureError::InvalidFormat("Invalid signature bytes for Dilithium3".to_string())
+            })?;
+            let pqc_ok = dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok();
+
+            Ok(classical_ok && pqc_ok)
         }
         // PQC verification using pqcrypto crates
         CurveType::Dilithium2 => {
@@ -675,59 +628,47 @@ pub fn verify_signature_with_curve(
     }
 }
 
-/// Helper function to verify hybrid signature (shared logic for K256+Dilithium3 and Ed25519+Dilithium3)
-fn verify_hybrid_signature(
+/// Detailed hybrid verifier that returns (classical_ok, pqc_ok).
+/// This avoids fallback behaviour and enables precise logging/errors.
+fn verify_hybrid_signature_detailed(
     signature: &[u8],
     classical_pub: &str,
-    pqc_pub_opt: Option<&str>,
+    pqc_pub: &str,
     message: &[u8],
     classical_verify_fn: impl Fn(&str, &[u8], &[u8]) -> Result<bool, SignatureError>,
-) -> Result<bool, SignatureError> {
-    if signature.len() >= 2 {
-        let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
-        if 2 + classical_len <= signature.len() {
-            let classical_sig = &signature[2..2 + classical_len];
-            let pqc_sig = &signature[2 + classical_len..];
-
-            let classical_ok =
-                classical_verify_fn(classical_pub, message, classical_sig).unwrap_or(false);
-
-            let pqc_ok = if let Some(pqc_pub) = pqc_pub_opt {
-                if !pqc_sig.is_empty() {
-                    let pub_bytes = hex::decode(pqc_pub).map_err(|_| {
-                        SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
-                    })?;
-                    let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-                        SignatureError::InvalidPublicKey(
-                            "Invalid Dilithium3 public key".to_string(),
-                        )
-                    })?;
-                    let sig_obj =
-                        dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
-                            SignatureError::InvalidFormat(
-                                "Invalid signature bytes for Dilithium3".to_string(),
-                            )
-                        })?;
-                    dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok()
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            if pqc_pub_opt.is_some() {
-                if classical_ok && pqc_ok {
-                    return Ok(true);
-                }
-                return Ok(false);
-            } else if classical_ok {
-                return Ok(true);
-            }
-        }
+) -> Result<(bool, bool), SignatureError> {
+    // Require 2-byte classical length prefix
+    if signature.len() < 2 {
+        return Ok((false, false));
+    }
+    let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
+    if classical_len == 0
+        || classical_len > MAX_CLASSICAL_SIG_LEN
+        || 2usize.saturating_add(classical_len) > signature.len()
+    {
+        return Ok((false, false));
     }
 
-    Ok(false)
+    let classical_sig = &signature[2..2 + classical_len];
+    let pqc_sig = &signature[2 + classical_len..];
+
+    let classical_ok = classical_verify_fn(classical_pub, message, classical_sig).unwrap_or(false);
+
+    if pqc_sig.is_empty() {
+        return Ok((classical_ok, false));
+    }
+
+    let pub_bytes = hex::decode(pqc_pub)
+        .map_err(|_| SignatureError::InvalidPublicKey("Invalid public key hex".to_string()))?;
+    let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
+        SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
+    })?;
+    let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
+        SignatureError::InvalidFormat("Invalid signature bytes for Dilithium3".to_string())
+    })?;
+    let pqc_ok = dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok();
+
+    Ok((classical_ok, pqc_ok))
 }
 
 /// Verify a signature using a `KeyPair` directly (avoids parsing combined public_key strings)
@@ -746,28 +687,58 @@ pub fn verify_signature_with_keypair(
     // Use the explicit `pqc_public_key` field when present.
     let pub_combined = keypair.public_key.as_str();
     let classical_pub = pub_combined.splitn(2, ':').next().unwrap_or(pub_combined);
-    let pqc_pub_opt = keypair.get_pqc_public_key_ref();
 
     match curve_type {
         CurveType::K256 => verify_signature_k256(classical_pub, message, signature),
         CurveType::P256 => verify_signature_p256(classical_pub, message, signature),
         CurveType::Ed25519 => verify_signature_ed25519(classical_pub, message, signature),
-        CurveType::K256Dilithium3 => verify_hybrid_signature(
-            signature,
-            classical_pub,
-            pqc_pub_opt,
-            message,
-            verify_signature_k256,
-        )
-        .or_else(|_| verify_signature_k256(classical_pub, message, signature)),
-        CurveType::Ed25519Dilithium3 => verify_hybrid_signature(
-            signature,
-            classical_pub,
-            pqc_pub_opt,
-            message,
-            verify_signature_ed25519,
-        )
-        .or_else(|_| verify_signature_ed25519(classical_pub, message, signature)),
+        CurveType::K256Dilithium3 => {
+            // Require explicit PQC public key on KeyPair for hybrid verification
+            let pqc_pub = keypair.get_pqc_public_key().ok_or_else(|| {
+                SignatureError::InvalidPublicKey(
+                    "Missing PQC public key for hybrid keypair".to_string(),
+                )
+            })?;
+            let (classical_ok, pqc_ok) = verify_hybrid_signature_detailed(
+                signature,
+                classical_pub,
+                &pqc_pub,
+                message,
+                verify_signature_k256,
+            )?;
+            if classical_ok && pqc_ok {
+                Ok(true)
+            } else {
+                debug!(
+                    "Hybrid verification failed: classical_ok={}, pqc_ok={}",
+                    classical_ok, pqc_ok
+                );
+                Ok(false)
+            }
+        }
+        CurveType::Ed25519Dilithium3 => {
+            let pqc_pub = keypair.get_pqc_public_key().ok_or_else(|| {
+                SignatureError::InvalidPublicKey(
+                    "Missing PQC public key for hybrid keypair".to_string(),
+                )
+            })?;
+            let (classical_ok, pqc_ok) = verify_hybrid_signature_detailed(
+                signature,
+                classical_pub,
+                &pqc_pub,
+                message,
+                verify_signature_ed25519,
+            )?;
+            if classical_ok && pqc_ok {
+                Ok(true)
+            } else {
+                debug!(
+                    "Hybrid verification failed: classical_ok={}, pqc_ok={}",
+                    classical_ok, pqc_ok
+                );
+                Ok(false)
+            }
+        }
         // Pure PQC curves: public_key on KeyPair is the PQC public hex
         CurveType::Dilithium2 => {
             let pqc_pub = keypair.get_pqc_public_key().ok_or_else(|| {
@@ -882,58 +853,45 @@ pub fn verify_signature_k256(
     let decoded_hex = hex::decode(address_hex)
         .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
-    // Handle both uncompressed (64 bytes) and compressed (32 bytes) public keys
+    // Handle both uncompressed (64 bytes) and compressed-derived (32 bytes) public keys
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
         return Err(SignatureError::InvalidPublicKey(
             "Invalid address format".to_string(),
         ));
     }
 
-    let mut had_valid_key = false;
-
-    // Try with uncompressed public key format
+    // Try uncompressed first (0x04 || X || Y)
     if decoded_hex.len() == 64 {
         let mut public_key_bytes = Vec::with_capacity(65);
         public_key_bytes.push(0x04);
         public_key_bytes.extend_from_slice(&decoded_hex);
 
         if let Ok(verifying_key) = K256VerifyingKey::from_sec1_bytes(&public_key_bytes) {
-            had_valid_key = true;
             if verifying_key.verify(&message_hash, &signature).is_ok() {
                 return Ok(true);
             }
         }
     }
 
-    // Try with compressed public key format (with 0x02 prefix)
-    let mut public_key_bytes = vec![0x02];
-    public_key_bytes.extend_from_slice(&decoded_hex[0..32]);
-
-    if let Ok(verifying_key) = K256VerifyingKey::from_sec1_bytes(&public_key_bytes) {
-        had_valid_key = true;
-        if verifying_key.verify(&message_hash, &signature).is_ok() {
-            return Ok(true);
+    // Try compressed-derived (address contains X only): try 0x02 and 0x03
+    if decoded_hex.len() == 32 {
+        let mut public_key_bytes = vec![0x02];
+        public_key_bytes.extend_from_slice(&decoded_hex[0..32]);
+        if let Ok(verifying_key) = K256VerifyingKey::from_sec1_bytes(&public_key_bytes) {
+            if verifying_key.verify(&message_hash, &signature).is_ok() {
+                return Ok(true);
+            }
+        }
+        public_key_bytes[0] = 0x03;
+        if let Ok(verifying_key) = K256VerifyingKey::from_sec1_bytes(&public_key_bytes) {
+            if verifying_key.verify(&message_hash, &signature).is_ok() {
+                return Ok(true);
+            }
         }
     }
 
-    // Try with compressed public key format (with 0x03 prefix)
-    public_key_bytes[0] = 0x03;
-    if let Ok(verifying_key) = K256VerifyingKey::from_sec1_bytes(&public_key_bytes) {
-        had_valid_key = true;
-        if verifying_key.verify(&message_hash, &signature).is_ok() {
-            return Ok(true);
-        }
-    }
-
-    // If we could construct at least one valid key but verification failed,
-    // then the signature is invalid
-    if had_valid_key {
-        return Ok(false);
-    }
-
-    Err(SignatureError::InvalidPublicKey(
-        "Invalid address format".to_string(),
-    ))
+    // None matched
+    Ok(false)
 }
 
 /// Verify a signature using P256 (secp256r1)
@@ -955,58 +913,44 @@ pub fn verify_signature_p256(
     let decoded_hex = hex::decode(address_hex)
         .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
-    // Handle both uncompressed (64 bytes) and compressed (32 bytes) public keys
+    // Handle both uncompressed (64 bytes) and compressed-derived (32 bytes) public keys
     if decoded_hex.len() != 64 && decoded_hex.len() != 32 {
         return Err(SignatureError::InvalidPublicKey(
             "Invalid address format".to_string(),
         ));
     }
 
-    let mut had_valid_key = false;
-
-    // Try with uncompressed public key format
+    // Try uncompressed first
     if decoded_hex.len() == 64 {
         let mut public_key_bytes = Vec::with_capacity(65);
         public_key_bytes.push(0x04);
         public_key_bytes.extend_from_slice(&decoded_hex);
 
         if let Ok(verifying_key) = VerifyingKey::from_sec1_bytes(&public_key_bytes) {
-            had_valid_key = true;
             if verifying_key.verify(&message_hash, &signature).is_ok() {
                 return Ok(true);
             }
         }
     }
 
-    // Try with compressed public key format (with 0x02 prefix)
-    let mut public_key_bytes = vec![0x02];
-    public_key_bytes.extend_from_slice(&decoded_hex[0..32]);
-
-    if let Ok(verifying_key) = VerifyingKey::from_sec1_bytes(&public_key_bytes) {
-        had_valid_key = true;
-        if verifying_key.verify(&message_hash, &signature).is_ok() {
-            return Ok(true);
+    // Try compressed-derived (address contains X only)
+    if decoded_hex.len() == 32 {
+        let mut public_key_bytes = vec![0x02];
+        public_key_bytes.extend_from_slice(&decoded_hex[0..32]);
+        if let Ok(verifying_key) = VerifyingKey::from_sec1_bytes(&public_key_bytes) {
+            if verifying_key.verify(&message_hash, &signature).is_ok() {
+                return Ok(true);
+            }
+        }
+        public_key_bytes[0] = 0x03;
+        if let Ok(verifying_key) = VerifyingKey::from_sec1_bytes(&public_key_bytes) {
+            if verifying_key.verify(&message_hash, &signature).is_ok() {
+                return Ok(true);
+            }
         }
     }
 
-    // Try with compressed public key format (with 0x03 prefix)
-    public_key_bytes[0] = 0x03;
-    if let Ok(verifying_key) = VerifyingKey::from_sec1_bytes(&public_key_bytes) {
-        had_valid_key = true;
-        if verifying_key.verify(&message_hash, &signature).is_ok() {
-            return Ok(true);
-        }
-    }
-
-    // If we could construct at least one valid key but verification failed,
-    // then the signature is invalid
-    if had_valid_key {
-        return Ok(false);
-    }
-
-    Err(SignatureError::InvalidPublicKey(
-        "Invalid address format".to_string(),
-    ))
+    Ok(false)
 }
 
 /// Verify a signature using Ed25519

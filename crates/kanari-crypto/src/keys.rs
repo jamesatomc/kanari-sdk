@@ -287,7 +287,7 @@ fn generate_k256_keypair() -> Result<KeyPair, KeyError> {
     let encoded_point = public_key.to_encoded_point(false);
     let slice = skip_uncompressed_point_prefix(encoded_point.as_bytes());
     let full_pub_hex = hex::encode(slice);
-    // Address uses first 64 hex chars (32 bytes) without modifying the full public key
+    // Keep legacy behavior: address is the (truncated) public key hex prefixed with 0x
     let address = format!(
         "0x{}",
         &full_pub_hex[..std::cmp::min(64, full_pub_hex.len())]
@@ -319,6 +319,7 @@ fn generate_p256_keypair() -> Result<KeyPair, KeyError> {
     // Format the public key, skipping the 0x04 prefix byte safely
     let slice = skip_uncompressed_point_prefix(public_key.as_bytes());
     let full_pub_hex = hex::encode(slice);
+    // Keep legacy behavior: address is the (truncated) public key hex prefixed with 0x
     let address = format!(
         "0x{}",
         &full_pub_hex[..std::cmp::min(64, full_pub_hex.len())]
@@ -365,6 +366,7 @@ fn generate_ed25519_keypair() -> Result<KeyPair, KeyError> {
 
     // Format the public key
     let hex_encoded = hex::encode(public_key_bytes);
+    // Keep legacy behavior: address is the public key hex prefixed with 0x
     let address = format!("0x{}", hex_encoded);
     let raw_private_key = hex::encode(private_key_bytes);
 
@@ -392,9 +394,12 @@ fn generate_dilithium2_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    // Use valid hex characters for address - take up to first 64 hex chars (32 bytes)
-    let addr_len = hex_encoded.len().min(64);
-    let address = format!("0x{}", &hex_encoded[..addr_len]);
+    // Derive address as SHA3-256(public_key) for better entropy and uniformity
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(public_key_bytes);
+    let hash_result = hasher.finalize();
+    let address = format!("0x{}", hex::encode(&hash_result[..]));
     let raw_private_key = hex::encode(secret_key_bytes);
     // Store public key alongside secret to avoid fragile recovery from secret bytes
     let private_key = format!("kanapqc{}:{}", raw_private_key, hex_encoded);
@@ -416,8 +421,11 @@ fn generate_dilithium3_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    let addr_len = hex_encoded.len().min(64);
-    let address = format!("0x{}", &hex_encoded[..addr_len]);
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(public_key_bytes);
+    let hash_result = hasher.finalize();
+    let address = format!("0x{}", hex::encode(&hash_result[..]));
     let raw_private_key = hex::encode(secret_key_bytes);
     // Store public key alongside secret to avoid fragile recovery from secret bytes
     let private_key = format!("kanapqc{}:{}", raw_private_key, hex_encoded);
@@ -439,8 +447,11 @@ fn generate_dilithium5_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    let addr_len = hex_encoded.len().min(64);
-    let address = format!("0x{}", &hex_encoded[..addr_len]);
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(public_key_bytes);
+    let hash_result = hasher.finalize();
+    let address = format!("0x{}", hex::encode(&hash_result[..]));
     let raw_private_key = hex::encode(secret_key_bytes);
     // Store public key alongside secret to avoid fragile recovery from secret bytes
     let private_key = format!("kanapqc{}:{}", raw_private_key, hex_encoded);
@@ -462,8 +473,11 @@ fn generate_sphincs_keypair() -> Result<KeyPair, KeyError> {
     let secret_key_bytes = secret_key.as_bytes();
 
     let hex_encoded = hex::encode(public_key_bytes);
-    let addr_len = hex_encoded.len().min(64);
-    let address = format!("0x{}", &hex_encoded[..addr_len]);
+    use sha3::{Digest, Sha3_256};
+    let mut hasher = Sha3_256::new();
+    hasher.update(public_key_bytes);
+    let hash_result = hasher.finalize();
+    let address = format!("0x{}", hex::encode(&hash_result[..]));
     let raw_private_key = hex::encode(secret_key_bytes);
     // Store public key alongside secret to avoid fragile recovery from secret bytes
     let private_key = format!("kanapqc{}:{}", raw_private_key, hex_encoded);
@@ -588,15 +602,10 @@ pub fn keypair_from_mnemonic(
             let public_key = K256PublicKey::from(verifying_key);
 
             let encoded_point = public_key.to_encoded_point(false);
-            let full_pub_hex = hex::encode(&encoded_point.as_bytes()[1..]);
-
-            // Validate hex length before creating address
-            if full_pub_hex.len() < 64 {
-                return Err(KeyError::GenerationFailed(
-                    "Invalid public key length".to_string(),
-                ));
-            }
-            let address = format!("0x{}", &full_pub_hex[..64]);
+            let pub_bytes = &encoded_point.as_bytes()[1..];
+            let full_pub_hex = hex::encode(pub_bytes);
+            // Keep legacy behavior: address is the (truncated) public key hex prefixed with 0x
+            let address = format!("0x{}", &full_pub_hex[..std::cmp::min(64, full_pub_hex.len())]);
             let raw_private_key = hex::encode(signing_key.to_bytes());
 
             // Format private key with kanari prefix
@@ -618,7 +627,9 @@ pub fn keypair_from_mnemonic(
             let verifying_key = VerifyingKey::from(&signing_key);
             let public_key = verifying_key.to_encoded_point(false);
 
-            let full_pub_hex = hex::encode(&public_key.as_bytes()[1..]);
+            let pub_bytes = &public_key.as_bytes()[1..];
+            let full_pub_hex = hex::encode(pub_bytes);
+            // Keep legacy behavior: address is the (truncated) public key hex prefixed with 0x
             let address = format!("0x{}", &full_pub_hex[..std::cmp::min(64, full_pub_hex.len())]);
             let raw_private_key = hex::encode(signing_key.to_bytes());
 
@@ -643,6 +654,7 @@ pub fn keypair_from_mnemonic(
             let private_key = hex::encode(signing_key.to_bytes());
             let public_key_bytes = verifying_key.to_bytes();
             let hex_encoded = hex::encode(public_key_bytes);
+            // Keep legacy behavior: address is the public key hex prefixed with 0x
             let address = format!("0x{}", hex_encoded);
 
             // Format private key with kanari prefix
@@ -692,6 +704,7 @@ pub fn keypair_from_private_key(
             let mut hex_encoded = hex::encode(&encoded_point.as_bytes()[1..]);
             hex_encoded.truncate(64);
 
+            // Keep legacy behavior: address is the (truncated) public key hex prefixed with 0x
             let address = format!("0x{}", hex_encoded);
 
             // Format with kanari prefix if not already formatted
@@ -725,6 +738,7 @@ pub fn keypair_from_private_key(
             let mut hex_encoded = hex::encode(&public_key.as_bytes()[1..]);
             hex_encoded.truncate(64);
 
+            // Keep legacy behavior: address is the (truncated) public key hex prefixed with 0x
             let address = format!("0x{}", hex_encoded);
 
             // Format with kanari prefix if not already formatted
@@ -764,6 +778,7 @@ pub fn keypair_from_private_key(
 
             let public_key_bytes = verifying_key.to_bytes();
             let hex_encoded = hex::encode(public_key_bytes);
+            // Keep legacy behavior: address is the public key hex prefixed with 0x
             let address = format!("0x{}", hex_encoded);
 
             // Format with kanari prefix if not already formatted
@@ -791,12 +806,19 @@ pub fn keypair_from_private_key(
                 .strip_prefix("kanapqc")
                 .unwrap_or(raw_private_key);
 
-            // If the stored value contains an explicit public key, use it (preferred)
+            // Require explicit public key stored alongside secret: prefer format
+            // "kanapqc<secret_hex>:<public_hex>" and reject secret-only inputs.
             if let Some((_secret_hex, pub_hex)) = raw_for_pqc.split_once(':') {
                 // validate pub_hex is hex
-                let _ = hex::decode(pub_hex).map_err(|_| KeyError::InvalidPrivateKey)?;
+                let pub_bytes = hex::decode(pub_hex).map_err(|_| KeyError::InvalidPrivateKey)?;
                 let pqc_hex = pub_hex.to_string();
-                let address = format!("0x{}", &pqc_hex[..64.min(pqc_hex.len())]);
+
+                // Derive address from hash of the PQC public key for uniformity
+                use sha3::{Digest, Sha3_256};
+                let mut hasher = Sha3_256::new();
+                hasher.update(&pub_bytes);
+                let hash_result = hasher.finalize();
+                let address = format!("0x{}", hex::encode(&hash_result[..]));
 
                 let formatted_private_key = if private_key.starts_with("kanapqc") {
                     private_key.to_string()
@@ -813,87 +835,30 @@ pub fn keypair_from_private_key(
                 });
             }
 
-            // Fallback: attempt to recover public key from secret bytes (backwards compatibility)
-            let pqc_bytes = hex::decode(raw_for_pqc).map_err(|_| KeyError::InvalidPrivateKey)?;
-
-            // Prevent DoS: limit max input size and iterations
-            const MAX_PQC_BYTES: usize = 10 * 1024; // 10KB max
-            const MAX_ITERATIONS: usize = 1000;
-
-            if pqc_bytes.len() > MAX_PQC_BYTES {
-                return Err(KeyError::InvalidPrivateKey);
-            }
-
-            let mut pqc_hex_opt: Option<String> = None;
-            let max_iters = pqc_bytes.len().min(MAX_ITERATIONS);
-
-            if curve_type == CurveType::Dilithium2 {
-                for suffix_len in (1usize..=max_iters).rev() {
-                    let start = pqc_bytes.len().saturating_sub(suffix_len);
-                    let slice = &pqc_bytes[start..];
-                    if let Ok(pk) = dilithium2::PublicKey::from_bytes(slice) {
-                        pqc_hex_opt = Some(hex::encode(pk.as_bytes()));
-                        break;
-                    }
-                }
-            } else if curve_type == CurveType::Dilithium3 {
-                for suffix_len in (1usize..=max_iters).rev() {
-                    let start = pqc_bytes.len().saturating_sub(suffix_len);
-                    let slice = &pqc_bytes[start..];
-                    if let Ok(pk) = dilithium3::PublicKey::from_bytes(slice) {
-                        pqc_hex_opt = Some(hex::encode(pk.as_bytes()));
-                        break;
-                    }
-                }
-            } else if curve_type == CurveType::Dilithium5 {
-                for suffix_len in (1usize..=max_iters).rev() {
-                    let start = pqc_bytes.len().saturating_sub(suffix_len);
-                    let slice = &pqc_bytes[start..];
-                    if let Ok(pk) = dilithium5::PublicKey::from_bytes(slice) {
-                        pqc_hex_opt = Some(hex::encode(pk.as_bytes()));
-                        break;
-                    }
-                }
-            } else if curve_type == CurveType::SphincsPlusSha256Robust {
-                for suffix_len in (1usize..=max_iters).rev() {
-                    let start = pqc_bytes.len().saturating_sub(suffix_len);
-                    let slice = &pqc_bytes[start..];
-                    if let Ok(pk) = sphincssha2256fsimple::PublicKey::from_bytes(slice) {
-                        pqc_hex_opt = Some(hex::encode(pk.as_bytes()));
-                        break;
-                    }
-                }
-            }
-
-            let pqc_hex = pqc_hex_opt.ok_or(KeyError::InvalidPrivateKey)?;
-
-            // Address derived from public key (use first 64 hex chars)
-            // Validate length to prevent invalid addresses
-            if pqc_hex.len() < 64 {
-                return Err(KeyError::InvalidPrivateKey);
-            }
-            let address = format!("0x{}", &pqc_hex[..64]);
-
-            // Preserve provided formatting (keep `kanapqc` prefix if user supplied it)
-            let formatted_private_key = if private_key.starts_with("kanapqc") {
-                private_key.to_string()
-            } else {
-                format!("kanapqc{}", raw_for_pqc)
-            };
-
-            Ok(KeyPair {
-                private_key: Zeroizing::new(formatted_private_key),
-                public_key: pqc_hex.clone(),
-                pqc_public_key: Some(pqc_hex),
-                address,
-                curve_type,
-            })
+            // No explicit public key supplied — reject to avoid fragile recovery
+            return Err(KeyError::InvalidPrivateKey);
         }
         // Hybrid imports: expect format "kanahybrid<classical_hex>:<pqc_hex>" (may be prefixed with `kanari`)
         CurveType::Ed25519Dilithium3 | CurveType::K256Dilithium3 => {
-            // raw_private_key currently has had the `kanari` prefix stripped by caller
+            // For hybrid imports we require the caller to provide a hybrid-formatted
+            // private key (must start with `kanahybrid`). This avoids ambiguous
+            // parsing when users accidentally pass other prefixed keys.
+            // Accept hybrid input where either the original `private_key` string
+            // began with `kanahybrid` or the stripped `raw_private_key` begins
+            // with it (this handles cases where multiple prefixes were present
+            // and one was stripped by `extract_raw_key`). Require the hybrid
+            // structure to avoid ambiguous parsing.
+            if !(private_key.starts_with(KANAHYBRID_PREFIX)
+                || raw_private_key.starts_with(KANAHYBRID_PREFIX))
+            {
+                return Err(KeyError::InvalidPrivateKey);
+            }
+
+            // raw_private_key currently has had one known prefix removed by
+            // `extract_raw_key`. Strip an internal `kanahybrid` if present to
+            // obtain the canonical hybrid payload (classical_hex:pqc_part).
             let hybrid = raw_private_key
-                .strip_prefix("kanahybrid")
+                .strip_prefix(KANAHYBRID_PREFIX)
                 .unwrap_or(raw_private_key);
             // split into two parts at the first ':' so pqc part may itself contain ':'
             let parts: Vec<&str> = hybrid.splitn(2, ':').collect();
@@ -970,11 +935,22 @@ pub fn keypair_from_private_key(
             let hash_result = hasher.finalize();
             let address = format!("0x{}", hex::encode(&hash_result[..]));
 
-            // Preserve provided formatting (keep `kanari` prefix if user supplied it)
-            let formatted_private_key = if private_key.starts_with(KANARI_KEY_PREFIX) {
-                private_key.to_string()
+            // Preserve provided formatting where possible. If the original
+            // `private_key` began with `kanahybrid` use it; otherwise return a
+            // canonical `kanahybrid`-prefixed payload reconstructed from the
+            // parsed hybrid payload.
+            let formatted_private_key = if private_key.starts_with(KANAHYBRID_PREFIX)
+                || raw_private_key.starts_with(KANAHYBRID_PREFIX)
+            {
+                if private_key.starts_with(KANAHYBRID_PREFIX) {
+                    private_key.to_string()
+                } else {
+                    // original had a different prefix but raw contains kanahybrid
+                    format!("{}{}", KANAHYBRID_PREFIX, hybrid)
+                }
             } else {
-                format_private_key(raw_private_key)
+                // Fallback: create canonical hybrid prefix
+                format!("{}{}", KANAHYBRID_PREFIX, hybrid)
             };
 
             Ok(KeyPair {
@@ -1010,27 +986,6 @@ pub fn generate_mnemonic(word_count: usize) -> Result<String, KeyError> {
     let mnemonic = mnemonic_result.map_err(|e| KeyError::GenerationFailed(e.to_string()))?;
 
     Ok(mnemonic.to_string())
-}
-
-/// Generate a new Kanari address with the specified mnemonic length and curve type
-pub fn generate_karix_address(
-    mnemonic_length: usize,
-    curve_type: CurveType,
-) -> Result<(String, String, String), KeyError> {
-    // Generate mnemonic phrase
-    let seed_phrase = generate_mnemonic(mnemonic_length)?;
-
-    // Generate keypair from mnemonic
-    let keypair = keypair_from_mnemonic(&seed_phrase, curve_type, "")?;
-
-    Ok((
-        {
-            let zk = keypair.export_private_key_secure();
-            zk.to_string()
-        },
-        keypair.get_address().to_string(),
-        seed_phrase,
-    ))
 }
 
 /// Import a wallet from a seed phrase
