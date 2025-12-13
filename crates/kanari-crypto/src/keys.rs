@@ -1046,22 +1046,33 @@ mod tests {
 
     #[test]
     fn test_hybrid_k256_dilithium3_address_generation() {
-        // Test that K256+Dilithium3 hybrid doesn't panic
+        // Test that K256+Dilithium3 hybrid generation always succeeds
+        // No panic or failure expected - all operations are safe
         let result = generate_hybrid_k256_dilithium3_keypair();
 
-        // May fail due to PQC prefix handling issue, but should not panic
-        if result.is_ok() {
-            let keypair = result.unwrap();
-            assert!(
-                keypair.address.starts_with("0x"),
-                "Hybrid address should have correct prefix"
-            );
-            assert_eq!(keypair.curve_type, CurveType::K256Dilithium3);
-        } else {
-            // Expected to fail due to PQC key format issue
-            // This is acceptable as hybrid crypto is still experimental
-            assert!(result.is_err());
-        }
+        assert!(
+            result.is_ok(),
+            "Hybrid K256+Dilithium3 keypair generation must always succeed"
+        );
+
+        let keypair = result.unwrap();
+        assert!(
+            keypair.address.starts_with("0x"),
+            "Hybrid address should have correct prefix"
+        );
+        assert_eq!(keypair.curve_type, CurveType::K256Dilithium3);
+
+        // Verify combined public key format
+        assert!(
+            keypair.public_key.contains(':'),
+            "Hybrid public key should be in format 'classical:pqc'"
+        );
+
+        // Verify PQC public key is present
+        assert!(
+            keypair.pqc_public_key.is_some(),
+            "Hybrid keypair must have PQC public key"
+        );
     }
 
     // Test that address generation handles short public keys without panic
@@ -1395,5 +1406,277 @@ mod tests {
         let result = verify_signature(&tagged, message, &signature).unwrap();
 
         assert!(result, "Signature should verify with tagged address");
+    }
+
+    // ============================================================================
+    // Ed25519Dilithium3 Specific Tests
+    // ============================================================================
+
+    #[test]
+    fn test_ed25519_dilithium3_keypair_structure() {
+        // Test Ed25519+Dilithium3 hybrid keypair structure
+        let keypair = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+
+        // Verify private key format
+        assert!(
+            keypair.private_key.starts_with("kanahybrid"),
+            "Ed25519Dilithium3 private key must start with 'kanahybrid'"
+        );
+        assert!(
+            keypair.private_key.contains(':'),
+            "Ed25519Dilithium3 private key must contain ':' separator"
+        );
+
+        // Verify public key format (classical:pqc)
+        assert!(
+            keypair.public_key.contains(':'),
+            "Ed25519Dilithium3 public key must be in format 'classical:pqc'"
+        );
+
+        let pub_parts: Vec<&str> = keypair.public_key.split(':').collect();
+        assert_eq!(pub_parts.len(), 2, "Public key must have exactly 2 parts");
+
+        // Ed25519 public key should be 32 bytes (64 hex chars)
+        assert_eq!(
+            pub_parts[0].len(),
+            64,
+            "Ed25519 public key must be 64 hex characters"
+        );
+
+        // Dilithium3 public key should be 1952 bytes (3904 hex chars)
+        assert_eq!(
+            pub_parts[1].len(),
+            3904,
+            "Dilithium3 public key must be 3904 hex characters"
+        );
+
+        // Verify PQC public key field
+        assert!(
+            keypair.pqc_public_key.is_some(),
+            "Ed25519Dilithium3 must have PQC public key"
+        );
+        assert_eq!(
+            keypair.pqc_public_key.unwrap(),
+            pub_parts[1],
+            "PQC public key must match Dilithium3 part"
+        );
+
+        // Verify address format
+        assert!(
+            keypair.address.starts_with("0x"),
+            "Address must start with '0x'"
+        );
+        assert_eq!(
+            keypair.address.len(),
+            66,
+            "Address must be 66 characters (0x + 64 hex)"
+        );
+
+        // Verify curve type
+        assert_eq!(keypair.curve_type, CurveType::Ed25519Dilithium3);
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_sign_and_verify() {
+        // Test signing and verification with Ed25519Dilithium3
+        let keypair = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+        let message = b"Test message for Ed25519+Dilithium3 hybrid signature";
+
+        use crate::signatures::{sign_message, verify_signature_with_curve};
+
+        // Sign the message
+        let signature =
+            sign_message(&keypair.private_key, message, CurveType::Ed25519Dilithium3).unwrap();
+
+        // Signature should not be empty
+        assert!(!signature.is_empty(), "Signature must not be empty");
+
+        // Signature should contain both classical and PQC parts
+        // Format: [2-byte length] || classical_sig || pqc_sig
+        assert!(
+            signature.len() > 2,
+            "Signature must be longer than length prefix"
+        );
+
+        let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
+        assert_eq!(classical_len, 64, "Ed25519 signature should be 64 bytes");
+
+        // Verify the signature using combined public key
+        let verified = verify_signature_with_curve(
+            &keypair.public_key,
+            message,
+            &signature,
+            CurveType::Ed25519Dilithium3,
+        )
+        .unwrap();
+
+        assert!(
+            verified,
+            "Ed25519Dilithium3 signature must verify successfully"
+        );
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_signature_fails_wrong_message() {
+        // Test that signature verification fails with wrong message
+        let keypair = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+        let message1 = b"Original message";
+        let message2 = b"Different message";
+
+        use crate::signatures::{sign_message, verify_signature_with_curve};
+
+        let signature =
+            sign_message(&keypair.private_key, message1, CurveType::Ed25519Dilithium3).unwrap();
+
+        let verified = verify_signature_with_curve(
+            &keypair.public_key,
+            message2,
+            &signature,
+            CurveType::Ed25519Dilithium3,
+        )
+        .unwrap();
+
+        assert!(!verified, "Signature must not verify with wrong message");
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_import_from_private_key() {
+        // Test importing Ed25519Dilithium3 keypair from private key
+        let original = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+
+        // Import from private key
+        let imported =
+            keypair_from_private_key(&original.private_key, CurveType::Ed25519Dilithium3).unwrap();
+
+        // Should produce identical keypair
+        assert_eq!(
+            original.public_key, imported.public_key,
+            "Public keys must match"
+        );
+        assert_eq!(original.address, imported.address, "Addresses must match");
+        assert_eq!(
+            original.pqc_public_key, imported.pqc_public_key,
+            "PQC public keys must match"
+        );
+        assert_eq!(
+            original.curve_type, imported.curve_type,
+            "Curve types must match"
+        );
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_deterministic_address() {
+        // Test that same combined public key always produces same address
+        let keypair1 = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+        let keypair2 = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+
+        // Different keypairs should have different addresses
+        assert_ne!(
+            keypair1.address, keypair2.address,
+            "Different keypairs must have different addresses"
+        );
+
+        // Same public key should always produce same address
+        let reimported =
+            keypair_from_private_key(&keypair1.private_key, CurveType::Ed25519Dilithium3).unwrap();
+
+        assert_eq!(
+            keypair1.address, reimported.address,
+            "Same keypair must produce same address"
+        );
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_address_is_sha3_hash() {
+        // Test that Ed25519Dilithium3 address is SHA3-256 of combined public key
+        let keypair = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+
+        use sha3::{Digest, Sha3_256};
+        let mut hasher = Sha3_256::new();
+        hasher.update(keypair.public_key.as_bytes());
+        let expected_hash = hasher.finalize();
+        let expected_address = format!("0x{}", hex::encode(&expected_hash[..]));
+
+        assert_eq!(
+            keypair.address, expected_address,
+            "Address must be SHA3-256 hash of combined public key"
+        );
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_security_properties() {
+        // Test security properties of Ed25519Dilithium3
+        let curve = CurveType::Ed25519Dilithium3;
+
+        // Must be post-quantum
+        assert!(
+            curve.is_post_quantum(),
+            "Ed25519Dilithium3 must be post-quantum"
+        );
+
+        // Must be hybrid
+        assert!(curve.is_hybrid(), "Ed25519Dilithium3 must be hybrid");
+
+        // Must have maximum security level
+        assert_eq!(
+            curve.security_level(),
+            5,
+            "Ed25519Dilithium3 must have security level 5"
+        );
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_tagged_address() {
+        // Test tagged address functionality for Ed25519Dilithium3
+        let keypair = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+        let tagged = keypair.tagged_address();
+
+        // Should have correct format
+        assert!(
+            tagged.starts_with("Ed25519Dilithium3:"),
+            "Tagged address must start with curve type"
+        );
+
+        // Parse it back
+        let (parsed_curve, parsed_address) =
+            KeyPair::parse_tagged_address(&tagged).expect("Failed to parse tagged address");
+
+        assert_eq!(
+            parsed_curve,
+            CurveType::Ed25519Dilithium3,
+            "Parsed curve type must match"
+        );
+        assert_eq!(parsed_address, keypair.address, "Parsed address must match");
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_invalid_private_key_import() {
+        // Test that invalid private key formats are rejected
+
+        // Test with non-hybrid prefix
+        let result =
+            keypair_from_private_key("kanari1234567890abcdef", CurveType::Ed25519Dilithium3);
+        assert!(result.is_err(), "Non-hybrid prefix must be rejected");
+
+        // Test with missing separator
+        let result =
+            keypair_from_private_key("kanahybrid1234567890abcdef", CurveType::Ed25519Dilithium3);
+        assert!(result.is_err(), "Missing separator must be rejected");
+
+        // Test with invalid hex
+        let result = keypair_from_private_key("kanahybridzzzz:yyyy", CurveType::Ed25519Dilithium3);
+        assert!(result.is_err(), "Invalid hex must be rejected");
+    }
+
+    #[test]
+    fn test_ed25519_dilithium3_display_format() {
+        // Test display format for Ed25519Dilithium3
+        let curve = CurveType::Ed25519Dilithium3;
+        let display = format!("{}", curve);
+
+        assert_eq!(
+            display, "Ed25519+Dilithium3 (Hybrid)",
+            "Display format must be correct"
+        );
     }
 }
