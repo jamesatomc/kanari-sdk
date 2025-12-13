@@ -148,18 +148,13 @@ pub struct KeyPair {
     #[serde(skip)]
     pub private_key: Zeroizing<String>,
     pub public_key: String,
+    /// Optional post-quantum public key (hex) when applicable
+    pub pqc_public_key: Option<String>,
     pub address: String,
     pub curve_type: CurveType,
 }
 
 impl KeyPair {
-    #[deprecated(
-        note = "Use export_private_key_secure() which returns a zeroized wrapper to avoid accidental long-lived clones"
-    )]
-    pub fn get_private_key(&self) -> String {
-        self.private_key.to_string()
-    }
-
     /// Export private key in a wrapper that zeroizes on drop
     /// Prefer this API to avoid accidental long-lived clones of secret material.
     pub fn export_private_key_secure(&self) -> zeroize::Zeroizing<String> {
@@ -169,6 +164,16 @@ impl KeyPair {
     /// Get public key
     pub fn get_public_key(&self) -> String {
         self.public_key.clone()
+    }
+
+    /// Get PQC public key if present
+    pub fn get_pqc_public_key(&self) -> Option<String> {
+        self.pqc_public_key.clone()
+    }
+
+    /// Get a reference to the PQC public key if present (avoids cloning)
+    pub fn get_pqc_public_key_ref(&self) -> Option<&str> {
+        self.pqc_public_key.as_deref()
     }
 
     /// Get address
@@ -296,6 +301,7 @@ fn generate_k256_keypair() -> Result<KeyPair, KeyError> {
     Ok(KeyPair {
         private_key: Zeroizing::new(private_key),
         public_key: full_pub_hex,
+        pqc_public_key: None,
         address,
         curve_type: CurveType::K256,
     })
@@ -326,6 +332,7 @@ fn generate_p256_keypair() -> Result<KeyPair, KeyError> {
     Ok(KeyPair {
         private_key: Zeroizing::new(private_key),
         public_key: full_pub_hex,
+        pqc_public_key: None,
         address,
         curve_type: CurveType::P256,
     })
@@ -357,6 +364,7 @@ fn generate_ed25519_keypair() -> Result<KeyPair, KeyError> {
     Ok(KeyPair {
         private_key: Zeroizing::new(private_key),
         public_key: hex_encoded,
+        pqc_public_key: None,
         address,
         curve_type: CurveType::Ed25519,
     })
@@ -383,7 +391,8 @@ fn generate_dilithium2_keypair() -> Result<KeyPair, KeyError> {
 
     Ok(KeyPair {
         private_key: Zeroizing::new(private_key),
-        public_key: hex_encoded,
+        public_key: hex_encoded.clone(),
+        pqc_public_key: Some(hex_encoded),
         address,
         curve_type: CurveType::Dilithium2,
     })
@@ -405,7 +414,8 @@ fn generate_dilithium3_keypair() -> Result<KeyPair, KeyError> {
 
     Ok(KeyPair {
         private_key: Zeroizing::new(private_key),
-        public_key: hex_encoded,
+        public_key: hex_encoded.clone(),
+        pqc_public_key: Some(hex_encoded),
         address,
         curve_type: CurveType::Dilithium3,
     })
@@ -427,7 +437,8 @@ fn generate_dilithium5_keypair() -> Result<KeyPair, KeyError> {
 
     Ok(KeyPair {
         private_key: Zeroizing::new(private_key),
-        public_key: hex_encoded,
+        public_key: hex_encoded.clone(),
+        pqc_public_key: Some(hex_encoded),
         address,
         curve_type: CurveType::Dilithium5,
     })
@@ -449,7 +460,8 @@ fn generate_sphincs_keypair() -> Result<KeyPair, KeyError> {
 
     Ok(KeyPair {
         private_key: Zeroizing::new(private_key),
-        public_key: hex_encoded,
+        public_key: hex_encoded.clone(),
+        pqc_public_key: Some(hex_encoded),
         address,
         curve_type: CurveType::SphincsPlusSha256Robust,
     })
@@ -488,6 +500,7 @@ fn generate_hybrid_ed25519_dilithium3_keypair() -> Result<KeyPair, KeyError> {
     Ok(KeyPair {
         private_key: Zeroizing::new(combined_private),
         public_key: combined_public,
+        pqc_public_key: Some(dilithium3_pair.public_key.clone()),
         address,
         curve_type: CurveType::Ed25519Dilithium3,
     })
@@ -522,6 +535,7 @@ fn generate_hybrid_k256_dilithium3_keypair() -> Result<KeyPair, KeyError> {
     Ok(KeyPair {
         private_key: Zeroizing::new(combined_private),
         public_key: combined_public,
+        pqc_public_key: Some(dilithium3_pair.public_key.clone()),
         address,
         curve_type: CurveType::K256Dilithium3,
     })
@@ -561,6 +575,7 @@ pub fn keypair_from_mnemonic(
             Ok(KeyPair {
                 private_key: Zeroizing::new(private_key),
                 public_key: full_pub_hex,
+                pqc_public_key: None,
                 address,
                 curve_type: CurveType::K256,
             })
@@ -583,6 +598,7 @@ pub fn keypair_from_mnemonic(
             Ok(KeyPair {
                 private_key: Zeroizing::new(private_key),
                 public_key: full_pub_hex,
+                pqc_public_key: None,
                 address,
                 curve_type: CurveType::P256,
             })
@@ -605,6 +621,7 @@ pub fn keypair_from_mnemonic(
             Ok(KeyPair {
                 private_key: Zeroizing::new(private_key),
                 public_key: hex_encoded,
+                pqc_public_key: None,
                 address,
                 curve_type: CurveType::Ed25519,
             })
@@ -652,6 +669,7 @@ pub fn keypair_from_private_key(
             Ok(KeyPair {
                 private_key: Zeroizing::new(formatted_private_key),
                 public_key: hex_encoded,
+                pqc_public_key: None,
                 address,
                 curve_type: CurveType::K256,
             })
@@ -681,6 +699,7 @@ pub fn keypair_from_private_key(
             Ok(KeyPair {
                 private_key: Zeroizing::new(formatted_private_key),
                 public_key: hex_encoded,
+                pqc_public_key: None,
                 address,
                 curve_type: CurveType::P256,
             })
@@ -712,6 +731,7 @@ pub fn keypair_from_private_key(
             Ok(KeyPair {
                 private_key: Zeroizing::new(formatted_private_key),
                 public_key: hex_encoded,
+                pqc_public_key: None,
                 address,
                 curve_type: CurveType::Ed25519,
             })
@@ -741,7 +761,8 @@ pub fn keypair_from_private_key(
 
                 return Ok(KeyPair {
                     private_key: Zeroizing::new(formatted_private_key),
-                    public_key: pqc_hex,
+                    public_key: pqc_hex.clone(),
+                    pqc_public_key: Some(pqc_hex),
                     address,
                     curve_type,
                 });
@@ -803,7 +824,8 @@ pub fn keypair_from_private_key(
 
             Ok(KeyPair {
                 private_key: Zeroizing::new(formatted_private_key),
-                public_key: pqc_hex,
+                public_key: pqc_hex.clone(),
+                pqc_public_key: Some(pqc_hex),
                 address,
                 curve_type,
             })
@@ -894,6 +916,7 @@ pub fn keypair_from_private_key(
             Ok(KeyPair {
                 private_key: Zeroizing::new(formatted_private_key),
                 public_key: combined_public,
+                pqc_public_key: Some(pqc_hex.clone()),
                 address,
                 curve_type,
             })
@@ -1166,6 +1189,10 @@ mod tests {
             "PQC addresses should have pqc prefix"
         );
 
+        // pqc_public_key should be set for PQC keypairs
+        assert!(dil3.pqc_public_key.is_some());
+        assert_eq!(dil3.pqc_public_key.unwrap(), dil3.public_key);
+
         // Test that PQC is detected
         assert!(CurveType::Dilithium3.is_post_quantum());
         assert!(!CurveType::K256.is_post_quantum());
@@ -1197,6 +1224,15 @@ mod tests {
         // Test that hybrid is detected as post-quantum
         assert!(CurveType::Ed25519Dilithium3.is_post_quantum());
         assert!(CurveType::Ed25519Dilithium3.is_hybrid());
+
+        // pqc_public_key should be present and equal to the PQC part
+        let hybrid_pqc = hybrid
+            .pqc_public_key
+            .as_ref()
+            .expect("PQC public key missing");
+        assert!(hybrid.public_key.contains(':'));
+        let parts: Vec<&str> = hybrid.public_key.splitn(2, ':').collect();
+        assert_eq!(parts[1], hybrid_pqc);
     }
 
     #[test]

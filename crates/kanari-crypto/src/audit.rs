@@ -186,7 +186,9 @@ impl AuditEntry {
 
     /// Format as JSON line
     pub fn to_json_line(&self) -> Result<String, AuditError> {
-        serde_json::to_string(self).map_err(|e| AuditError::SerializationError(e.to_string()))
+        // Serialize a redacted copy to avoid accidental logging of secrets
+        let redacted = self.redacted();
+        serde_json::to_string(&redacted).map_err(|e| AuditError::SerializationError(e.to_string()))
     }
 
     /// Format as human-readable string
@@ -221,6 +223,43 @@ impl AuditEntry {
             "[{}] {:?} severity={:?} status={}{}{}{}",
             timestamp, self.event, self.severity, status, resource, actor, details
         )
+    }
+
+    /// Return a redacted copy of this entry where likely-sensitive fields are masked
+    pub fn redacted(&self) -> Self {
+        fn redact_field(s: &Option<String>) -> Option<String> {
+            match s {
+                None => None,
+                Some(v) => {
+                    // Simple heuristics: long hex strings, mnemonic-like (many words), or known prefixes
+                    let lower = v.to_lowercase();
+
+                    // If contains known private prefixes or very long hex, redact
+                    if lower.contains("kanari")
+                        || lower.contains("kanapqc")
+                        || lower.contains("kanahybrid")
+                        || (v.len() >= 40 && v.chars().all(|c| c.is_ascii_hexdigit()))
+                        || v.split_whitespace().count() >= 6
+                    {
+                        return Some("[REDACTED]".to_string());
+                    }
+
+                    // Otherwise leave as-is
+                    Some(v.clone())
+                }
+            }
+        }
+
+        Self {
+            timestamp: self.timestamp,
+            event: self.event,
+            severity: self.severity,
+            resource_id: redact_field(&self.resource_id),
+            actor: redact_field(&self.actor),
+            details: redact_field(&self.details),
+            success: self.success,
+            source: redact_field(&self.source),
+        }
     }
 }
 
