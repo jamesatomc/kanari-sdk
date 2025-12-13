@@ -295,9 +295,21 @@ impl Keystore {
 
     /// Validate keystore integrity
     pub fn validate(&self) -> Result<(), KeystoreError> {
+        // Prevent DoS: limit maximum keys to validate
+        const MAX_KEYS_TO_VALIDATE: usize = 10_000;
+        
         // Check version compatibility
         if self.version.is_empty() {
             return Err(KeystoreError::InvalidFormat);
+        }
+        
+        // Check key count limit
+        if self.keys.len() > MAX_KEYS_TO_VALIDATE {
+            return Err(KeystoreError::Corrupted(format!(
+                "Keystore contains too many keys: {} (max: {})",
+                self.keys.len(),
+                MAX_KEYS_TO_VALIDATE
+            )));
         }
 
         // Validate all encrypted data entries

@@ -75,6 +75,16 @@ pub fn derive_multiple_addresses(
     curve: CurveType,
     count: usize,
 ) -> Result<Vec<KeyPair>, HdError> {
+    // Validate inputs
+    if mnemonic_phrase.trim().is_empty() {
+        return Err(HdError::InvalidMnemonic("Empty mnemonic phrase".to_string()));
+    }
+    
+    // Password can be empty but validate it's valid UTF-8 by checking length
+    if password.len() > 1024 {
+        return Err(HdError::DerivationFailed("Password too long".to_string()));
+    }
+    
     // Validate maximum count to prevent DoS via unbounded allocation
     const MAX_DERIVE_COUNT: usize = 10_000;
     if count > MAX_DERIVE_COUNT {

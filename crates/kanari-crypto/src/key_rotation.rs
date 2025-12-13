@@ -82,12 +82,19 @@ impl KeyMetadata {
     }
 
     /// Get age of key in days
+    /// Returns 0 if timestamp is invalid (for backward compatibility)
+    /// Callers should check for 0 and handle appropriately
     pub fn age_days(&self) -> u64 {
         let now = crate::get_current_timestamp();
         
         // Validate timestamps to prevent overflow
-        if self.created_at == 0 || now == 0 || now < self.created_at {
-            return 0; // Invalid or future timestamp
+        // Return u64::MAX to signal error (distinguishable from valid 0)
+        if self.created_at == 0 || now == 0 {
+            return u64::MAX; // Signal invalid timestamp
+        }
+        
+        if now < self.created_at {
+            return u64::MAX; // Signal future timestamp (invalid)
         }
 
         let age_seconds = now.saturating_sub(self.created_at);
@@ -222,9 +229,18 @@ impl KeyRotationManager {
             let sum: u64 = self.key_metadata
                 .values()
                 .map(|m| m.age_days())
+                .filter(|&age| age != u64::MAX) // Filter out invalid timestamps
                 .sum();
-            // Safe conversion: use checked division
-            sum.checked_div(total_keys as u64).unwrap_or(0)
+            let valid_count = self.key_metadata
+                .values()
+                .filter(|m| m.age_days() != u64::MAX)
+                .count();
+            
+            if valid_count > 0 {
+                sum / (valid_count as u64)
+            } else {
+                0 // No valid timestamps
+            }
         } else {
             0
         };

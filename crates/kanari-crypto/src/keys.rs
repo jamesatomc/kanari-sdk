@@ -201,12 +201,10 @@ impl KeyPair {
     /// Parse a tagged address back into curve type and address
     /// Returns None if the address is not in tagged format
     pub fn parse_tagged_address(tagged: &str) -> Option<(CurveType, String)> {
-        let parts: Vec<&str> = tagged.split(':').collect();
-        if parts.len() != 2 {
-            return None;
-        }
+        // Use split_once to avoid indexing
+        let (curve_str, address_str) = tagged.split_once(':')?;
 
-        let curve_type = match parts[0] {
+        let curve_type = match curve_str {
             "K256" => CurveType::K256,
             "P256" => CurveType::P256,
             "Ed25519" => CurveType::Ed25519,
@@ -219,7 +217,7 @@ impl KeyPair {
             _ => return None,
         };
 
-        Some((curve_type, parts[1].to_string()))
+        Some((curve_type, address_str.to_string()))
     }
 }
 
@@ -247,10 +245,12 @@ pub fn extract_raw_key(formatted_key: &str) -> &str {
 
 /// Skip the uncompressed EC point prefix (0x04) safely.
 fn skip_uncompressed_point_prefix(bytes: &[u8]) -> &[u8] {
-    if bytes.len() > 1 && bytes[0] == 0x04 {
-        &bytes[1..]
-    } else if bytes.len() >= 1 && bytes[0] == 0x04 {
-        // Only prefix present, return empty slice rather than panic
+    // Check length before accessing to prevent buffer overread
+    if bytes.is_empty() {
+        return bytes;
+    }
+    
+    if bytes[0] == 0x04 && bytes.len() > 1 {
         &bytes[1..]
     } else {
         bytes
@@ -557,6 +557,17 @@ pub fn keypair_from_mnemonic(
     curve_type: CurveType,
     password: &str, // Add optional password parameter
 ) -> Result<KeyPair, KeyError> {
+    // Validate inputs
+    if phrase.trim().is_empty() {
+        return Err(KeyError::InvalidMnemonic("Empty mnemonic phrase".to_string()));
+    }
+    
+    // Password can be empty, but validate reasonable length
+    const MAX_PASSWORD_LEN: usize = 1024;
+    if password.len() > MAX_PASSWORD_LEN {
+        return Err(KeyError::InvalidMnemonic("Password too long".to_string()));
+    }
+    
     // Validate and create mnemonic
     let mnemonic = Mnemonic::parse_in(Language::English, phrase)
         .map_err(|e| KeyError::InvalidMnemonic(e.to_string()))?;
@@ -576,7 +587,14 @@ pub fn keypair_from_mnemonic(
 
             let encoded_point = public_key.to_encoded_point(false);
             let full_pub_hex = hex::encode(&encoded_point.as_bytes()[1..]);
-            let address = format!("0x{}", &full_pub_hex[..std::cmp::min(64, full_pub_hex.len())]);
+            
+            // Validate hex length before creating address
+            if full_pub_hex.len() < 64 {
+                return Err(KeyError::GenerationFailed(
+                    "Invalid public key length".to_string(),
+                ));
+            }
+            let address = format!("0x{}", &full_pub_hex[..64]);
             let raw_private_key = hex::encode(signing_key.to_bytes());
 
             // Format private key with kanari prefix
@@ -795,10 +813,20 @@ pub fn keypair_from_private_key(
 
             // Fallback: attempt to recover public key from secret bytes (backwards compatibility)
             let pqc_bytes = hex::decode(raw_for_pqc).map_err(|_| KeyError::InvalidPrivateKey)?;
+            
+            // Prevent DoS: limit max input size and iterations
+            const MAX_PQC_BYTES: usize = 10 * 1024; // 10KB max
+            const MAX_ITERATIONS: usize = 1000;
+            
+            if pqc_bytes.len() > MAX_PQC_BYTES {
+                return Err(KeyError::InvalidPrivateKey);
+            }
+            
             let mut pqc_hex_opt: Option<String> = None;
+            let max_iters = pqc_bytes.len().min(MAX_ITERATIONS);
 
             if curve_type == CurveType::Dilithium2 {
-                for suffix_len in (1usize..=pqc_bytes.len()).rev() {
+                for suffix_len in (1usize..=max_iters).rev() {
                     let start = pqc_bytes.len().saturating_sub(suffix_len);
                     let slice = &pqc_bytes[start..];
                     if let Ok(pk) = dilithium2::PublicKey::from_bytes(slice) {
@@ -807,7 +835,7 @@ pub fn keypair_from_private_key(
                     }
                 }
             } else if curve_type == CurveType::Dilithium3 {
-                for suffix_len in (1usize..=pqc_bytes.len()).rev() {
+                for suffix_len in (1usize..=max_iters).rev() {
                     let start = pqc_bytes.len().saturating_sub(suffix_len);
                     let slice = &pqc_bytes[start..];
                     if let Ok(pk) = dilithium3::PublicKey::from_bytes(slice) {
@@ -816,7 +844,7 @@ pub fn keypair_from_private_key(
                     }
                 }
             } else if curve_type == CurveType::Dilithium5 {
-                for suffix_len in (1usize..=pqc_bytes.len()).rev() {
+                for suffix_len in (1usize..=max_iters).rev() {
                     let start = pqc_bytes.len().saturating_sub(suffix_len);
                     let slice = &pqc_bytes[start..];
                     if let Ok(pk) = dilithium5::PublicKey::from_bytes(slice) {
@@ -825,7 +853,7 @@ pub fn keypair_from_private_key(
                     }
                 }
             } else if curve_type == CurveType::SphincsPlusSha256Robust {
-                for suffix_len in (1usize..=pqc_bytes.len()).rev() {
+                for suffix_len in (1usize..=max_iters).rev() {
                     let start = pqc_bytes.len().saturating_sub(suffix_len);
                     let slice = &pqc_bytes[start..];
                     if let Ok(pk) = sphincssha2256fsimple::PublicKey::from_bytes(slice) {
@@ -838,7 +866,11 @@ pub fn keypair_from_private_key(
             let pqc_hex = pqc_hex_opt.ok_or(KeyError::InvalidPrivateKey)?;
 
             // Address derived from public key (use first 64 hex chars)
-            let address = format!("0x{}", &pqc_hex[..64.min(pqc_hex.len())]);
+            // Validate length to prevent invalid addresses
+            if pqc_hex.len() < 64 {
+                return Err(KeyError::InvalidPrivateKey);
+            }
+            let address = format!("0x{}", &pqc_hex[..64]);
 
             // Preserve provided formatting (keep `kanapqc` prefix if user supplied it)
             let formatted_private_key = if private_key.starts_with("kanapqc") {
@@ -896,7 +928,7 @@ pub fn keypair_from_private_key(
                     // Keep full public key for storage, use truncated prefix for address elsewhere
                     full_pub_hex
                 }
-                _ => unreachable!(),
+                _ => return Err(KeyError::InvalidPrivateKey),
             };
 
             // PQC raw part may be one of:
@@ -912,8 +944,13 @@ pub fn keypair_from_private_key(
             } else {
                 // Fallback: try to recover public key from secret bytes (backwards compatibility)
                 let pqc_bytes = hex::decode(pqc_raw).map_err(|_| KeyError::InvalidPrivateKey)?;
+                
+                // Prevent DoS: limit max iterations
+                const MAX_HYBRID_ITERATIONS: usize = 500;
+                let start_len = 32usize.max(pqc_bytes.len().saturating_sub(MAX_HYBRID_ITERATIONS));
+                
                 let mut pqc_hex_opt: Option<String> = None;
-                for suffix_len in (32usize..=pqc_bytes.len()).rev() {
+                for suffix_len in (start_len..=pqc_bytes.len()).rev() {
                     let start = pqc_bytes.len().saturating_sub(suffix_len);
                     if let Ok(pk) = dilithium3::PublicKey::from_bytes(&pqc_bytes[start..]) {
                         pqc_hex_opt = Some(hex::encode(pk.as_bytes()));

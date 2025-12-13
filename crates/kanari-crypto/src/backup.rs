@@ -284,30 +284,63 @@ impl BackupManager {
     }
 
     /// List all available backups
+    /// 
+    /// Note: This function reads backup metadata from disk. Large backup directories
+    /// may consume significant memory. Files are processed sequentially to limit
+    /// memory usage, and oversized files (>50MB) are automatically skipped.
     pub fn list_backups(&self) -> Result<Vec<BackupInfo>, BackupError> {
         self.ensure_backup_dir()?;
 
         let mut backups = Vec::new();
         const MAX_BACKUP_READ_SIZE: u64 = 50 * 1024 * 1024; // 50MB
+        
+        // Get canonical backup directory path for security validation
+        let canonical_backup_dir = self.backup_dir.canonicalize()
+            .map_err(|e| BackupError::IoError(e))?;
 
         for entry in fs::read_dir(&self.backup_dir)? {
             let entry = entry?;
             let path = entry.path();
+            
+            // Security: Block symlinks to prevent directory traversal
+            let metadata = entry.metadata()?;
+            if metadata.is_symlink() {
+                continue; // Skip symlinks
+            }
+            
+            // Security: Validate path is within backup directory
+            if let Ok(canonical_path) = path.canonicalize() {
+                if !canonical_path.starts_with(&canonical_backup_dir) {
+                    continue; // Skip files outside backup directory
+                }
+            } else {
+                continue; // Skip if can't canonicalize
+            }
 
             if path.extension().and_then(|s| s.to_str()) == Some("kbak") {
                 // Check file size before reading
-                let metadata = entry.metadata()?;
                 if metadata.len() > MAX_BACKUP_READ_SIZE {
+                    eprintln!("Warning: Skipping oversized backup file: {}", path.display());
                     continue; // Skip oversized files
                 }
 
-                if let Ok(data) = fs::read_to_string(&path) {
-                    if let Ok(backup) = serde_json::from_str::<EncryptedBackup>(&data) {
-                        backups.push(BackupInfo {
-                            path: path.clone(),
-                            metadata: backup.metadata,
-                            file_size: metadata.len(),
-                        });
+                match fs::read_to_string(&path) {
+                    Ok(data) => {
+                        match serde_json::from_str::<EncryptedBackup>(&data) {
+                            Ok(backup) => {
+                                backups.push(BackupInfo {
+                                    path: path.clone(),
+                                    metadata: backup.metadata,
+                                    file_size: metadata.len(),
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to parse backup file {}: {}", path.display(), e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to read backup file {}: {}", path.display(), e);
                     }
                 }
             }

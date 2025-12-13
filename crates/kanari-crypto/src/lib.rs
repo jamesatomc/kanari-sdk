@@ -49,13 +49,20 @@ pub use compression::{compress_data, decompress_data};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Get current Unix timestamp in seconds
-/// Returns current timestamp or 1 (minimal valid timestamp) if system time error
+/// 
+/// Returns current timestamp or 1 on system time error.
+/// Note: Return value of 1 indicates an error condition (system clock before epoch).
+/// Callers should treat timestamps near epoch (< 1000000000 = year 2001) as suspicious.
 #[must_use]
 pub fn get_current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(1) // Return 1 instead of 0 to avoid timestamp == 0 edge cases
+        .unwrap_or_else(|_| {
+            // System time is before UNIX epoch - this should never happen in practice
+            // Return 1 to avoid 0 edge cases while signaling error
+            1
+        })
 }
 
 // Re-export key rotation functionality
@@ -204,6 +211,14 @@ pub fn is_password_strong(password: &str) -> bool {
 
 /// Check for repetitive patterns in password (e.g., "aaa", "111", "abcabc")
 fn has_repetitive_pattern(password: &str) -> bool {
+    // Prevent DoS: limit password length for pattern checking
+    const MAX_PATTERN_CHECK_LEN: usize = 128;
+    
+    if password.len() > MAX_PATTERN_CHECK_LEN {
+        // For very long passwords, just check the first part
+        return has_repetitive_pattern(&password[..MAX_PATTERN_CHECK_LEN]);
+    }
+    
     let chars: Vec<char> = password.chars().collect();
     
     // Check for 3+ consecutive identical characters
@@ -213,8 +228,9 @@ fn has_repetitive_pattern(password: &str) -> bool {
         }
     }
     
-    // Check for repeating sequences (e.g., "abcabc")
-    for seq_len in 2..=password.len() / 2 {
+    // Check for repeating sequences (e.g., "abcabc") - limit check to reasonable size
+    let max_seq_len = (password.len() / 2).min(32); // Cap at 32 chars
+    for seq_len in 2..=max_seq_len {
         if password.len() >= seq_len * 2 {
             let first_half = &password[..seq_len];
             let second_half = &password[seq_len..seq_len * 2];

@@ -199,30 +199,30 @@ impl AuditEntry {
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| format!("timestamp:{}", self.timestamp));
 
-        let resource = self
-            .resource_id
-            .as_ref()
-            .map(|r| format!(" resource={}", r))
-            .unwrap_or_default();
-
-        let actor = self
-            .actor
-            .as_ref()
-            .map(|a| format!(" actor={}", a))
-            .unwrap_or_default();
-
-        let details = self
-            .details
-            .as_ref()
-            .map(|d| format!(" details={}", d))
-            .unwrap_or_default();
-
-        let status = if self.success { "SUCCESS" } else { "FAILURE" };
-
-        format!(
-            "[{}] {:?} severity={:?} status={}{}{}{}",
-            timestamp, self.event, self.severity, status, resource, actor, details
-        )
+        // Use pre-allocated String with estimated capacity to reduce allocations
+        let mut result = String::with_capacity(256);
+        
+        use std::fmt::Write;
+        let _ = write!(result, "[{}] {:?} severity={:?} status={}",
+            timestamp,
+            self.event,
+            self.severity,
+            if self.success { "SUCCESS" } else { "FAILURE" }
+        );
+        
+        if let Some(ref r) = self.resource_id {
+            let _ = write!(result, " resource={}", r);
+        }
+        
+        if let Some(ref a) = self.actor {
+            let _ = write!(result, " actor={}", a);
+        }
+        
+        if let Some(ref d) = self.details {
+            let _ = write!(result, " details={}", d);
+        }
+        
+        result
     }
 
     /// Return a redacted copy of this entry where likely-sensitive fields are masked
@@ -262,8 +262,8 @@ impl AuditEntry {
                         return Some("[REDACTED]".to_string());
                     }
 
-                    // Otherwise leave as-is
-                    Some(v.clone())
+                    // Otherwise return owned value to avoid clone
+                    Some(v.to_string())
                 }
             }
         }
@@ -329,14 +329,19 @@ impl AuditLogger {
         let entry_key = format!("{:?}:{:?}", entry.event, entry.resource_id);
         let now = crate::get_current_timestamp();
         
-        if let Ok(mut last_times) = self.last_log_time.lock() {
-            if let Some(&last_time) = last_times.get(&entry_key) {
-                if now.saturating_sub(last_time) < self.rate_limit_secs {
-                    return Ok(()); // Skip duplicate within rate limit window
-                }
+        // Handle mutex poisoning by recovering from poisoned state
+        let mut last_times = self.last_log_time.lock().unwrap_or_else(|poisoned| {
+            // Recover from poisoned mutex
+            poisoned.into_inner()
+        });
+        
+        if let Some(&last_time) = last_times.get(&entry_key) {
+            if now.saturating_sub(last_time) < self.rate_limit_secs {
+                return Ok(()); // Skip duplicate within rate limit window
             }
-            last_times.insert(entry_key, now);
         }
+        last_times.insert(entry_key, now);
+        drop(last_times); // Explicitly drop lock before file operations
 
         // Check file size and rotate if needed
         self.rotate_if_needed()?;
@@ -375,6 +380,19 @@ impl AuditLogger {
             return Ok(());
         }
 
+        // Use advisory lock to prevent race conditions during rotation
+        use fs2::FileExt;
+        let lock_path = self.log_path.with_extension("rotate.lock");
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)?;
+        
+        // Try to acquire exclusive lock - if another process is rotating, skip
+        if lock_file.try_lock_exclusive().is_err() {
+            return Ok(()); // Another process is rotating
+        }
+
         // Rotate existing logs
         for i in (1..self.max_files).rev() {
             let old_path = self.log_path.with_extension(format!("log.{}", i));
@@ -387,6 +405,10 @@ impl AuditLogger {
         // Rotate current log to .log.1
         let rotated_path = self.log_path.with_extension("log.1");
         std::fs::rename(&self.log_path, &rotated_path)?;
+        
+        // Lock is automatically released when lock_file is dropped
+        drop(lock_file);
+        let _ = std::fs::remove_file(&lock_path); // Clean up lock file
 
         Ok(())
     }

@@ -495,8 +495,8 @@ pub fn load_mnemonic(password: &str) -> Result<String, WalletError> {
 pub fn get_mnemonic_addresses() -> Result<Vec<String>, WalletError> {
     let keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
 
-    // Return owned Vec instead of cloning
-    Ok(keystore.get_mnemonic_addresses().to_vec())
+    // Clone is necessary here since we're borrowing from keystore
+    Ok(keystore.get_mnemonic_addresses().clone())
 }
 
 /// Check if mnemonic exists in keystore

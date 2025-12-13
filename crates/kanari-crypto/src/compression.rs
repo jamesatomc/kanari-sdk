@@ -20,7 +20,9 @@ pub fn compress_data(data: &[u8]) -> Result<Vec<u8>, io::Error> {
         compress(data, 10).map_err(|e| io::Error::other(format!("Compression error: {}", e)))?;
 
     // Check compression ratio to detect anomalies
-    if !compressed.is_empty() && data.len() / compressed.len() > 1000 {
+    // Add minimum threshold to avoid division edge cases
+    const MIN_COMPRESSED_SIZE: usize = 8; // Minimum 8 bytes
+    if compressed.len() >= MIN_COMPRESSED_SIZE && data.len() / compressed.len() > 1000 {
         return Err(io::Error::other("Suspicious compression ratio detected"));
     }
 
