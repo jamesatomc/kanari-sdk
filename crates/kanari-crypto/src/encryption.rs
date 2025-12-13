@@ -216,14 +216,15 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
 
     // Derive a fixed 32-byte AES key from the Argon2 output using SHA3-256
     let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
-    let derived_zero = zeroize::Zeroizing::new(derived_vec);
-    let key = Key::<Aes256Gcm>::from_slice(&derived_zero);
+    let mut derived_zero = zeroize::Zeroizing::new(derived_vec);
+    // Clone the key material into an owned Key so we can zeroize the intermediate immediately
+    let key_owned = Key::<Aes256Gcm>::from_slice(&derived_zero).clone();
 
     // Generate a random nonce for AES-GCM
     let nonce_bytes = Aes256Gcm::generate_nonce(&mut OsRng);
 
     // Create the cipher for encryption
-    let cipher = Aes256Gcm::new(key);
+    let cipher = Aes256Gcm::new(&key_owned);
 
     // Encrypt the data
     let ciphertext = cipher
@@ -234,6 +235,9 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
     let ciphertext_b64 = general_purpose::STANDARD.encode(&ciphertext);
     let nonce_slice: &[u8] = nonce_bytes.as_ref();
     let nonce_b64 = general_purpose::STANDARD.encode(nonce_slice);
+
+    // Zeroize intermediate derived key material as soon as possible
+    drop(derived_zero);
 
     Ok(EncryptedData {
         ciphertext_array: Vec::new(),
@@ -274,8 +278,8 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
 
     let key_bytes_vec = zeroize::Zeroizing::new(hash.as_bytes().to_vec());
     let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
-    let derived_zero = zeroize::Zeroizing::new(derived_vec);
-    let key = Key::<Aes256Gcm>::from_slice(&derived_zero);
+    let mut derived_zero = zeroize::Zeroizing::new(derived_vec);
+    let key_owned = Key::<Aes256Gcm>::from_slice(&derived_zero).clone();
 
     // We already decoded ciphertext above; get the nonce bytes now
     let nonce_bytes = encrypted.get_nonce()?;
@@ -288,8 +292,11 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
     }
     let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
 
-    // Create cipher for decryption
-    let cipher = Aes256Gcm::new(key);
+    // Create cipher for decryption (uses owned key)
+    let cipher = Aes256Gcm::new(&key_owned);
+
+    // Zeroize intermediate derived key material before decryption
+    drop(derived_zero);
 
     // Decrypt the data
     cipher

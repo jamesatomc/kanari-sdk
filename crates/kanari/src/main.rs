@@ -155,20 +155,29 @@ fn main() -> Result<()> {
                 || curve_type.is_hybrid()
             {
                 let kp = generate_keypair(curve_type).context("Failed to generate keypair")?;
-                (kp.get_private_key(), kp.get_address(), String::new())
+                let zk = kp.export_private_key_secure();
+                (zk.to_string(), kp.get_address(), String::new())
             } else {
                 let mnemonic = generate_mnemonic(words).context("Failed to generate mnemonic")?;
                 let kp = keypair_from_mnemonic(&mnemonic, curve_type, "")
                     .context("Failed to derive keypair from mnemonic")?;
-                (kp.get_private_key(), kp.get_address(), mnemonic)
+                let zk = kp.export_private_key_secure();
+                (zk.to_string(), kp.get_address(), mnemonic)
             };
 
             let address =
                 AccountAddress::from_str(&address_str).context("Generated invalid address")?;
 
             // Save wallet
-            save_wallet(&address, &private_key, &seed_phrase, &password, curve_type)
-                .context("Failed to save wallet")?;
+            save_wallet(
+                &address,
+                &private_key,
+                &seed_phrase,
+                None,
+                &password,
+                curve_type,
+            )
+            .context("Failed to save wallet")?;
 
             println!("Created wallet: {}", address_str);
             if !seed_phrase.is_empty() {
@@ -214,7 +223,7 @@ fn main() -> Result<()> {
                 let address =
                     AccountAddress::from_str(&address_str).context("Generated invalid address")?;
 
-                save_wallet(&address, &privk, "", &password, curve_type)
+                save_wallet(&address, &privk, "", None, &password, curve_type)
                     .context("Failed to save imported private-key wallet")?;
 
                 println!("Imported wallet from private key: {}", address_str);
@@ -232,7 +241,7 @@ fn main() -> Result<()> {
                 let address =
                     AccountAddress::from_str(&address_str).context("Generated invalid address")?;
 
-                save_wallet(&address, &privk, &seed_phrase, &password, curve_type)
+                save_wallet(&address, &privk, &seed_phrase, None, &password, curve_type)
                     .context("Failed to save imported seed wallet")?;
 
                 println!("Imported wallet from seed phrase: {}", address_str);

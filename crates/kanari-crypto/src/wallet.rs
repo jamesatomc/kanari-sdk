@@ -3,7 +3,7 @@
 //! This module handles wallet operations including creation, encryption,
 //! storage, and loading of cryptocurrency wallets.
 
-use crate::keys::CurveType;
+use crate::keys::{CurveType, KANAHYBRID_PREFIX, KANAPIQC_PREFIX, KANARI_KEY_PREFIX};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::str::FromStr;
@@ -75,6 +75,9 @@ pub struct Wallet {
     pub private_key: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub seed_phrase: String,
+    /// Optional derivation path (e.g. "m/44'/637'/0'/0/0") for HD wallets
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derivation_path: Option<String>,
     pub curve_type: CurveType,
 }
 
@@ -84,12 +87,14 @@ impl Wallet {
         address: AccountAddress,
         private_key: String,
         seed_phrase: String,
+        derivation_path: Option<String>,
         curve_type: CurveType,
     ) -> Self {
         Self {
             address,
             private_key,
             seed_phrase,
+            derivation_path,
             curve_type,
         }
     }
@@ -136,14 +141,14 @@ impl Wallet {
                 "Cannot verify empty signature".to_string(),
             ));
         }
+        // Recreate a KeyPair from the stored private key so we can use the
+        // KeyPair-aware verifier which prefers the explicit `pqc_public_key`
+        // field (avoids parsing combined public_key strings).
+        let keypair = crate::keys::keypair_from_private_key(&self.private_key, self.curve_type)
+            .map_err(|e| WalletError::VerificationError(e.to_string()))?;
 
-        signatures::verify_signature_with_curve(
-            &self.address.to_string(),
-            message,
-            signature,
-            self.curve_type,
-        )
-        .map_err(|e| WalletError::SigningError(e.to_string()))
+        signatures::verify_signature_with_keypair(&keypair, message, signature)
+            .map_err(|e| WalletError::VerificationError(e.to_string()))
     }
 }
 
@@ -152,6 +157,7 @@ pub fn save_wallet(
     address: &AccountAddress,
     private_key: &str,
     seed_phrase: &str,
+    derivation_path: Option<&str>,
     password: &str,
     curve_type: CurveType,
 ) -> Result<(), WalletError> {
@@ -184,11 +190,14 @@ pub fn save_wallet(
         ));
     }
 
-    // Ensure private key has kanari prefix
-    let formatted_private_key = if private_key.starts_with("kanari") {
+    // Ensure private key has a known prefix (kanari / kanapqc / kanahybrid)
+    let formatted_private_key = if private_key.starts_with(KANARI_KEY_PREFIX)
+        || private_key.starts_with(KANAPIQC_PREFIX)
+        || private_key.starts_with(KANAHYBRID_PREFIX)
+    {
         private_key.to_string()
     } else {
-        format!("kanari{}", private_key)
+        format!("{}{}", KANARI_KEY_PREFIX, private_key)
     };
 
     // Create wallet object
@@ -196,6 +205,7 @@ pub fn save_wallet(
         address: *address,
         private_key: formatted_private_key,
         seed_phrase: seed_phrase.to_string(),
+        derivation_path: derivation_path.map(|s| s.to_string()),
         curve_type,
     };
 
@@ -363,7 +373,15 @@ pub fn create_hd_wallet(
         zk.to_string()
     };
 
-    let wallet = Wallet::new(address, priv_key, derivation_path.to_string(), curve);
+    // Store the derivation path in the new `derivation_path` field and keep
+    // `seed_phrase` empty to avoid confusion.
+    let wallet = Wallet::new(
+        address,
+        priv_key,
+        String::new(),
+        Some(derivation_path.to_string()),
+        curve,
+    );
 
     Ok(wallet)
 }
@@ -375,6 +393,7 @@ pub fn save_hd_wallet(wallet: &Wallet, password: &str) -> Result<(), WalletError
         &wallet.address,
         &wallet.private_key,
         &wallet.seed_phrase,
+        wallet.derivation_path.as_deref(),
         password,
         wallet.curve_type,
     )
@@ -404,11 +423,11 @@ pub fn save_mnemonic(
         )));
     }
 
-    // Warn if password is not strong (optional: make this mandatory)
+    // Enforce password strength for mnemonic storage as well (security parity)
     if !crate::is_password_strong(password) {
-        log::warn!(
-            "Warning: Password does not meet recommended strength requirements (16+ chars, mixed case, numbers, special chars)"
-        );
+        return Err(WalletError::EncryptionError(
+            "Password does not meet strength requirements".to_string(),
+        ));
     }
 
     if mnemonic.is_empty() {
@@ -592,6 +611,7 @@ mod tests {
             AccountAddress::from_str(&keypair.address).unwrap(),
             priv_key,
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            None,
             CurveType::K256,
         );
 
@@ -611,6 +631,7 @@ mod tests {
             &address,
             &keypair.private_key,
             "test seed",
+            None,
             "", // Empty password
             CurveType::K256,
         );
@@ -631,6 +652,7 @@ mod tests {
             &address,
             &keypair.private_key,
             "test seed",
+            None,
             "short", // Only 5 characters
             CurveType::K256,
         );
@@ -662,6 +684,7 @@ mod tests {
             &address,
             &keypair.private_key,
             "test seed",
+            None,
             password,
             CurveType::K256,
         );
@@ -691,6 +714,7 @@ mod tests {
             &address,
             "", // Empty private key
             "test seed",
+            None,
             "ValidPassword123",
             CurveType::K256,
         );
@@ -815,6 +839,7 @@ mod tests {
             address,
             keypair.private_key.to_string(),
             "seed".to_string(),
+            None,
             CurveType::Ed25519,
         );
         assert!(wallet1.private_key.starts_with("kanari"));
@@ -853,6 +878,7 @@ mod tests {
                 AccountAddress::from_str(&keypair.address).unwrap(),
                 priv_key,
                 "seed".to_string(),
+                None,
                 curve,
             );
 

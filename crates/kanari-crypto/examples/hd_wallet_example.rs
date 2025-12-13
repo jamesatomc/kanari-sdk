@@ -17,8 +17,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Example addresses vector (empty initially)
     let addresses: Vec<String> = Vec::new();
 
-    // 2) Save mnemonic into keystore with password
-    let password = "demo-password-123";
+    // 2) Save mnemonic into keystore with a strong password
+    //    The library enforces a minimum-strength policy, so use mixed case,
+    //    digits, and special characters.
+    let password = "Str0ngP@ssw0rd!2025";
     save_mnemonic(&mnemonic, password, addresses)?;
     println!("Saved mnemonic into keystore (encrypted)");
 
