@@ -7,7 +7,6 @@
 
 use bip39::{Language, Mnemonic};
 use move_core_types::account_address::AccountAddress;
-use rand::RngCore;
 use rand::rngs::OsRng;
 use std::fmt;
 use std::str::FromStr;
@@ -228,7 +227,7 @@ impl KeyPair {
 pub const KANARI_KEY_PREFIX: &str = "kanari";
 
 /// Additional known prefixes
-pub const KANAPIQC_PREFIX: &str = "kanapqc";
+pub const KANAPQC_PREFIX: &str = "kanapqc";
 pub const KANAHYBRID_PREFIX: &str = "kanahybrid";
 
 /// Format a raw hex private key with the Kanari prefix
@@ -241,7 +240,7 @@ pub fn extract_raw_key(formatted_key: &str) -> &str {
     // Allow multiple known prefixes (kanari, kanapqc, kanahybrid)
     formatted_key
         .strip_prefix(KANARI_KEY_PREFIX)
-        .or_else(|| formatted_key.strip_prefix(KANAPIQC_PREFIX))
+        .or_else(|| formatted_key.strip_prefix(KANAPQC_PREFIX))
         .or_else(|| formatted_key.strip_prefix(KANAHYBRID_PREFIX))
         .unwrap_or(formatted_key)
 }
@@ -340,10 +339,21 @@ fn generate_p256_keypair() -> Result<KeyPair, KeyError> {
 
 /// Generate an Ed25519 keypair
 fn generate_ed25519_keypair() -> Result<KeyPair, KeyError> {
+    use rand::RngCore;
+    
     // Generate random bytes for the private key using OS RNG
     let mut rng = OsRng;
     let mut seed = [0u8; 32];
+    
+    // Fill with random bytes
     rng.fill_bytes(&mut seed);
+    
+    // Validate entropy - ensure we didn't get all zeros (extremely unlikely but check anyway)
+    if seed.iter().all(|&b| b == 0) {
+        return Err(KeyError::GenerationFailed(
+            "Insufficient entropy from RNG".to_string(),
+        ));
+    }
 
     // Create signing key from random bytes
     let signing_key = Ed25519SigningKey::from_bytes(&seed);
@@ -639,15 +649,20 @@ pub fn keypair_from_private_key(
     private_key: &str,
     curve_type: CurveType,
 ) -> Result<KeyPair, KeyError> {
+    use zeroize::Zeroize;
+    
     // Remove kanari prefix if present
     let raw_private_key = extract_raw_key(private_key);
 
     match curve_type {
         CurveType::K256 => {
-            let private_key_bytes =
+            let mut private_key_bytes =
                 hex::decode(raw_private_key).map_err(|_| KeyError::InvalidPrivateKey)?;
             let secret_key = K256SecretKey::from_slice(&private_key_bytes)
                 .map_err(|_| KeyError::InvalidPrivateKey)?;
+
+            // Zeroize immediately after use
+            private_key_bytes.zeroize();
 
             let signing_key = K256SigningKey::from(secret_key);
             let verifying_key = K256VerifyingKey::from(&signing_key);
@@ -675,10 +690,13 @@ pub fn keypair_from_private_key(
             })
         }
         CurveType::P256 => {
-            let private_key_bytes =
+            let mut private_key_bytes =
                 hex::decode(raw_private_key).map_err(|_| KeyError::InvalidPrivateKey)?;
             let secret_key = P256SecretKey::from_slice(&private_key_bytes)
                 .map_err(|_| KeyError::InvalidPrivateKey)?;
+
+            // Zeroize immediately after use
+            private_key_bytes.zeroize();
 
             let signing_key = SigningKey::from(secret_key);
             let verifying_key = VerifyingKey::from(&signing_key);
@@ -705,17 +723,24 @@ pub fn keypair_from_private_key(
             })
         }
         CurveType::Ed25519 => {
-            let private_key_bytes =
+            let mut private_key_bytes =
                 hex::decode(raw_private_key).map_err(|_| KeyError::InvalidPrivateKey)?;
             if private_key_bytes.len() != 32 {
+                private_key_bytes.zeroize();
                 return Err(KeyError::InvalidPrivateKey);
             }
 
             let mut key_array = [0u8; 32];
             key_array.copy_from_slice(&private_key_bytes);
 
+            // Zeroize source bytes
+            private_key_bytes.zeroize();
+
             let signing_key = Ed25519SigningKey::from_bytes(&key_array);
             let verifying_key = Ed25519VerifyingKey::from(&signing_key);
+
+            // Zeroize key array after use
+            key_array.zeroize();
 
             let public_key_bytes = verifying_key.to_bytes();
             let hex_encoded = hex::encode(public_key_bytes);

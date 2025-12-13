@@ -49,13 +49,13 @@ pub use compression::{compress_data, decompress_data};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Get current Unix timestamp in seconds
-/// Returns 0 if system time is before UNIX_EPOCH (should never happen in practice)
+/// Returns current timestamp or 1 (minimal valid timestamp) if system time error
 #[must_use]
 pub fn get_current_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .unwrap_or(1) // Return 1 instead of 0 to avoid timestamp == 0 edge cases
 }
 
 // Re-export key rotation functionality
@@ -164,14 +164,33 @@ pub fn hash_data_with_algorithm(data: &[u8], algorithm: HashAlgorithm) -> Vec<u8
 // Add constant for recommended password length
 pub const MIN_RECOMMENDED_PASSWORD_LENGTH: usize = 16; // Increased for quantum era
 
+/// Common weak passwords to reject
+const COMMON_WEAK_PASSWORDS: &[&str] = &[
+    "password", "password123", "password1234", "12345678", "123456789",
+    "qwerty", "abc123", "letmein", "welcome", "admin", "root",
+    "Password123!", "Password1234!", "Passw0rd!",
+];
+
 /// Check if a password meets strong security requirements
 /// Returns true if password is at least 16 characters and contains:
 /// - At least one uppercase letter
 /// - At least one lowercase letter
 /// - At least one digit
 /// - At least one special character
+/// - Not in common weak passwords list
 pub fn is_password_strong(password: &str) -> bool {
     if password.len() < MIN_RECOMMENDED_PASSWORD_LENGTH {
+        return false;
+    }
+
+    // Check for common weak passwords (case-insensitive)
+    let password_lower = password.to_lowercase();
+    if COMMON_WEAK_PASSWORDS.iter().any(|weak| password_lower.contains(weak)) {
+        return false;
+    }
+
+    // Check for repetitive patterns
+    if has_repetitive_pattern(password) {
         return false;
     }
 
@@ -181,6 +200,31 @@ pub fn is_password_strong(password: &str) -> bool {
     let has_special = password.chars().any(|c| !c.is_alphanumeric());
 
     has_uppercase && has_lowercase && has_digit && has_special
+}
+
+/// Check for repetitive patterns in password (e.g., "aaa", "111", "abcabc")
+fn has_repetitive_pattern(password: &str) -> bool {
+    let chars: Vec<char> = password.chars().collect();
+    
+    // Check for 3+ consecutive identical characters
+    for i in 0..chars.len().saturating_sub(2) {
+        if chars[i] == chars[i + 1] && chars[i] == chars[i + 2] {
+            return true;
+        }
+    }
+    
+    // Check for repeating sequences (e.g., "abcabc")
+    for seq_len in 2..=password.len() / 2 {
+        if password.len() >= seq_len * 2 {
+            let first_half = &password[..seq_len];
+            let second_half = &password[seq_len..seq_len * 2];
+            if first_half == second_half {
+                return true;
+            }
+        }
+    }
+    
+    false
 }
 
 /// Rate limiter for security-sensitive operations

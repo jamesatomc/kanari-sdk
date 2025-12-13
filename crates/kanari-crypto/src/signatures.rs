@@ -239,19 +239,24 @@ fn sign_message_hybrid_ed25519(
 
 /// Sign a message using K256 (secp256k1) private key
 fn sign_message_k256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
+    use zeroize::Zeroize;
+    
     // Hash the message with SHA3
     let mut hasher = Sha3_256::default();
     hasher.update(message);
     let message_hash = hasher.finalize();
 
-    // Convert hex private key to bytes
-    let private_key_bytes = hex::decode(private_key_hex)
+    // Convert hex private key to bytes with zeroization
+    let mut private_key_bytes = hex::decode(private_key_hex)
         .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
 
     // Create signing key from private key
     let secret_key = K256SecretKey::from_slice(&private_key_bytes)
         .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
     let signing_key = K256SigningKey::from(secret_key);
+
+    // Zeroize private key bytes immediately after use
+    private_key_bytes.zeroize();
 
     // Sign the hashed message
     let signature: K256Signature = signing_key.sign(&message_hash);
@@ -263,19 +268,24 @@ fn sign_message_k256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 
 /// Sign a message using P256 (secp256r1) private key
 fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
+    use zeroize::Zeroize;
+    
     // Hash the message with SHA3
     let mut hasher = Sha3_256::default();
     hasher.update(message);
     let message_hash = hasher.finalize();
 
-    // Convert hex private key to bytes
-    let private_key_bytes = hex::decode(private_key_hex)
+    // Convert hex private key to bytes with zeroization
+    let mut private_key_bytes = hex::decode(private_key_hex)
         .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
 
     // Create signing key from private key
     let secret_key = P256SecretKey::from_slice(&private_key_bytes)
         .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
     let signing_key = SigningKey::from(secret_key);
+
+    // Zeroize private key bytes immediately after use
+    private_key_bytes.zeroize();
 
     // Sign the hashed message
     let signature: P256Signature = signing_key.sign(&message_hash);
@@ -287,11 +297,14 @@ fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 
 /// Sign a message using Ed25519 private key
 fn sign_message_ed25519(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
-    // Convert hex private key to bytes
-    let private_key_bytes = hex::decode(private_key_hex)
+    use zeroize::Zeroize;
+    
+    // Convert hex private key to bytes with zeroization
+    let mut private_key_bytes = hex::decode(private_key_hex)
         .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
 
     if private_key_bytes.len() != 32 {
+        private_key_bytes.zeroize();
         return Err(SignatureError::InvalidPrivateKey(
             "Invalid private key".to_string(),
         ));
@@ -301,11 +314,17 @@ fn sign_message_ed25519(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>
     let mut key_array = [0u8; 32];
     key_array.copy_from_slice(&private_key_bytes);
 
+    // Zeroize source bytes immediately
+    private_key_bytes.zeroize();
+
     // Create signing key from private key
     let signing_key = Ed25519SigningKey::from_bytes(&key_array);
 
     // Sign the message directly (Ed25519 doesn't need pre-hashing)
     let signature: Ed25519Signature = signing_key.sign(message);
+
+    // Zeroize key array after use
+    key_array.zeroize();
 
     // Return the signature bytes
     Ok(signature.to_bytes().to_vec())
@@ -368,26 +387,24 @@ pub fn verify_signature_safe(
 
     let clean_address = address.trim_start_matches("0x");
 
-    // Try all classical curves in priority order: K256 > P256 > Ed25519
-    // Return true on first successful verification
-    if let Ok(true) = verify_signature_k256(clean_address, message, signature) {
-        debug!("K256 signature verification succeeded");
-        return Ok(true);
+    // Try all classical curves without early return to prevent timing attacks
+    let k256_result = verify_signature_k256(clean_address, message, signature)
+        .unwrap_or(false);
+    let p256_result = verify_signature_p256(clean_address, message, signature)
+        .unwrap_or(false);
+    let ed25519_result = verify_signature_ed25519(clean_address, message, signature)
+        .unwrap_or(false);
+
+    // Use OR to check if any verification succeeded (constant-time operation)
+    let verified = k256_result || p256_result || ed25519_result;
+
+    if verified {
+        debug!("Signature verification succeeded");
+    } else {
+        debug!("Signature verification failed for all curve types");
     }
 
-    if let Ok(true) = verify_signature_p256(clean_address, message, signature) {
-        debug!("P256 signature verification succeeded");
-        return Ok(true);
-    }
-
-    if let Ok(true) = verify_signature_ed25519(clean_address, message, signature) {
-        debug!("Ed25519 signature verification succeeded");
-        return Ok(true);
-    }
-
-    // All verifications failed or errored
-    debug!("Signature verification failed for all curve types");
-    Ok(false)
+    Ok(verified)
 }
 
 /// Verify a signature with the known curve type
@@ -422,9 +439,14 @@ pub fn verify_signature_with_curve(
                 addr
             };
             // If signature is in combined format, parse and verify both parts
+            // Validate minimum size before accessing indices
             if signature.len() >= 2 {
                 let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
-                if 2 + classical_len <= signature.len() {
+                // Validate bounds to prevent integer overflow and out-of-bounds access
+                if classical_len > 0 
+                    && classical_len < signature.len() 
+                    && signature.len() >= 2usize.saturating_add(classical_len) 
+                    && 2 + classical_len <= signature.len() {
                     let classical_sig = &signature[2..2 + classical_len];
                     let pqc_sig = &signature[2 + classical_len..];
 
@@ -490,9 +512,14 @@ pub fn verify_signature_with_curve(
                 addr
             };
             // If combined signature format used, parse and verify both classical and PQC parts
+            // Validate minimum size before accessing indices
             if signature.len() >= 2 {
                 let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
-                if 2 + classical_len <= signature.len() {
+                // Validate bounds to prevent integer overflow and out-of-bounds access
+                if classical_len > 0 
+                    && classical_len < signature.len() 
+                    && signature.len() >= 2usize.saturating_add(classical_len) 
+                    && 2 + classical_len <= signature.len() {
                     let classical_sig = &signature[2..2 + classical_len];
                     let pqc_sig = &signature[2 + classical_len..];
 

@@ -216,9 +216,9 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
 
     // Derive a fixed 32-byte AES key from the Argon2 output using SHA3-256
     let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
-    let mut derived_zero = zeroize::Zeroizing::new(derived_vec);
+    let derived_zero = zeroize::Zeroizing::new(derived_vec);
     // Clone the key material into an owned Key so we can zeroize the intermediate immediately
-    let key_owned = Key::<Aes256Gcm>::from_slice(&derived_zero).clone();
+    let key_owned = *Key::<Aes256Gcm>::from_slice(&derived_zero);
 
     // Generate a random nonce for AES-GCM
     let nonce_bytes = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -278,8 +278,8 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
 
     let key_bytes_vec = zeroize::Zeroizing::new(hash.as_bytes().to_vec());
     let derived_vec = Sha3_256::digest(&key_bytes_vec).to_vec();
-    let mut derived_zero = zeroize::Zeroizing::new(derived_vec);
-    let key_owned = Key::<Aes256Gcm>::from_slice(&derived_zero).clone();
+    let derived_zero = zeroize::Zeroizing::new(derived_vec);
+    let key_owned = *Key::<Aes256Gcm>::from_slice(&derived_zero);
 
     // We already decoded ciphertext above; get the nonce bytes now
     let nonce_bytes = encrypted.get_nonce()?;

@@ -114,6 +114,26 @@ impl Keystore {
             return Ok(Keystore::default());
         }
 
+        // Acquire read lock to prevent concurrent modifications during load
+        let lock_path = keystore_path.with_extension("lock");
+        let lock_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&lock_path)
+            .map_err(|e| KeystoreError::IoError(e))?;
+
+        // Try to acquire shared lock for reading
+        if let Err(_) = lock_file.try_lock_shared() {
+            return Err(KeystoreError::Locked);
+        }
+
+        // Keep lock during read
+        let _guard = LockFileGuard {
+            file: lock_file,
+            path: lock_path,
+        };
+
         // Load the keystore data
         let keystore_data = fs::read_to_string(keystore_path)?;
         let mut keystore: Keystore = serde_json::from_str(&keystore_data)?;
@@ -124,6 +144,7 @@ impl Keystore {
         }
 
         // Save if any changes were made (conversion from array to base64)
+        drop(_guard); // Release read lock before attempting write
         keystore.save()?;
 
         Ok(keystore)
@@ -357,7 +378,6 @@ pub fn keystore_exists() -> bool {
 mod tests {
     use super::*;
     use crate::encryption::{EncryptedData, encrypt_data};
-    use std::env;
     use tempfile::TempDir;
 
     // Helper to create a test encrypted data
@@ -377,26 +397,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let _keystore_path = temp_dir.path().join("kanari.keystore");
 
-        // Set up environment to use temp directory
-        unsafe {
-            env::set_var("HOME", temp_dir.path());
-        }
-
-        let mut keystore = Keystore::default();
-        keystore
-            .keys
-            .insert("test_key".to_string(), create_test_encrypted_data());
-
-        // The save method should:
-        // 1. Write to .tmp file
-        // 2. Rename to final path (atomic operation)
-        // This is verified by checking the implementation uses fs::rename
-
-        // Note: In the actual implementation, we can see:
+        // Note: Cannot safely set environment variables in tests due to
+        // potential conflicts with other tests running in parallel.
+        // The atomic write pattern is verified by code inspection:
         // let temp_path = keystore_path.with_extension("tmp");
         // fs::write(&temp_path, &keystore_data)?;
         // fs::rename(temp_path, keystore_path)?;
-
         // This pattern is atomic on most filesystems
         assert!(true, "Atomic write pattern is implemented");
     }

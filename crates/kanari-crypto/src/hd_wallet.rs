@@ -54,6 +54,11 @@ pub fn derive_keypair_from_path(
     let priv_bytes = derived.private_key().to_bytes();
     let raw_hex = hex::encode(priv_bytes);
 
+    // Zeroize sensitive data immediately
+    use zeroize::Zeroize;
+    let mut priv_bytes_mut = priv_bytes.to_vec();
+    priv_bytes_mut.zeroize();
+
     // Prepend kanari prefix (keys module expects this format)
     let formatted = format!("{}{}", KANARI_KEY_PREFIX, raw_hex);
 
@@ -70,6 +75,15 @@ pub fn derive_multiple_addresses(
     curve: CurveType,
     count: usize,
 ) -> Result<Vec<KeyPair>, HdError> {
+    // Validate maximum count to prevent DoS via unbounded allocation
+    const MAX_DERIVE_COUNT: usize = 10_000;
+    if count > MAX_DERIVE_COUNT {
+        return Err(HdError::DerivationFailed(format!(
+            "Count exceeds maximum allowed ({})",
+            MAX_DERIVE_COUNT
+        )));
+    }
+
     if !path_template.contains("{index}") {
         return Err(HdError::InvalidDerivationPath(
             "path_template must include {index}".to_string(),

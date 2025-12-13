@@ -84,6 +84,11 @@ impl KeyMetadata {
     /// Get age of key in days
     pub fn age_days(&self) -> u64 {
         let now = crate::get_current_timestamp();
+        
+        // Validate timestamps to prevent overflow
+        if self.created_at == 0 || now == 0 || now < self.created_at {
+            return 0; // Invalid or future timestamp
+        }
 
         let age_seconds = now.saturating_sub(self.created_at);
         age_seconds / 86400 // Convert to days
@@ -214,11 +219,12 @@ impl KeyRotationManager {
         let total_rotations: u64 = self.key_metadata.values().map(|m| m.rotation_count).sum();
 
         let avg_age_days = if total_keys > 0 {
-            self.key_metadata
+            let sum: u64 = self.key_metadata
                 .values()
                 .map(|m| m.age_days())
-                .sum::<u64>()
-                / total_keys as u64
+                .sum();
+            // Safe conversion: use checked division
+            sum.checked_div(total_keys as u64).unwrap_or(0)
         } else {
             0
         };

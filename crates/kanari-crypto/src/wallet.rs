@@ -3,7 +3,7 @@
 //! This module handles wallet operations including creation, encryption,
 //! storage, and loading of cryptocurrency wallets.
 
-use crate::keys::{CurveType, KANAHYBRID_PREFIX, KANAPIQC_PREFIX, KANARI_KEY_PREFIX};
+use crate::keys::{CurveType, KANAHYBRID_PREFIX, KANAPQC_PREFIX, KANARI_KEY_PREFIX};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::str::FromStr;
@@ -192,7 +192,7 @@ pub fn save_wallet(
 
     // Ensure private key has a known prefix (kanari / kanapqc / kanahybrid)
     let formatted_private_key = if private_key.starts_with(KANARI_KEY_PREFIX)
-        || private_key.starts_with(KANAPIQC_PREFIX)
+        || private_key.starts_with(KANAPQC_PREFIX)
         || private_key.starts_with(KANAHYBRID_PREFIX)
     {
         private_key.to_string()
@@ -279,6 +279,21 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
     let decrypted = encryption::decrypt_data(encrypted_data_ref, password)
         .map_err(|_| WalletError::InvalidPassword)?;
 
+    // Validate decrypted data integrity - should be valid UTF-8 or compressed data
+    if decrypted.is_empty() {
+        return Err(WalletError::DecryptionError(
+            "Decrypted data is empty".to_string(),
+        ));
+    }
+
+    // Additional integrity check: verify data structure before decompression
+    const MAX_WALLET_SIZE: usize = 10 * 1024 * 1024; // 10MB max
+    if decrypted.len() > MAX_WALLET_SIZE {
+        return Err(WalletError::DecryptionError(
+            "Decrypted wallet data exceeds maximum size".to_string(),
+        ));
+    };
+
     // Decompress the decrypted data (handle both compressed and uncompressed formats)
     let decompressed_data = match compression::decompress_data(&decrypted) {
         Ok(data) => data,
@@ -312,23 +327,17 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
             match toml::from_str::<Wallet>(decompressed_str) {
                 Ok(wallet_data) => Ok(wallet_data),
                 Err(e) => {
-                    // If TOML parsing fails, provide a detailed error
+                    // Don't include raw data in error to prevent sensitive data leakage
                     Err(WalletError::SerializationError(format!(
-                        "Failed to parse wallet data as TOML: {}. First 50 bytes: {:?}",
-                        e,
-                        &decompressed_data
-                            .get(..50.min(decompressed_data.len()))
-                            .unwrap_or(&[])
+                        "Failed to parse wallet data as TOML: {}",
+                        e
                     )))
                 }
             }
         }
         Err(e) => Err(WalletError::DecryptionError(format!(
-            "Decrypted data is not valid UTF-8: {}. First 50 bytes: {:?}",
-            e,
-            &decompressed_data
-                .get(..50.min(decompressed_data.len()))
-                .unwrap_or(&[])
+            "Decrypted data is not valid UTF-8: {}",
+            e
         ))),
     }
 }
@@ -486,7 +495,8 @@ pub fn load_mnemonic(password: &str) -> Result<String, WalletError> {
 pub fn get_mnemonic_addresses() -> Result<Vec<String>, WalletError> {
     let keystore = Keystore::load().map_err(|e| WalletError::KeystoreError(e.to_string()))?;
 
-    Ok(keystore.get_mnemonic_addresses().clone())
+    // Return owned Vec instead of cloning
+    Ok(keystore.get_mnemonic_addresses().to_vec())
 }
 
 /// Check if mnemonic exists in keystore

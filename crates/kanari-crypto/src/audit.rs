@@ -231,16 +231,34 @@ impl AuditEntry {
             match s {
                 None => None,
                 Some(v) => {
-                    // Simple heuristics: long hex strings, mnemonic-like (many words), or known prefixes
                     let lower = v.to_lowercase();
 
-                    // If contains known private prefixes or very long hex, redact
-                    if lower.contains("kanari")
-                        || lower.contains("kanapqc")
-                        || lower.contains("kanahybrid")
-                        || (v.len() >= 40 && v.chars().all(|c| c.is_ascii_hexdigit()))
-                        || v.split_whitespace().count() >= 6
+                    // Comprehensive redaction for sensitive data:
+                    // 1. Known prefixes (strict word boundary check)
+                    if lower.starts_with("kanari") 
+                        || lower.starts_with("kanapqc") 
+                        || lower.starts_with("kanahybrid")
                     {
+                        return Some("[REDACTED]".to_string());
+                    }
+
+                    // 2. Hex strings (any length >= 16 chars)
+                    if v.len() >= 16 && v.chars().all(|c| c.is_ascii_hexdigit() || c == ':') {
+                        return Some("[REDACTED]".to_string());
+                    }
+
+                    // 3. Base64-encoded data (typical patterns)
+                    if v.len() >= 20 && v.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=') {
+                        return Some("[REDACTED]".to_string());
+                    }
+
+                    // 4. Mnemonic phrases (6+ words)
+                    if v.split_whitespace().count() >= 6 {
+                        return Some("[REDACTED]".to_string());
+                    }
+
+                    // 5. 0x-prefixed addresses (common format)
+                    if lower.starts_with("0x") && v.len() >= 16 {
                         return Some("[REDACTED]".to_string());
                     }
 
@@ -268,6 +286,10 @@ pub struct AuditLogger {
     log_path: PathBuf,
     min_severity: EventSeverity,
     console_output: bool,
+    max_file_size: u64,
+    max_files: usize,
+    last_log_time: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    rate_limit_secs: u64,
 }
 
 impl AuditLogger {
@@ -277,6 +299,10 @@ impl AuditLogger {
             log_path,
             min_severity: EventSeverity::Info,
             console_output: false,
+            max_file_size: 10 * 1024 * 1024, // 10MB default
+            max_files: 5,
+            last_log_time: std::sync::Mutex::new(std::collections::HashMap::new()),
+            rate_limit_secs: 1, // 1 second between identical logs
         }
     }
 
@@ -299,6 +325,22 @@ impl AuditLogger {
             return Ok(());
         }
 
+        // Rate limiting: prevent log flooding
+        let entry_key = format!("{:?}:{:?}", entry.event, entry.resource_id);
+        let now = crate::get_current_timestamp();
+        
+        if let Ok(mut last_times) = self.last_log_time.lock() {
+            if let Some(&last_time) = last_times.get(&entry_key) {
+                if now.saturating_sub(last_time) < self.rate_limit_secs {
+                    return Ok(()); // Skip duplicate within rate limit window
+                }
+            }
+            last_times.insert(entry_key, now);
+        }
+
+        // Check file size and rotate if needed
+        self.rotate_if_needed()?;
+
         // Ensure log directory exists
         if let Some(parent) = self.log_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -318,6 +360,33 @@ impl AuditLogger {
         if self.console_output {
             println!("{}", entry.to_string_formatted());
         }
+
+        Ok(())
+    }
+
+    /// Rotate log file if it exceeds max size
+    fn rotate_if_needed(&self) -> Result<(), AuditError> {
+        if !self.log_path.exists() {
+            return Ok(());
+        }
+
+        let metadata = std::fs::metadata(&self.log_path)?;
+        if metadata.len() < self.max_file_size {
+            return Ok(());
+        }
+
+        // Rotate existing logs
+        for i in (1..self.max_files).rev() {
+            let old_path = self.log_path.with_extension(format!("log.{}", i));
+            let new_path = self.log_path.with_extension(format!("log.{}", i + 1));
+            if old_path.exists() {
+                let _ = std::fs::rename(&old_path, &new_path);
+            }
+        }
+
+        // Rotate current log to .log.1
+        let rotated_path = self.log_path.with_extension("log.1");
+        std::fs::rename(&self.log_path, &rotated_path)?;
 
         Ok(())
     }

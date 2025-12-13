@@ -11,6 +11,10 @@ use thiserror::Error;
 
 use crate::Keystore;
 use crate::encryption::{EncryptedData, decrypt_data, encrypt_data};
+use sha3::Sha3_256;
+use hmac::{Hmac, Mac};
+
+type HmacSha3_256 = Hmac<Sha3_256>;
 
 /// Errors related to backup/restore operations
 #[derive(Error, Debug)]
@@ -130,8 +134,12 @@ impl BackupManager {
         let keystore_json = serde_json::to_vec(&keystore)
             .map_err(|e| BackupError::SerializationError(e.to_string()))?;
 
-        // Calculate checksum
-        let checksum = hex::encode(crate::hash_data(&keystore_json));
+        // Calculate HMAC for integrity (more secure than simple hash)
+        let mut mac = HmacSha3_256::new_from_slice(password.as_bytes())
+            .map_err(|e| BackupError::EncryptionError(format!("HMAC error: {}", e)))?;
+        mac.update(&keystore_json);
+        let hmac_result = mac.finalize();
+        let checksum = hex::encode(hmac_result.into_bytes());
 
         // Create metadata
         let metadata = BackupMetadata::new(keystore.keys.len(), keystore.has_mnemonic(), checksum);
@@ -153,13 +161,38 @@ impl BackupManager {
         };
 
         // Generate backup filename with timestamp from metadata (ensures consistency)
+        // Sanitize to prevent path traversal attacks
         let filename = format!("keystore_backup_{}.kbak", metadata.created_at);
+        
+        // Validate filename doesn't contain path separators
+        if filename.contains(std::path::MAIN_SEPARATOR) || filename.contains('/') || filename.contains('\\') {
+            return Err(BackupError::SerializationError(
+                "Invalid backup filename".to_string(),
+            ));
+        }
+        
         let backup_path = self.backup_dir.join(&filename);
+        
+        // Ensure the resolved path is still within backup_dir (prevent traversal)
+        if !backup_path.starts_with(&self.backup_dir) {
+            return Err(BackupError::SerializationError(
+                "Path traversal detected".to_string(),
+            ));
+        }
 
         // Write backup to file
         let backup_json = serde_json::to_string_pretty(&backup)
             .map_err(|e| BackupError::SerializationError(e.to_string()))?;
         fs::write(&backup_path, backup_json)?;
+
+        // Set secure file permissions (owner read/write only) - Unix systems
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&backup_path)?.permissions();
+            perms.set_mode(0o600); // rw------- (owner only)
+            fs::set_permissions(&backup_path, perms)?;
+        }
 
         Ok(backup_path)
     }
@@ -185,16 +218,18 @@ impl BackupManager {
         password: &str,
         verify: bool,
     ) -> Result<(), BackupError> {
-        // Check if backup file exists
-        if !backup_path.exists() {
-            return Err(BackupError::NotFound(backup_path.display().to_string()));
-        }
-
-        // Validate file size first
+        // Validate file size first (before checking existence to avoid TOCTOU)
         self.validate_backup_file(backup_path)?;
 
-        // Read backup file
-        let backup_data = fs::read_to_string(backup_path)?;
+        // Read backup file atomically
+        let backup_data = fs::read_to_string(backup_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    BackupError::NotFound(backup_path.display().to_string())
+                } else {
+                    BackupError::IoError(e)
+                }
+            })?;
 
         // Deserialize backup
         let backup: EncryptedBackup = serde_json::from_str(&backup_data)
@@ -204,12 +239,17 @@ impl BackupManager {
         let decrypted_data = decrypt_data(&backup.encrypted_data, password)
             .map_err(|e| BackupError::DecryptionError(e.to_string()))?;
 
-        // Verify checksum if requested
+        // Verify HMAC if requested (more secure than simple checksum)
         if verify {
-            let checksum = hex::encode(crate::hash_data(&decrypted_data));
-            if checksum != backup.metadata.checksum {
+            let mut mac = HmacSha3_256::new_from_slice(password.as_bytes())
+                .map_err(|e| BackupError::VerificationFailed(format!("HMAC error: {}", e)))?;
+            mac.update(&decrypted_data);
+            let hmac_result = mac.finalize();
+            let calculated_hmac = hex::encode(hmac_result.into_bytes());
+            
+            if calculated_hmac != backup.metadata.checksum {
                 return Err(BackupError::VerificationFailed(
-                    "Checksum mismatch".to_string(),
+                    "HMAC verification failed".to_string(),
                 ));
             }
         }
@@ -248,20 +288,28 @@ impl BackupManager {
         self.ensure_backup_dir()?;
 
         let mut backups = Vec::new();
+        const MAX_BACKUP_READ_SIZE: u64 = 50 * 1024 * 1024; // 50MB
 
         for entry in fs::read_dir(&self.backup_dir)? {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().and_then(|s| s.to_str()) == Some("kbak")
-                && let Ok(data) = fs::read_to_string(&path)
-                && let Ok(backup) = serde_json::from_str::<EncryptedBackup>(&data)
-            {
-                backups.push(BackupInfo {
-                    path: path.clone(),
-                    metadata: backup.metadata,
-                    file_size: entry.metadata()?.len(),
-                });
+            if path.extension().and_then(|s| s.to_str()) == Some("kbak") {
+                // Check file size before reading
+                let metadata = entry.metadata()?;
+                if metadata.len() > MAX_BACKUP_READ_SIZE {
+                    continue; // Skip oversized files
+                }
+
+                if let Ok(data) = fs::read_to_string(&path) {
+                    if let Ok(backup) = serde_json::from_str::<EncryptedBackup>(&data) {
+                        backups.push(BackupInfo {
+                            path: path.clone(),
+                            metadata: backup.metadata,
+                            file_size: metadata.len(),
+                        });
+                    }
+                }
             }
         }
 
