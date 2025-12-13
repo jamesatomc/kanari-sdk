@@ -171,7 +171,7 @@ impl AuditEntry {
         self.details = Some(details.into());
         self
     }
-    
+
     /// Builder method to set error details (for failed operations)
     pub fn with_error(mut self, error: impl std::fmt::Display) -> Self {
         let error_details = format!("Error: {}", error);
@@ -201,35 +201,39 @@ impl AuditEntry {
 
     /// Format as human-readable string
     pub fn to_string_formatted(&self) -> String {
+        // Safe conversion with overflow check (i64::MAX = year 292277026596)
+        let timestamp_i64 = self.timestamp.min(i64::MAX as u64) as i64;
         let timestamp = chrono::Utc
-            .timestamp_opt(self.timestamp as i64, 0)
+            .timestamp_opt(timestamp_i64, 0)
             .single()
             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| format!("timestamp:{}", self.timestamp));
 
         // Use pre-allocated String with estimated capacity to reduce allocations
         let mut result = String::with_capacity(256);
-        
+
         use std::fmt::Write;
-        let _ = write!(result, "[{}] {:?} severity={:?} status={}",
+        let _ = write!(
+            result,
+            "[{}] {:?} severity={:?} status={}",
             timestamp,
             self.event,
             self.severity,
             if self.success { "SUCCESS" } else { "FAILURE" }
         );
-        
+
         if let Some(ref r) = self.resource_id {
             let _ = write!(result, " resource={}", r);
         }
-        
+
         if let Some(ref a) = self.actor {
             let _ = write!(result, " actor={}", a);
         }
-        
+
         if let Some(ref d) = self.details {
             let _ = write!(result, " details={}", d);
         }
-        
+
         result
     }
 
@@ -243,8 +247,8 @@ impl AuditEntry {
 
                     // Comprehensive redaction for sensitive data:
                     // 1. Known prefixes (strict word boundary check)
-                    if lower.starts_with("kanari") 
-                        || lower.starts_with("kanapqc") 
+                    if lower.starts_with("kanari")
+                        || lower.starts_with("kanapqc")
                         || lower.starts_with("kanahybrid")
                     {
                         return Some("[REDACTED]".to_string());
@@ -256,7 +260,10 @@ impl AuditEntry {
                     }
 
                     // 3. Base64-encoded data (typical patterns)
-                    if v.len() >= 20 && v.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=') {
+                    if v.len() >= 20
+                        && v.chars()
+                            .all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=')
+                    {
                         return Some("[REDACTED]".to_string());
                     }
 
@@ -336,13 +343,13 @@ impl AuditLogger {
         // Rate limiting: prevent log flooding
         let entry_key = format!("{:?}:{:?}", entry.event, entry.resource_id);
         let now = crate::get_current_timestamp();
-        
+
         // Handle mutex poisoning by recovering from poisoned state
         let mut last_times = self.last_log_time.lock().unwrap_or_else(|poisoned| {
             // Recover from poisoned mutex
             poisoned.into_inner()
         });
-        
+
         if let Some(&last_time) = last_times.get(&entry_key) {
             if now.saturating_sub(last_time) < self.rate_limit_secs {
                 return Ok(()); // Skip duplicate within rate limit window
@@ -395,7 +402,7 @@ impl AuditLogger {
             .create(true)
             .write(true)
             .open(&lock_path)?;
-        
+
         // Try to acquire exclusive lock - if another process is rotating, skip
         if lock_file.try_lock_exclusive().is_err() {
             return Ok(()); // Another process is rotating
@@ -413,7 +420,7 @@ impl AuditLogger {
         // Rotate current log to .log.1
         let rotated_path = self.log_path.with_extension("log.1");
         std::fs::rename(&self.log_path, &rotated_path)?;
-        
+
         // Lock is automatically released when lock_file is dropped
         drop(lock_file);
         let _ = std::fs::remove_file(&lock_path); // Clean up lock file

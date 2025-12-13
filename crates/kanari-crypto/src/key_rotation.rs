@@ -69,11 +69,11 @@ pub struct KeyMetadata {
 
 impl KeyMetadata {
     /// Create new key metadata
-    pub fn new(key_id: String) -> Self {
+    pub fn new(key_id: &str) -> Self {
         let now = crate::get_current_timestamp();
 
         Self {
-            key_id,
+            key_id: key_id.to_string(),
             created_at: now,
             last_rotated_at: None,
             rotation_count: 0,
@@ -86,20 +86,20 @@ impl KeyMetadata {
     /// Callers should check for u32::MAX and handle appropriately
     pub fn age_days(&self) -> u32 {
         let now = crate::get_current_timestamp();
-        
+
         // Validate timestamps to prevent overflow
         // Return u32::MAX to signal error
         if self.created_at == 0 || now == 0 {
             return u32::MAX; // Signal invalid timestamp
         }
-        
+
         if now < self.created_at {
             return u32::MAX; // Signal future timestamp (invalid)
         }
 
         let age_seconds = now.saturating_sub(self.created_at);
         let age_days = age_seconds / 86400; // Convert to days
-        
+
         // Safely convert u64 to u32, capping at u32::MAX to prevent truncation
         age_days.min(u32::MAX as u64) as u32
     }
@@ -117,12 +117,12 @@ impl KeyMetadata {
     /// Check if key should be rotated based on policy
     pub fn should_rotate(&self, policy: &KeyRotationPolicy) -> bool {
         let age = self.age_days();
-        
+
         // Reject invalid ages
         if age == u32::MAX {
             return false; // Invalid timestamp, don't rotate
         }
-        
+
         // Check if key age exceeds maximum (safely convert to u64 for comparison)
         if age as u64 >= policy.max_age_days {
             return true;
@@ -179,7 +179,7 @@ impl KeyRotationManager {
 
     /// Register a new key for rotation tracking
     pub fn register_key(&mut self, key_id: String) {
-        let metadata = KeyMetadata::new(key_id.clone());
+        let metadata = KeyMetadata::new(&key_id);
         self.key_metadata.insert(key_id, metadata);
     }
 
@@ -236,16 +236,18 @@ impl KeyRotationManager {
         let total_rotations: u64 = self.key_metadata.values().map(|m| m.rotation_count).sum();
 
         let avg_age_days = if total_keys > 0 {
-            let sum: u64 = self.key_metadata
+            let sum: u64 = self
+                .key_metadata
                 .values()
                 .map(|m| m.age_days() as u64) // Convert u32 to u64 before sum
                 .filter(|&age| age != u32::MAX as u64) // Filter out invalid timestamps
                 .sum();
-            let valid_count = self.key_metadata
+            let valid_count = self
+                .key_metadata
                 .values()
                 .filter(|m| m.age_days() != u32::MAX)
                 .count();
-            
+
             if valid_count > 0 {
                 sum / (valid_count as u64)
             } else {
@@ -285,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_key_metadata_creation() {
-        let metadata = KeyMetadata::new("test-key".to_string());
+        let metadata = KeyMetadata::new("test-key");
         assert_eq!(metadata.key_id, "test-key");
         assert_eq!(metadata.rotation_count, 0);
         assert!(!metadata.rotation_due);
@@ -306,7 +308,7 @@ mod tests {
     #[test]
     fn test_should_not_rotate_new_key() {
         let manager = KeyRotationManager::new();
-        let metadata = KeyMetadata::new("test-key".to_string());
+        let metadata = KeyMetadata::new("test-key");
 
         assert!(!metadata.should_rotate(manager.get_policy()));
     }

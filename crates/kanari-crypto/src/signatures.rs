@@ -228,8 +228,20 @@ fn sign_message_hybrid_ed25519(
     // Sign PQC part (Dilithium3)
     let pqc_sig = sign_message_dilithium3(pqc_secret, message)?;
 
+    // Validate classical signature length fits in u16 (prevent overflow)
+    if classical_sig.len() > u16::MAX as usize {
+        return Err(SignatureError::InvalidFormat(
+            "Classical signature too large".to_string(),
+        ));
+    }
+
     // Combine as: [2-byte classical_sig_len BE] || classical_sig || pqc_sig
-    let mut out = Vec::with_capacity(2 + classical_sig.len() + pqc_sig.len());
+    // Use checked_add to prevent overflow in capacity calculation
+    let total_capacity = 2usize
+        .checked_add(classical_sig.len())
+        .and_then(|sum| sum.checked_add(pqc_sig.len()))
+        .ok_or_else(|| SignatureError::InvalidFormat("Signature size overflow".to_string()))?;
+    let mut out = Vec::with_capacity(total_capacity);
     let len_be = (classical_sig.len() as u16).to_be_bytes();
     out.extend_from_slice(&len_be);
     out.extend_from_slice(&classical_sig);
@@ -240,7 +252,7 @@ fn sign_message_hybrid_ed25519(
 /// Sign a message using K256 (secp256k1) private key
 fn sign_message_k256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
     use zeroize::Zeroize;
-    
+
     // Hash the message with SHA3
     let mut hasher = Sha3_256::default();
     hasher.update(message);
@@ -269,7 +281,7 @@ fn sign_message_k256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 /// Sign a message using P256 (secp256r1) private key
 fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
     use zeroize::Zeroize;
-    
+
     // Hash the message with SHA3
     let mut hasher = Sha3_256::default();
     hasher.update(message);
@@ -298,7 +310,7 @@ fn sign_message_p256(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, S
 /// Sign a message using Ed25519 private key
 fn sign_message_ed25519(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, SignatureError> {
     use zeroize::Zeroize;
-    
+
     // Convert hex private key to bytes with zeroization
     let mut private_key_bytes = hex::decode(private_key_hex)
         .map_err(|_| SignatureError::InvalidPrivateKey("Invalid private key".to_string()))?;
@@ -388,12 +400,10 @@ pub fn verify_signature_safe(
     let clean_address = address.trim_start_matches("0x");
 
     // Try all classical curves without early return to prevent timing attacks
-    let k256_result = verify_signature_k256(clean_address, message, signature)
-        .unwrap_or(false);
-    let p256_result = verify_signature_p256(clean_address, message, signature)
-        .unwrap_or(false);
-    let ed25519_result = verify_signature_ed25519(clean_address, message, signature)
-        .unwrap_or(false);
+    let k256_result = verify_signature_k256(clean_address, message, signature).unwrap_or(false);
+    let p256_result = verify_signature_p256(clean_address, message, signature).unwrap_or(false);
+    let ed25519_result =
+        verify_signature_ed25519(clean_address, message, signature).unwrap_or(false);
 
     // Use OR to check if any verification succeeded (constant-time operation)
     let verified = k256_result || p256_result || ed25519_result;
@@ -443,10 +453,11 @@ pub fn verify_signature_with_curve(
             if signature.len() >= 2 {
                 let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
                 // Validate bounds to prevent integer overflow and out-of-bounds access
-                if classical_len > 0 
-                    && classical_len < signature.len() 
-                    && signature.len() >= 2usize.saturating_add(classical_len) 
-                    && 2 + classical_len <= signature.len() {
+                if classical_len > 0
+                    && classical_len < signature.len()
+                    && signature.len() >= 2usize.saturating_add(classical_len)
+                    && 2 + classical_len <= signature.len()
+                {
                     let classical_sig = &signature[2..2 + classical_len];
                     let pqc_sig = &signature[2 + classical_len..];
 
@@ -516,10 +527,11 @@ pub fn verify_signature_with_curve(
             if signature.len() >= 2 {
                 let classical_len = u16::from_be_bytes([signature[0], signature[1]]) as usize;
                 // Validate bounds to prevent integer overflow and out-of-bounds access
-                if classical_len > 0 
-                    && classical_len < signature.len() 
-                    && signature.len() >= 2usize.saturating_add(classical_len) 
-                    && 2 + classical_len <= signature.len() {
+                if classical_len > 0
+                    && classical_len < signature.len()
+                    && signature.len() >= 2usize.saturating_add(classical_len)
+                    && 2 + classical_len <= signature.len()
+                {
                     let classical_sig = &signature[2..2 + classical_len];
                     let pqc_sig = &signature[2 + classical_len..];
 
@@ -576,6 +588,13 @@ pub fn verify_signature_with_curve(
             let pub_bytes = hex::decode(address_hex).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
             })?;
+            // Validate key length (Dilithium2 public key is 1312 bytes)
+            if pub_bytes.len() != 1312 {
+                return Err(SignatureError::InvalidPublicKey(format!(
+                    "Invalid Dilithium2 public key length: expected 1312, got {}",
+                    pub_bytes.len()
+                )));
+            }
             let pk = dilithium2::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid Dilithium2 public key".to_string())
             })?;
@@ -592,6 +611,13 @@ pub fn verify_signature_with_curve(
             let pub_bytes = hex::decode(address_hex).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
             })?;
+            // Validate key length (Dilithium3 public key is 1952 bytes)
+            if pub_bytes.len() != 1952 {
+                return Err(SignatureError::InvalidPublicKey(format!(
+                    "Invalid Dilithium3 public key length: expected 1952, got {}",
+                    pub_bytes.len()
+                )));
+            }
             let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
             })?;
@@ -608,6 +634,13 @@ pub fn verify_signature_with_curve(
             let pub_bytes = hex::decode(address_hex).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
             })?;
+            // Validate key length (Dilithium5 public key is 2592 bytes)
+            if pub_bytes.len() != 2592 {
+                return Err(SignatureError::InvalidPublicKey(format!(
+                    "Invalid Dilithium5 public key length: expected 2592, got {}",
+                    pub_bytes.len()
+                )));
+            }
             let pk = dilithium5::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid Dilithium5 public key".to_string())
             })?;
@@ -656,24 +689,21 @@ fn verify_hybrid_signature(
             let classical_sig = &signature[2..2 + classical_len];
             let pqc_sig = &signature[2 + classical_len..];
 
-            let classical_ok = classical_verify_fn(classical_pub, message, classical_sig)
-                .unwrap_or(false);
+            let classical_ok =
+                classical_verify_fn(classical_pub, message, classical_sig).unwrap_or(false);
 
             let pqc_ok = if let Some(pqc_pub) = pqc_pub_opt {
                 if !pqc_sig.is_empty() {
                     let pub_bytes = hex::decode(pqc_pub).map_err(|_| {
+                        SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
+                    })?;
+                    let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                         SignatureError::InvalidPublicKey(
-                            "Invalid public key hex".to_string(),
+                            "Invalid Dilithium3 public key".to_string(),
                         )
                     })?;
-                    let pk =
-                        dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-                            SignatureError::InvalidPublicKey(
-                                "Invalid Dilithium3 public key".to_string(),
-                            )
-                        })?;
-                    let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig)
-                        .map_err(|_| {
+                    let sig_obj =
+                        dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
                             SignatureError::InvalidFormat(
                                 "Invalid signature bytes for Dilithium3".to_string(),
                             )
@@ -696,7 +726,7 @@ fn verify_hybrid_signature(
             }
         }
     }
-    
+
     Ok(false)
 }
 
@@ -722,24 +752,22 @@ pub fn verify_signature_with_keypair(
         CurveType::K256 => verify_signature_k256(classical_pub, message, signature),
         CurveType::P256 => verify_signature_p256(classical_pub, message, signature),
         CurveType::Ed25519 => verify_signature_ed25519(classical_pub, message, signature),
-        CurveType::K256Dilithium3 => {
-            verify_hybrid_signature(
-                signature,
-                classical_pub,
-                pqc_pub_opt,
-                message,
-                verify_signature_k256,
-            ).or_else(|_| verify_signature_k256(classical_pub, message, signature))
-        }
-        CurveType::Ed25519Dilithium3 => {
-            verify_hybrid_signature(
-                signature,
-                classical_pub,
-                pqc_pub_opt,
-                message,
-                verify_signature_ed25519,
-            ).or_else(|_| verify_signature_ed25519(classical_pub, message, signature))
-        }
+        CurveType::K256Dilithium3 => verify_hybrid_signature(
+            signature,
+            classical_pub,
+            pqc_pub_opt,
+            message,
+            verify_signature_k256,
+        )
+        .or_else(|_| verify_signature_k256(classical_pub, message, signature)),
+        CurveType::Ed25519Dilithium3 => verify_hybrid_signature(
+            signature,
+            classical_pub,
+            pqc_pub_opt,
+            message,
+            verify_signature_ed25519,
+        )
+        .or_else(|_| verify_signature_ed25519(classical_pub, message, signature)),
         // Pure PQC curves: public_key on KeyPair is the PQC public hex
         CurveType::Dilithium2 => {
             let pqc_pub = keypair.get_pqc_public_key().ok_or_else(|| {
@@ -748,6 +776,13 @@ pub fn verify_signature_with_keypair(
             let pub_bytes = hex::decode(&pqc_pub).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
             })?;
+            // Validate key length (Dilithium2 public key is 1312 bytes)
+            if pub_bytes.len() != 1312 {
+                return Err(SignatureError::InvalidPublicKey(format!(
+                    "Invalid Dilithium2 public key length: expected 1312, got {}",
+                    pub_bytes.len()
+                )));
+            }
             let pk = dilithium2::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid Dilithium2 public key".to_string())
             })?;
@@ -763,6 +798,13 @@ pub fn verify_signature_with_keypair(
             let pub_bytes = hex::decode(&pqc_pub).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
             })?;
+            // Validate key length (Dilithium3 public key is 1952 bytes)
+            if pub_bytes.len() != 1952 {
+                return Err(SignatureError::InvalidPublicKey(format!(
+                    "Invalid Dilithium3 public key length: expected 1952, got {}",
+                    pub_bytes.len()
+                )));
+            }
             let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
             })?;
@@ -778,6 +820,13 @@ pub fn verify_signature_with_keypair(
             let pub_bytes = hex::decode(&pqc_pub).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
             })?;
+            // Validate key length (Dilithium5 public key is 2592 bytes)
+            if pub_bytes.len() != 2592 {
+                return Err(SignatureError::InvalidPublicKey(format!(
+                    "Invalid Dilithium5 public key length: expected 2592, got {}",
+                    pub_bytes.len()
+                )));
+            }
             let pk = dilithium5::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid Dilithium5 public key".to_string())
             })?;
@@ -793,6 +842,13 @@ pub fn verify_signature_with_keypair(
             let pub_bytes = hex::decode(&pqc_pub).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid public key hex".to_string())
             })?;
+            // Validate key length (SPHINCS+ public key is 64 bytes)
+            if pub_bytes.len() != 64 {
+                return Err(SignatureError::InvalidPublicKey(format!(
+                    "Invalid SPHINCS+ public key length: expected 64, got {}",
+                    pub_bytes.len()
+                )));
+            }
             let pk = sphincssha2256fsimple::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
                 SignatureError::InvalidPublicKey("Invalid SPHINCS+ public key".to_string())
             })?;

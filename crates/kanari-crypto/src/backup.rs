@@ -11,8 +11,8 @@ use thiserror::Error;
 
 use crate::Keystore;
 use crate::encryption::{EncryptedData, decrypt_data, encrypt_data};
-use sha3::Sha3_256;
 use hmac::{Hmac, Mac};
+use sha3::Sha3_256;
 
 type HmacSha3_256 = Hmac<Sha3_256>;
 
@@ -137,7 +137,7 @@ impl BackupManager {
         // Calculate HMAC for integrity
         // Derive HMAC key from password using HKDF for better security
         let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
-        
+
         // Use HKDF to derive a proper HMAC key
         use sha3::Digest;
         let hkdf_salt = b"kanari-backup-hmac-v1"; // Version-specific salt
@@ -147,7 +147,7 @@ impl BackupManager {
         hasher.update(&password_zero[..]);
         derived_key.copy_from_slice(&hasher.finalize()[..]);
         let derived_key_zero = zeroize::Zeroizing::new(derived_key);
-        
+
         let mut mac = HmacSha3_256::new_from_slice(&derived_key_zero)
             .map_err(|e| BackupError::EncryptionError(format!("HMAC error: {}", e)))?;
         mac.update(&keystore_json);
@@ -176,22 +176,23 @@ impl BackupManager {
         // Generate backup filename with timestamp from metadata (ensures consistency)
         // Sanitize to prevent path traversal attacks
         let filename = format!("keystore_backup_{}.kbak", metadata.created_at);
-        
+
         // Validate filename doesn't contain dangerous characters
         // Check for path separators, null bytes, and control characters
-        if filename.contains(std::path::MAIN_SEPARATOR) 
-            || filename.contains('/') 
-            || filename.contains('\\') 
+        if filename.contains(std::path::MAIN_SEPARATOR)
+            || filename.contains('/')
+            || filename.contains('\\')
             || filename.contains('\0')
             || filename.chars().any(|c| c.is_control())
-            || filename.contains("..") {
+            || filename.contains("..")
+        {
             return Err(BackupError::SerializationError(
                 "Invalid backup filename".to_string(),
             ));
         }
-        
+
         let backup_path = self.backup_dir.join(&filename);
-        
+
         // Ensure the resolved path is still within backup_dir (prevent traversal)
         if !backup_path.starts_with(&self.backup_dir) {
             return Err(BackupError::SerializationError(
@@ -241,14 +242,13 @@ impl BackupManager {
         self.validate_backup_file(backup_path)?;
 
         // Read backup file atomically
-        let backup_data = fs::read_to_string(backup_path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    BackupError::NotFound(backup_path.display().to_string())
-                } else {
-                    BackupError::IoError(e)
-                }
-            })?;
+        let backup_data = fs::read_to_string(backup_path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                BackupError::NotFound(backup_path.display().to_string())
+            } else {
+                BackupError::IoError(e)
+            }
+        })?;
 
         // Deserialize backup
         let backup: EncryptedBackup = serde_json::from_str(&backup_data)
@@ -262,7 +262,7 @@ impl BackupManager {
         if verify {
             // Derive HMAC key from password using HKDF (same as create_backup)
             let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
-            
+
             use sha3::Digest;
             let hkdf_salt = b"kanari-backup-hmac-v1";
             let mut derived_key = vec![0u8; 32];
@@ -271,13 +271,13 @@ impl BackupManager {
             hasher.update(&password_zero[..]);
             derived_key.copy_from_slice(&hasher.finalize()[..]);
             let derived_key_zero = zeroize::Zeroizing::new(derived_key);
-            
+
             let mut mac = HmacSha3_256::new_from_slice(&derived_key_zero)
                 .map_err(|e| BackupError::VerificationFailed(format!("HMAC error: {}", e)))?;
             mac.update(&decrypted_data);
             let hmac_result = mac.finalize();
             let calculated_hmac = hex::encode(hmac_result.into_bytes());
-            
+
             if calculated_hmac != backup.metadata.checksum {
                 return Err(BackupError::VerificationFailed(
                     "HMAC verification failed".to_string(),
@@ -315,7 +315,7 @@ impl BackupManager {
     }
 
     /// List all available backups
-    /// 
+    ///
     /// Note: This function reads backup metadata from disk. Large backup directories
     /// may consume significant memory. Files are processed sequentially to limit
     /// memory usage, and oversized files (>50MB) are automatically skipped.
@@ -324,21 +324,23 @@ impl BackupManager {
 
         let mut backups = Vec::new();
         const MAX_BACKUP_READ_SIZE: u64 = 50 * 1024 * 1024; // 50MB
-        
+
         // Get canonical backup directory path for security validation
-        let canonical_backup_dir = self.backup_dir.canonicalize()
+        let canonical_backup_dir = self
+            .backup_dir
+            .canonicalize()
             .map_err(|e| BackupError::IoError(e))?;
 
         for entry in fs::read_dir(&self.backup_dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             // Security: Block symlinks to prevent directory traversal
             let metadata = entry.metadata()?;
             if metadata.is_symlink() {
                 continue; // Skip symlinks
             }
-            
+
             // Security: Validate path is within backup directory
             if let Ok(canonical_path) = path.canonicalize() {
                 if !canonical_path.starts_with(&canonical_backup_dir) {
@@ -351,27 +353,36 @@ impl BackupManager {
             if path.extension().and_then(|s| s.to_str()) == Some("kbak") {
                 // Check file size before reading
                 if metadata.len() > MAX_BACKUP_READ_SIZE {
-                    eprintln!("Warning: Skipping oversized backup file: {}", path.display());
+                    eprintln!(
+                        "Warning: Skipping oversized backup file: {}",
+                        path.display()
+                    );
                     continue; // Skip oversized files
                 }
 
                 match fs::read_to_string(&path) {
-                    Ok(data) => {
-                        match serde_json::from_str::<EncryptedBackup>(&data) {
-                            Ok(backup) => {
-                                backups.push(BackupInfo {
-                                    path: path.clone(),
-                                    metadata: backup.metadata,
-                                    file_size: metadata.len(),
-                                });
-                            }
-                            Err(e) => {
-                                eprintln!("Warning: Failed to parse backup file {}: {}", path.display(), e);
-                            }
+                    Ok(data) => match serde_json::from_str::<EncryptedBackup>(&data) {
+                        Ok(backup) => {
+                            backups.push(BackupInfo {
+                                path: path.clone(),
+                                metadata: backup.metadata,
+                                file_size: metadata.len(),
+                            });
                         }
-                    }
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to parse backup file {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    },
                     Err(e) => {
-                        eprintln!("Warning: Failed to read backup file {}: {}", path.display(), e);
+                        eprintln!(
+                            "Warning: Failed to read backup file {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                 }
             }

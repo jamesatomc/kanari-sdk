@@ -207,11 +207,12 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
         ));
     }
     if password.len() > crate::MAX_PASSWORD_LEN {
-        return Err(EncryptionError::InvalidInput(
-            format!("Password exceeds maximum length of {} bytes", crate::MAX_PASSWORD_LEN),
-        ));
+        return Err(EncryptionError::InvalidInput(format!(
+            "Password exceeds maximum length of {} bytes",
+            crate::MAX_PASSWORD_LEN
+        )));
     }
-    
+
     // Generate a random salt for key derivation
     let salt = SaltString::generate(&mut OsRng);
 
@@ -275,11 +276,12 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
         ));
     }
     if password.len() > crate::MAX_PASSWORD_LEN {
-        return Err(EncryptionError::InvalidInput(
-            format!("Password exceeds maximum length of {} bytes", crate::MAX_PASSWORD_LEN),
-        ));
+        return Err(EncryptionError::InvalidInput(format!(
+            "Password exceeds maximum length of {} bytes",
+            crate::MAX_PASSWORD_LEN
+        )));
     }
-    
+
     // Validate ciphertext size to prevent memory exhaustion attacks
     const MAX_CIPHERTEXT_SIZE: usize = 100 * 1024 * 1024; // 100MB
     // Decode ciphertext first (handles base64 or raw array) then check size in bytes

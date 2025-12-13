@@ -156,13 +156,13 @@ fn main() -> Result<()> {
             {
                 let kp = generate_keypair(curve_type).context("Failed to generate keypair")?;
                 let zk = kp.export_private_key_secure();
-                (zk.to_string(), kp.get_address(), String::new())
+                (zk.to_string(), kp.get_address().to_string(), String::new())
             } else {
                 let mnemonic = generate_mnemonic(words).context("Failed to generate mnemonic")?;
                 let kp = keypair_from_mnemonic(&mnemonic, curve_type, "")
                     .context("Failed to derive keypair from mnemonic")?;
                 let zk = kp.export_private_key_secure();
-                (zk.to_string(), kp.get_address(), mnemonic)
+                (zk.to_string(), kp.get_address().to_string(), mnemonic)
             };
 
             let address =
@@ -318,11 +318,11 @@ fn main() -> Result<()> {
                 println!("\nSENSITIVE INFORMATION (Keep Secret!):");
                 println!("─────────────────────────────────────────────────────────────────");
                 println!("Private Key:");
-                println!("   {}\n", wallet.private_key);
+                println!("   {}\n", wallet.private_key.as_str());
 
                 if !wallet.seed_phrase.is_empty() {
                     println!("Seed Phrase (BIP39 Mnemonic):");
-                    println!("   {}\n", wallet.seed_phrase);
+                    println!("   {}\n", wallet.seed_phrase.as_str());
                 } else {
                     println!("Seed Phrase:");
                     println!("   Not available - Post-Quantum keys use direct generation");

@@ -160,9 +160,9 @@ impl KeyPair {
         zeroize::Zeroizing::new(self.private_key.to_string())
     }
 
-    /// Get public key
-    pub fn get_public_key(&self) -> String {
-        self.public_key.clone()
+    /// Get public key as reference (avoid unnecessary cloning)
+    pub fn get_public_key(&self) -> &str {
+        &self.public_key
     }
 
     /// Get PQC public key if present
@@ -175,9 +175,9 @@ impl KeyPair {
         self.pqc_public_key.as_deref()
     }
 
-    /// Get address
-    pub fn get_address(&self) -> String {
-        self.address.clone()
+    /// Get address as reference (avoid unnecessary cloning)
+    pub fn get_address(&self) -> &str {
+        &self.address
     }
 
     /// Get a tagged address that includes curve type information
@@ -249,7 +249,7 @@ fn skip_uncompressed_point_prefix(bytes: &[u8]) -> &[u8] {
     if bytes.is_empty() {
         return bytes;
     }
-    
+
     if bytes[0] == 0x04 && bytes.len() > 1 {
         &bytes[1..]
     } else {
@@ -340,14 +340,14 @@ fn generate_p256_keypair() -> Result<KeyPair, KeyError> {
 /// Generate an Ed25519 keypair
 fn generate_ed25519_keypair() -> Result<KeyPair, KeyError> {
     use rand::RngCore;
-    
+
     // Generate random bytes for the private key using OS RNG
     let mut rng = OsRng;
     let mut seed = [0u8; 32];
-    
+
     // Fill with random bytes
     rng.fill_bytes(&mut seed);
-    
+
     // Validate entropy - ensure we didn't get all zeros (extremely unlikely but check anyway)
     if seed.iter().all(|&b| b == 0) {
         return Err(KeyError::GenerationFailed(
@@ -559,15 +559,17 @@ pub fn keypair_from_mnemonic(
 ) -> Result<KeyPair, KeyError> {
     // Validate inputs
     if phrase.trim().is_empty() {
-        return Err(KeyError::InvalidMnemonic("Empty mnemonic phrase".to_string()));
+        return Err(KeyError::InvalidMnemonic(
+            "Empty mnemonic phrase".to_string(),
+        ));
     }
-    
+
     // Password can be empty, but validate reasonable length
     const MAX_PASSWORD_LEN: usize = 1024;
     if password.len() > MAX_PASSWORD_LEN {
         return Err(KeyError::InvalidMnemonic("Password too long".to_string()));
     }
-    
+
     // Validate and create mnemonic
     let mnemonic = Mnemonic::parse_in(Language::English, phrase)
         .map_err(|e| KeyError::InvalidMnemonic(e.to_string()))?;
@@ -587,7 +589,7 @@ pub fn keypair_from_mnemonic(
 
             let encoded_point = public_key.to_encoded_point(false);
             let full_pub_hex = hex::encode(&encoded_point.as_bytes()[1..]);
-            
+
             // Validate hex length before creating address
             if full_pub_hex.len() < 64 {
                 return Err(KeyError::GenerationFailed(
@@ -668,7 +670,7 @@ pub fn keypair_from_private_key(
     curve_type: CurveType,
 ) -> Result<KeyPair, KeyError> {
     use zeroize::Zeroize;
-    
+
     // Remove kanari prefix if present
     let raw_private_key = extract_raw_key(private_key);
 
@@ -813,15 +815,15 @@ pub fn keypair_from_private_key(
 
             // Fallback: attempt to recover public key from secret bytes (backwards compatibility)
             let pqc_bytes = hex::decode(raw_for_pqc).map_err(|_| KeyError::InvalidPrivateKey)?;
-            
+
             // Prevent DoS: limit max input size and iterations
             const MAX_PQC_BYTES: usize = 10 * 1024; // 10KB max
             const MAX_ITERATIONS: usize = 1000;
-            
+
             if pqc_bytes.len() > MAX_PQC_BYTES {
                 return Err(KeyError::InvalidPrivateKey);
             }
-            
+
             let mut pqc_hex_opt: Option<String> = None;
             let max_iters = pqc_bytes.len().min(MAX_ITERATIONS);
 
@@ -944,11 +946,11 @@ pub fn keypair_from_private_key(
             } else {
                 // Fallback: try to recover public key from secret bytes (backwards compatibility)
                 let pqc_bytes = hex::decode(pqc_raw).map_err(|_| KeyError::InvalidPrivateKey)?;
-                
+
                 // Prevent DoS: limit max iterations
                 const MAX_HYBRID_ITERATIONS: usize = 500;
                 let start_len = 32usize.max(pqc_bytes.len().saturating_sub(MAX_HYBRID_ITERATIONS));
-                
+
                 let mut pqc_hex_opt: Option<String> = None;
                 for suffix_len in (start_len..=pqc_bytes.len()).rev() {
                     let start = pqc_bytes.len().saturating_sub(suffix_len);
@@ -1026,7 +1028,7 @@ pub fn generate_karix_address(
             let zk = keypair.export_private_key_secure();
             zk.to_string()
         },
-        keypair.get_address(),
+        keypair.get_address().to_string(),
         seed_phrase,
     ))
 }
@@ -1041,8 +1043,8 @@ pub fn import_from_seed_phrase(
             let zk = keypair.export_private_key_secure();
             (
                 zk.to_string(),
-                keypair.get_public_key(),
-                keypair.get_address(),
+                keypair.get_public_key().to_string(),
+                keypair.get_address().to_string(),
             )
         })
         .map_err(|e| e.to_string())
@@ -1058,8 +1060,8 @@ pub fn import_from_private_key(
             let zk = keypair.export_private_key_secure();
             (
                 zk.to_string(),
-                keypair.get_public_key(),
-                keypair.get_address(),
+                keypair.get_public_key().to_string(),
+                keypair.get_address().to_string(),
             )
         })
         .map_err(|e| e.to_string())

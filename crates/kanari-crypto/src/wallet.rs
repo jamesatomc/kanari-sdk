@@ -4,7 +4,7 @@
 //! storage, and loading of cryptocurrency wallets.
 
 use crate::keys::{CurveType, KANAHYBRID_PREFIX, KANAPQC_PREFIX, KANARI_KEY_PREFIX};
-use serde::{Deserialize, Serialize, Serializer, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::io;
 use std::str::FromStr;
 use thiserror::Error;
@@ -22,7 +22,10 @@ use crate::signatures; // ADDED: Import hd_wallet module
 use zeroize;
 
 // Helper functions for serializing/deserializing Zeroizing<String>
-fn serialize_zeroizing<S>(value: &zeroize::Zeroizing<String>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_zeroizing<S>(
+    value: &zeroize::Zeroizing<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -90,11 +93,17 @@ pub struct Wallet {
     pub address: AccountAddress,
     /// Private key wrapped in Zeroizing to clear memory on drop
     #[serde(skip_serializing_if = "String::is_empty", default)]
-    #[serde(serialize_with = "serialize_zeroizing", deserialize_with = "deserialize_zeroizing")]
+    #[serde(
+        serialize_with = "serialize_zeroizing",
+        deserialize_with = "deserialize_zeroizing"
+    )]
     pub private_key: zeroize::Zeroizing<String>,
     /// Seed phrase wrapped in Zeroizing to clear memory on drop
     #[serde(skip_serializing_if = "String::is_empty", default)]
-    #[serde(serialize_with = "serialize_zeroizing", deserialize_with = "deserialize_zeroizing")]
+    #[serde(
+        serialize_with = "serialize_zeroizing",
+        deserialize_with = "deserialize_zeroizing"
+    )]
     pub seed_phrase: zeroize::Zeroizing<String>,
     /// Optional derivation path (e.g. "m/44'/637'/0'/0/0") for HD wallets
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -229,9 +238,11 @@ pub fn save_wallet(
     // Validate data size before compression to prevent DoS
     const MAX_WALLET_SIZE: usize = 1024 * 1024; // 1MB should be more than enough for wallet data
     if toml_string.len() > MAX_WALLET_SIZE {
-        return Err(WalletError::SerializationError(
-            format!("Wallet data too large: {} bytes (max: {})", toml_string.len(), MAX_WALLET_SIZE)
-        ));
+        return Err(WalletError::SerializationError(format!(
+            "Wallet data too large: {} bytes (max: {})",
+            toml_string.len(),
+            MAX_WALLET_SIZE
+        )));
     }
 
     // Compress data before encryption to reduce ciphertext size
@@ -325,10 +336,11 @@ pub fn load_wallet(address: &str, password: &str) -> Result<Wallet, WalletError>
                 Ok(s) => match toml::from_str::<Wallet>(s) {
                     Ok(_) => decrypted,
                     Err(err) => {
+                        // Don't expose potentially sensitive data in error messages
                         return Err(WalletError::DecryptionError(format!(
-                            "Decompression failed and parsing as TOML failed: {}. First 50 bytes: {:?}",
+                            "Decompression failed and parsing as TOML failed: {}. Data length: {} bytes",
                             err,
-                            &decrypted.get(..50.min(decrypted.len())).unwrap_or(&[])
+                            decrypted.len()
                         )));
                     }
                 },
@@ -469,9 +481,11 @@ pub fn save_mnemonic(
     // Validate mnemonic size before compression to prevent DoS
     const MAX_MNEMONIC_SIZE: usize = 10240; // 10KB should be more than enough for any mnemonic
     if mnemonic.len() > MAX_MNEMONIC_SIZE {
-        return Err(WalletError::SerializationError(
-            format!("Mnemonic data too large: {} bytes (max: {})", mnemonic.len(), MAX_MNEMONIC_SIZE)
-        ));
+        return Err(WalletError::SerializationError(format!(
+            "Mnemonic data too large: {} bytes (max: {})",
+            mnemonic.len(),
+            MAX_MNEMONIC_SIZE
+        )));
     }
 
     // Compress mnemonic before encryption
@@ -704,7 +718,9 @@ mod tests {
                     MIN_RECOMMENDED_PASSWORD_LENGTH
                 )));
             }
-            _ => panic!("Expected EncryptionError"),
+            other => {
+                assert!(false, "Expected EncryptionError, got: {:?}", other);
+            }
         }
     }
 

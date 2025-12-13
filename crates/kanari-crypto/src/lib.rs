@@ -52,7 +52,7 @@ pub const MAX_PASSWORD_LEN: usize = 1024;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Get current Unix timestamp in seconds
-/// 
+///
 /// Returns current timestamp or 1 on system time error.
 /// Note: Return value of 1 indicates an error condition (system clock before epoch).
 /// Callers should treat timestamps near epoch (< 1000000000 = year 2001) as suspicious.
@@ -176,9 +176,20 @@ pub const MIN_RECOMMENDED_PASSWORD_LENGTH: usize = 16; // Increased for quantum 
 
 /// Common weak passwords to reject
 const COMMON_WEAK_PASSWORDS: &[&str] = &[
-    "password", "password123", "password1234", "12345678", "123456789",
-    "qwerty", "abc123", "letmein", "welcome", "admin", "root",
-    "Password123!", "Password1234!", "Passw0rd!",
+    "password",
+    "password123",
+    "password1234",
+    "12345678",
+    "123456789",
+    "qwerty",
+    "abc123",
+    "letmein",
+    "welcome",
+    "admin",
+    "root",
+    "Password123!",
+    "Password1234!",
+    "Passw0rd!",
 ];
 
 /// Check if a password meets strong security requirements
@@ -193,7 +204,7 @@ pub fn is_password_strong(password: &str) -> bool {
     if password.len() < MIN_RECOMMENDED_PASSWORD_LENGTH {
         return false;
     }
-    
+
     // Reject passwords with control characters or null bytes
     if password.chars().any(|c| c.is_control() || c == '\0') {
         return false;
@@ -201,7 +212,10 @@ pub fn is_password_strong(password: &str) -> bool {
 
     // Check for common weak passwords (case-insensitive)
     let password_lower = password.to_lowercase();
-    if COMMON_WEAK_PASSWORDS.iter().any(|weak| password_lower.contains(weak)) {
+    if COMMON_WEAK_PASSWORDS
+        .iter()
+        .any(|weak| password_lower.contains(weak))
+    {
         return false;
     }
 
@@ -213,7 +227,7 @@ pub fn is_password_strong(password: &str) -> bool {
     let has_uppercase = password.chars().any(|c| c.is_uppercase());
     let has_lowercase = password.chars().any(|c| c.is_lowercase());
     let has_digit = password.chars().any(|c| c.is_numeric());
-    
+
     // Define safe special characters explicitly
     const SPECIAL_CHARS: &str = "!@#$%^&*()_+-=[]{}|;:',.<>?/~`\"";
     let has_special = password.chars().any(|c| SPECIAL_CHARS.contains(c));
@@ -225,26 +239,27 @@ pub fn is_password_strong(password: &str) -> bool {
 fn has_repetitive_pattern(password: &str) -> bool {
     // Prevent DoS: limit password length for pattern checking
     const MAX_PATTERN_CHECK_LEN: usize = 128;
-    
+
     if password.len() > MAX_PATTERN_CHECK_LEN {
         // For very long passwords, just check the first part
         // Use char_indices to ensure we don't split UTF-8 characters
-        let truncate_pos = password.char_indices()
+        let truncate_pos = password
+            .char_indices()
             .nth(MAX_PATTERN_CHECK_LEN)
             .map(|(idx, _)| idx)
             .unwrap_or(password.len());
         return has_repetitive_pattern(&password[..truncate_pos]);
     }
-    
+
     let chars: Vec<char> = password.chars().collect();
-    
+
     // Check for 3+ consecutive identical characters
     for i in 0..chars.len().saturating_sub(2) {
         if chars[i] == chars[i + 1] && chars[i] == chars[i + 2] {
             return true;
         }
     }
-    
+
     // Check for repeating sequences (e.g., "abcabc") - limit check to reasonable size
     // Use char boundaries for string slicing to ensure UTF-8 safety
     let max_seq_len = (chars.len() / 2).min(32); // Cap at 32 characters (not bytes)
@@ -252,13 +267,14 @@ fn has_repetitive_pattern(password: &str) -> bool {
         if chars.len() >= seq_len * 2 {
             // Compare character sequences instead of byte slices
             let first_half: Vec<char> = chars.iter().take(seq_len).copied().collect();
-            let second_half: Vec<char> = chars.iter().skip(seq_len).take(seq_len).copied().collect();
+            let second_half: Vec<char> =
+                chars.iter().skip(seq_len).take(seq_len).copied().collect();
             if first_half == second_half {
                 return true;
             }
         }
     }
-    
+
     false
 }
 
@@ -269,6 +285,8 @@ pub struct RateLimiter {
     max_attempts: u32,
     lockout_duration_secs: u64,
 }
+
+const MAX_RATE_LIMITER_ENTRIES: usize = 1000;
 
 impl RateLimiter {
     /// Create a new rate limiter
@@ -283,6 +301,12 @@ impl RateLimiter {
     /// Check if an operation is allowed for the given identifier
     pub fn check_allowed(&mut self, identifier: &str) -> bool {
         let now = get_current_timestamp();
+
+        // Cleanup expired entries if too many accumulated (prevent memory leak)
+        if self.attempts.len() > MAX_RATE_LIMITER_ENTRIES {
+            self.attempts
+                .retain(|_, (_, locked_until)| now < *locked_until);
+        }
 
         if let Some((count, locked_until)) = self.attempts.get(identifier) {
             if now < *locked_until {

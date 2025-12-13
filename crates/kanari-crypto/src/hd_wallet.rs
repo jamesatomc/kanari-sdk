@@ -6,10 +6,13 @@
 use crate::keys::{CurveType, KANARI_KEY_PREFIX, KeyPair, keypair_from_private_key};
 use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
-use std::collections::HashMap;
 use thiserror::Error;
+
+// Maximum entries in rate limiter before cleanup (prevent memory leak)
+const MAX_RATE_LIMITER_ENTRIES: usize = 1000;
 
 // Rate limiter for derivation operations
 lazy_static::lazy_static! {
@@ -27,7 +30,7 @@ pub enum HdError {
 
     #[error("Key derivation failed: {0}")]
     DerivationFailed(String),
-    
+
     #[error("Rate limit exceeded: {0}")]
     RateLimitExceeded(String),
 }
@@ -89,49 +92,62 @@ pub fn derive_multiple_addresses(
     // Rate limiting: max 1000 derivations per 60 seconds per mnemonic
     const MAX_DERIVATIONS_PER_MINUTE: usize = 1000;
     const RATE_LIMIT_WINDOW_SECS: u64 = 60;
-    
+
     let mnemonic_hash = {
         use sha3::{Digest, Sha3_256};
         let mut hasher = Sha3_256::new();
         hasher.update(mnemonic_phrase.as_bytes());
         hex::encode(&hasher.finalize()[..8]) // Use first 8 bytes as key
     };
-    
+
     {
-        let mut limiter = DERIVE_RATE_LIMITER.lock()
-            .map_err(|_| HdError::DerivationFailed("Rate limiter lock poisoned".to_string()))?;
-        
+        // Handle mutex poisoning by recovering from poisoned state
+        let mut limiter = DERIVE_RATE_LIMITER.lock().unwrap_or_else(|poisoned| {
+            // Recover from poisoned mutex - data is still valid
+            poisoned.into_inner()
+        });
+
         let now = crate::get_current_timestamp();
-        let (count_in_window, window_start) = limiter.entry(mnemonic_hash.clone())
-            .or_insert((0, now));
-        
+
+        // Cleanup expired entries if too many accumulated (prevent memory leak)
+        if limiter.len() > MAX_RATE_LIMITER_ENTRIES {
+            limiter.retain(|_, (_, window_start)| {
+                now.saturating_sub(*window_start) < RATE_LIMIT_WINDOW_SECS * 2
+            });
+        }
+
+        let (count_in_window, window_start) =
+            limiter.entry(mnemonic_hash.clone()).or_insert((0, now));
+
         // Reset window if expired
         if now.saturating_sub(*window_start) > RATE_LIMIT_WINDOW_SECS {
             *count_in_window = 0;
             *window_start = now;
         }
-        
+
         // Check rate limit
         if *count_in_window + count > MAX_DERIVATIONS_PER_MINUTE {
-            return Err(HdError::RateLimitExceeded(
-                format!("Maximum {} derivations per {} seconds exceeded", 
-                    MAX_DERIVATIONS_PER_MINUTE, RATE_LIMIT_WINDOW_SECS)
-            ));
+            return Err(HdError::RateLimitExceeded(format!(
+                "Maximum {} derivations per {} seconds exceeded",
+                MAX_DERIVATIONS_PER_MINUTE, RATE_LIMIT_WINDOW_SECS
+            )));
         }
-        
+
         *count_in_window += count;
     }
-    
+
     // Validate inputs
     if mnemonic_phrase.trim().is_empty() {
-        return Err(HdError::InvalidMnemonic("Empty mnemonic phrase".to_string()));
+        return Err(HdError::InvalidMnemonic(
+            "Empty mnemonic phrase".to_string(),
+        ));
     }
-    
+
     // Password can be empty but validate it's valid UTF-8 by checking length
     if password.len() > 1024 {
         return Err(HdError::DerivationFailed("Password too long".to_string()));
     }
-    
+
     // Validate maximum count to prevent DoS via unbounded allocation
     const MAX_DERIVE_COUNT: usize = 10_000;
     if count > MAX_DERIVE_COUNT {

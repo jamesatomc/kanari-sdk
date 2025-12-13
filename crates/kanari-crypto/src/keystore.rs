@@ -10,6 +10,9 @@ use std::io;
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Maximum number of keys allowed in keystore to prevent DoS
+const MAX_KEYSTORE_KEYS: usize = 10_000;
+
 use fs2::FileExt;
 use kanari_common::get_kanari_config_path;
 
@@ -141,7 +144,7 @@ impl Keystore {
         // Use try_lock_shared with retry logic to prevent indefinite blocking
         let max_retries = 50; // 5 seconds total (50 * 100ms)
         let mut acquired = false;
-        
+
         for _ in 0..max_retries {
             match lock_file.try_lock_shared() {
                 Ok(_) => {
@@ -154,7 +157,7 @@ impl Keystore {
                 }
             }
         }
-        
+
         if !acquired {
             return Err(KeystoreError::Locked);
         }
@@ -215,7 +218,7 @@ impl Keystore {
         // Try to acquire exclusive lock with timeout
         let max_retries = 50; // 5 seconds total (50 * 100ms)
         let mut acquired = false;
-        
+
         for _ in 0..max_retries {
             match lock_file.try_lock_exclusive() {
                 Ok(_) => {
@@ -228,7 +231,7 @@ impl Keystore {
                 }
             }
         }
-        
+
         if !acquired {
             return Err(KeystoreError::Locked);
         }
@@ -263,6 +266,10 @@ impl Keystore {
         address: &str,
         encrypted_data: EncryptedData,
     ) -> Result<(), KeystoreError> {
+        // Prevent DoS via excessive key count
+        if !self.keys.contains_key(address) && self.keys.len() >= MAX_KEYSTORE_KEYS {
+            return Err(KeystoreError::InvalidFormat);
+        }
         self.keys.insert(address.to_string(), encrypted_data);
         self.save()?;
         Ok(())
@@ -344,12 +351,12 @@ impl Keystore {
     pub fn validate(&self) -> Result<(), KeystoreError> {
         // Prevent DoS: limit maximum keys to validate
         const MAX_KEYS_TO_VALIDATE: usize = 10_000;
-        
+
         // Check version compatibility
         if self.version.is_empty() {
             return Err(KeystoreError::InvalidFormat);
         }
-        
+
         // Check key count limit
         if self.keys.len() > MAX_KEYS_TO_VALIDATE {
             return Err(KeystoreError::Corrupted(format!(
