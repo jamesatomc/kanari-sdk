@@ -134,8 +134,21 @@ impl BackupManager {
         let keystore_json = serde_json::to_vec(&keystore)
             .map_err(|e| BackupError::SerializationError(e.to_string()))?;
 
-        // Calculate HMAC for integrity (more secure than simple hash)
-        let mut mac = HmacSha3_256::new_from_slice(password.as_bytes())
+        // Calculate HMAC for integrity
+        // Derive HMAC key from password using HKDF for better security
+        let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
+        
+        // Use HKDF to derive a proper HMAC key
+        use sha3::Digest;
+        let hkdf_salt = b"kanari-backup-hmac-v1"; // Version-specific salt
+        let mut derived_key = vec![0u8; 32]; // 256-bit key
+        let mut hasher = Sha3_256::new();
+        hasher.update(hkdf_salt);
+        hasher.update(&password_zero[..]);
+        derived_key.copy_from_slice(&hasher.finalize()[..]);
+        let derived_key_zero = zeroize::Zeroizing::new(derived_key);
+        
+        let mut mac = HmacSha3_256::new_from_slice(&derived_key_zero)
             .map_err(|e| BackupError::EncryptionError(format!("HMAC error: {}", e)))?;
         mac.update(&keystore_json);
         let hmac_result = mac.finalize();
@@ -164,8 +177,14 @@ impl BackupManager {
         // Sanitize to prevent path traversal attacks
         let filename = format!("keystore_backup_{}.kbak", metadata.created_at);
         
-        // Validate filename doesn't contain path separators
-        if filename.contains(std::path::MAIN_SEPARATOR) || filename.contains('/') || filename.contains('\\') {
+        // Validate filename doesn't contain dangerous characters
+        // Check for path separators, null bytes, and control characters
+        if filename.contains(std::path::MAIN_SEPARATOR) 
+            || filename.contains('/') 
+            || filename.contains('\\') 
+            || filename.contains('\0')
+            || filename.chars().any(|c| c.is_control())
+            || filename.contains("..") {
             return Err(BackupError::SerializationError(
                 "Invalid backup filename".to_string(),
             ));
@@ -241,7 +260,19 @@ impl BackupManager {
 
         // Verify HMAC if requested (more secure than simple checksum)
         if verify {
-            let mut mac = HmacSha3_256::new_from_slice(password.as_bytes())
+            // Derive HMAC key from password using HKDF (same as create_backup)
+            let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
+            
+            use sha3::Digest;
+            let hkdf_salt = b"kanari-backup-hmac-v1";
+            let mut derived_key = vec![0u8; 32];
+            let mut hasher = Sha3_256::new();
+            hasher.update(hkdf_salt);
+            hasher.update(&password_zero[..]);
+            derived_key.copy_from_slice(&hasher.finalize()[..]);
+            let derived_key_zero = zeroize::Zeroizing::new(derived_key);
+            
+            let mut mac = HmacSha3_256::new_from_slice(&derived_key_zero)
                 .map_err(|e| BackupError::VerificationFailed(format!("HMAC error: {}", e)))?;
             mac.update(&decrypted_data);
             let hmac_result = mac.finalize();

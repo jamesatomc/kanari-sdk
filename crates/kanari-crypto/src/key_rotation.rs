@@ -81,24 +81,27 @@ impl KeyMetadata {
         }
     }
 
-    /// Get age of key in days
-    /// Returns 0 if timestamp is invalid (for backward compatibility)
-    /// Callers should check for 0 and handle appropriately
-    pub fn age_days(&self) -> u64 {
+    /// Get age of key in days (returns u32 to prevent overflow on 32-bit systems)
+    /// Returns u32::MAX if timestamp is invalid
+    /// Callers should check for u32::MAX and handle appropriately
+    pub fn age_days(&self) -> u32 {
         let now = crate::get_current_timestamp();
         
         // Validate timestamps to prevent overflow
-        // Return u64::MAX to signal error (distinguishable from valid 0)
+        // Return u32::MAX to signal error
         if self.created_at == 0 || now == 0 {
-            return u64::MAX; // Signal invalid timestamp
+            return u32::MAX; // Signal invalid timestamp
         }
         
         if now < self.created_at {
-            return u64::MAX; // Signal future timestamp (invalid)
+            return u32::MAX; // Signal future timestamp (invalid)
         }
 
         let age_seconds = now.saturating_sub(self.created_at);
-        age_seconds / 86400 // Convert to days
+        let age_days = age_seconds / 86400; // Convert to days
+        
+        // Safely convert u64 to u32, capping at u32::MAX to prevent truncation
+        age_days.min(u32::MAX as u64) as u32
     }
 
     /// Get time since last rotation in hours
@@ -113,8 +116,15 @@ impl KeyMetadata {
 
     /// Check if key should be rotated based on policy
     pub fn should_rotate(&self, policy: &KeyRotationPolicy) -> bool {
-        // Check if key age exceeds maximum
-        if self.age_days() >= policy.max_age_days {
+        let age = self.age_days();
+        
+        // Reject invalid ages
+        if age == u32::MAX {
+            return false; // Invalid timestamp, don't rotate
+        }
+        
+        // Check if key age exceeds maximum (safely convert to u64 for comparison)
+        if age as u64 >= policy.max_age_days {
             return true;
         }
 
@@ -228,12 +238,12 @@ impl KeyRotationManager {
         let avg_age_days = if total_keys > 0 {
             let sum: u64 = self.key_metadata
                 .values()
-                .map(|m| m.age_days())
-                .filter(|&age| age != u64::MAX) // Filter out invalid timestamps
+                .map(|m| m.age_days() as u64) // Convert u32 to u64 before sum
+                .filter(|&age| age != u32::MAX as u64) // Filter out invalid timestamps
                 .sum();
             let valid_count = self.key_metadata
                 .values()
-                .filter(|m| m.age_days() != u64::MAX)
+                .filter(|m| m.age_days() != u32::MAX)
                 .count();
             
             if valid_count > 0 {

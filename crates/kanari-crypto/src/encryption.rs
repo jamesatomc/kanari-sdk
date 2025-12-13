@@ -106,6 +106,9 @@ pub enum EncryptionError {
     #[error("Invalid format error: {0}")]
     InvalidFormat(String),
 
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("Decryption error")]
     DecryptionError,
 
@@ -197,14 +200,28 @@ impl fmt::Display for EncryptedData {
 
 /// Encrypt data with a password
 pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, EncryptionError> {
+    // Validate password length
+    if password.is_empty() {
+        return Err(EncryptionError::InvalidInput(
+            "Password cannot be empty".to_string(),
+        ));
+    }
+    if password.len() > crate::MAX_PASSWORD_LEN {
+        return Err(EncryptionError::InvalidInput(
+            format!("Password exceeds maximum length of {} bytes", crate::MAX_PASSWORD_LEN),
+        ));
+    }
+    
     // Generate a random salt for key derivation
     let salt = SaltString::generate(&mut OsRng);
 
     // Derive a cryptographic key from the password
+    // Wrap password in Zeroizing to ensure memory is cleared
+    let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
     let params = argon2_params()?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let password_hash = argon
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(&password_zero, &salt)
         .map_err(|e| EncryptionError::KeyDerivationError(e.to_string()))?;
 
     let hash = password_hash.hash.ok_or_else(|| {
@@ -251,6 +268,18 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<EncryptedData, Encryp
 
 /// Decrypt data with a password
 pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>, EncryptionError> {
+    // Validate password length
+    if password.is_empty() {
+        return Err(EncryptionError::InvalidInput(
+            "Password cannot be empty".to_string(),
+        ));
+    }
+    if password.len() > crate::MAX_PASSWORD_LEN {
+        return Err(EncryptionError::InvalidInput(
+            format!("Password exceeds maximum length of {} bytes", crate::MAX_PASSWORD_LEN),
+        ));
+    }
+    
     // Validate ciphertext size to prevent memory exhaustion attacks
     const MAX_CIPHERTEXT_SIZE: usize = 100 * 1024 * 1024; // 100MB
     // Decode ciphertext first (handles base64 or raw array) then check size in bytes
@@ -266,9 +295,11 @@ pub fn decrypt_data(encrypted: &EncryptedData, password: &str) -> Result<Vec<u8>
         .map_err(|_| EncryptionError::InvalidFormat("Invalid salt format".to_string()))?;
 
     // Derive key from password and salt
+    // Wrap password in Zeroizing to ensure memory is cleared
+    let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
     let params = argon2_params()?;
     let password_hash = Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(&password_zero, &salt)
         .map_err(|_| EncryptionError::KeyDerivationError("Key derivation failed".to_string()))?;
 
     // Fix for the temporary value dropped error - ensure intermediates are zeroized

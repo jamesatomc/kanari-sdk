@@ -13,7 +13,13 @@ fn main() {
     println!("-------------------------------------------------------");
 
     // Generate a new K256 wallet
-    let keypair = generate_keypair(CurveType::K256).expect("Failed to generate K256 keypair");
+    let keypair = match generate_keypair(CurveType::K256) {
+        Ok(kp) => kp,
+        Err(e) => {
+            eprintln!("Failed to generate K256 keypair: {}", e);
+            return;
+        }
+    };
 
     println!("Generated new K256 wallet:");
     println!("  Address: {}", keypair.address);
@@ -57,7 +63,13 @@ fn main() {
     println!("---------------------");
 
     // Generate a new P256 wallet
-    let p256_keypair = generate_keypair(CurveType::P256).expect("Failed to generate P256 keypair");
+    let p256_keypair = match generate_keypair(CurveType::P256) {
+        Ok(kp) => kp,
+        Err(e) => {
+            eprintln!("Failed to generate P256 keypair: {}", e);
+            return;
+        }
+    };
 
     println!("Generated new P256 wallet:");
     println!("  Address: {}", p256_keypair.address);
@@ -190,8 +202,13 @@ fn main() {
     println!("------------------------");
 
     // Generate a new Ed25519 wallet
-    let ed25519_keypair =
-        generate_keypair(CurveType::Ed25519).expect("Failed to generate Ed25519 keypair");
+    let ed25519_keypair = match generate_keypair(CurveType::Ed25519) {
+        Ok(kp) => kp,
+        Err(e) => {
+            eprintln!("Failed to generate Ed25519 keypair: {}", e);
+            return;
+        }
+    };
 
     println!("Generated new Ed25519 wallet:");
     println!("  Address: {}", ed25519_keypair.address);

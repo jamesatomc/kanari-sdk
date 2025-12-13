@@ -45,6 +45,9 @@ pub use keystore::{Keystore, get_keystore_path, keystore_exists};
 // Re-export compression functionality
 pub use compression::{compress_data, decompress_data};
 
+// Constants for security limits
+pub const MAX_PASSWORD_LEN: usize = 1024;
+
 // Timestamp utilities
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -183,10 +186,16 @@ const COMMON_WEAK_PASSWORDS: &[&str] = &[
 /// - At least one uppercase letter
 /// - At least one lowercase letter
 /// - At least one digit
-/// - At least one special character
+/// - At least one special character from safe set
 /// - Not in common weak passwords list
+/// - No control characters or null bytes
 pub fn is_password_strong(password: &str) -> bool {
     if password.len() < MIN_RECOMMENDED_PASSWORD_LENGTH {
+        return false;
+    }
+    
+    // Reject passwords with control characters or null bytes
+    if password.chars().any(|c| c.is_control() || c == '\0') {
         return false;
     }
 
@@ -204,7 +213,10 @@ pub fn is_password_strong(password: &str) -> bool {
     let has_uppercase = password.chars().any(|c| c.is_uppercase());
     let has_lowercase = password.chars().any(|c| c.is_lowercase());
     let has_digit = password.chars().any(|c| c.is_numeric());
-    let has_special = password.chars().any(|c| !c.is_alphanumeric());
+    
+    // Define safe special characters explicitly
+    const SPECIAL_CHARS: &str = "!@#$%^&*()_+-=[]{}|;:',.<>?/~`\"";
+    let has_special = password.chars().any(|c| SPECIAL_CHARS.contains(c));
 
     has_uppercase && has_lowercase && has_digit && has_special
 }
@@ -216,7 +228,12 @@ fn has_repetitive_pattern(password: &str) -> bool {
     
     if password.len() > MAX_PATTERN_CHECK_LEN {
         // For very long passwords, just check the first part
-        return has_repetitive_pattern(&password[..MAX_PATTERN_CHECK_LEN]);
+        // Use char_indices to ensure we don't split UTF-8 characters
+        let truncate_pos = password.char_indices()
+            .nth(MAX_PATTERN_CHECK_LEN)
+            .map(|(idx, _)| idx)
+            .unwrap_or(password.len());
+        return has_repetitive_pattern(&password[..truncate_pos]);
     }
     
     let chars: Vec<char> = password.chars().collect();
@@ -229,11 +246,13 @@ fn has_repetitive_pattern(password: &str) -> bool {
     }
     
     // Check for repeating sequences (e.g., "abcabc") - limit check to reasonable size
-    let max_seq_len = (password.len() / 2).min(32); // Cap at 32 chars
+    // Use char boundaries for string slicing to ensure UTF-8 safety
+    let max_seq_len = (chars.len() / 2).min(32); // Cap at 32 characters (not bytes)
     for seq_len in 2..=max_seq_len {
-        if password.len() >= seq_len * 2 {
-            let first_half = &password[..seq_len];
-            let second_half = &password[seq_len..seq_len * 2];
+        if chars.len() >= seq_len * 2 {
+            // Compare character sequences instead of byte slices
+            let first_half: Vec<char> = chars.iter().take(seq_len).copied().collect();
+            let second_half: Vec<char> = chars.iter().skip(seq_len).take(seq_len).copied().collect();
             if first_half == second_half {
                 return true;
             }

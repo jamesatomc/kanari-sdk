@@ -7,7 +7,14 @@ use crate::keys::{CurveType, KANARI_KEY_PREFIX, KeyPair, keypair_from_private_ke
 use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic};
 use std::str::FromStr;
+use std::sync::Mutex;
+use std::collections::HashMap;
 use thiserror::Error;
+
+// Rate limiter for derivation operations
+lazy_static::lazy_static! {
+    static ref DERIVE_RATE_LIMITER: Mutex<HashMap<String, (usize, u64)>> = Mutex::new(HashMap::new());
+}
 
 /// Errors returned from HD wallet operations
 #[derive(Error, Debug)]
@@ -20,6 +27,9 @@ pub enum HdError {
 
     #[error("Key derivation failed: {0}")]
     DerivationFailed(String),
+    
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
 }
 
 /// Derive a child private key from the mnemonic at the given derivation path
@@ -68,6 +78,7 @@ pub fn derive_keypair_from_path(
 }
 
 /// Derive multiple addresses using a path template that contains `{index}`.
+/// Includes rate limiting to prevent DoS attacks via repeated calls.
 pub fn derive_multiple_addresses(
     mnemonic_phrase: &str,
     password: &str,
@@ -75,6 +86,42 @@ pub fn derive_multiple_addresses(
     curve: CurveType,
     count: usize,
 ) -> Result<Vec<KeyPair>, HdError> {
+    // Rate limiting: max 1000 derivations per 60 seconds per mnemonic
+    const MAX_DERIVATIONS_PER_MINUTE: usize = 1000;
+    const RATE_LIMIT_WINDOW_SECS: u64 = 60;
+    
+    let mnemonic_hash = {
+        use sha3::{Digest, Sha3_256};
+        let mut hasher = Sha3_256::new();
+        hasher.update(mnemonic_phrase.as_bytes());
+        hex::encode(&hasher.finalize()[..8]) // Use first 8 bytes as key
+    };
+    
+    {
+        let mut limiter = DERIVE_RATE_LIMITER.lock()
+            .map_err(|_| HdError::DerivationFailed("Rate limiter lock poisoned".to_string()))?;
+        
+        let now = crate::get_current_timestamp();
+        let (count_in_window, window_start) = limiter.entry(mnemonic_hash.clone())
+            .or_insert((0, now));
+        
+        // Reset window if expired
+        if now.saturating_sub(*window_start) > RATE_LIMIT_WINDOW_SECS {
+            *count_in_window = 0;
+            *window_start = now;
+        }
+        
+        // Check rate limit
+        if *count_in_window + count > MAX_DERIVATIONS_PER_MINUTE {
+            return Err(HdError::RateLimitExceeded(
+                format!("Maximum {} derivations per {} seconds exceeded", 
+                    MAX_DERIVATIONS_PER_MINUTE, RATE_LIMIT_WINDOW_SECS)
+            ));
+        }
+        
+        *count_in_window += count;
+    }
+    
     // Validate inputs
     if mnemonic_phrase.trim().is_empty() {
         return Err(HdError::InvalidMnemonic("Empty mnemonic phrase".to_string()));

@@ -50,7 +50,9 @@ pub enum KeystoreError {
 }
 
 /// Structure representing the keystore file
-#[derive(Serialize, Deserialize, Default)]
+/// Note: Default trait is derived but should not be used directly for creating keystores
+/// Always use Keystore::new() or Keystore::load() to ensure proper initialization
+#[derive(Serialize, Deserialize)]
 pub struct Keystore {
     /// Individual wallet keys by address
     pub keys: HashMap<String, EncryptedData>,
@@ -106,6 +108,18 @@ pub struct MnemonicStore {
 }
 
 impl Keystore {
+    /// Create a new empty keystore with proper initialization
+    fn default() -> Self {
+        Self {
+            keys: HashMap::new(),
+            mnemonic: MnemonicStore::default(),
+            password_hash: None,
+            is_password_empty: false,
+            version: default_keystore_version(),
+            last_modified: None,
+        }
+    }
+
     /// Load keystore from disk
     pub fn load() -> Result<Self, KeystoreError> {
         let keystore_path = get_keystore_path();
@@ -123,8 +137,25 @@ impl Keystore {
             .open(&lock_path)
             .map_err(|e| KeystoreError::IoError(e))?;
 
-        // Try to acquire shared lock for reading
-        if let Err(_) = lock_file.try_lock_shared() {
+        // Try to acquire shared lock for reading with timeout
+        // Use try_lock_shared with retry logic to prevent indefinite blocking
+        let max_retries = 50; // 5 seconds total (50 * 100ms)
+        let mut acquired = false;
+        
+        for _ in 0..max_retries {
+            match lock_file.try_lock_shared() {
+                Ok(_) => {
+                    acquired = true;
+                    break;
+                }
+                Err(_) => {
+                    // Wait 100ms before retry
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+        
+        if !acquired {
             return Err(KeystoreError::Locked);
         }
 
@@ -181,8 +212,24 @@ impl Keystore {
             .open(&lock_path)
             .map_err(|e| KeystoreError::IoError(e))?;
 
-        // Try to acquire exclusive lock without blocking
-        if let Err(_) = lock_file.try_lock_exclusive() {
+        // Try to acquire exclusive lock with timeout
+        let max_retries = 50; // 5 seconds total (50 * 100ms)
+        let mut acquired = false;
+        
+        for _ in 0..max_retries {
+            match lock_file.try_lock_exclusive() {
+                Ok(_) => {
+                    acquired = true;
+                    break;
+                }
+                Err(_) => {
+                    // Wait 100ms before retry
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+        
+        if !acquired {
             return Err(KeystoreError::Locked);
         }
 

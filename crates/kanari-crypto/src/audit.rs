@@ -166,9 +166,17 @@ impl AuditEntry {
         self
     }
 
-    /// Builder method to set details
+    /// Builder method to set details (supports error context for forensics)
     pub fn with_details(mut self, details: impl Into<String>) -> Self {
         self.details = Some(details.into());
+        self
+    }
+    
+    /// Builder method to set error details (for failed operations)
+    pub fn with_error(mut self, error: impl std::fmt::Display) -> Self {
+        let error_details = format!("Error: {}", error);
+        self.details = Some(error_details);
+        self.success = false;
         self
     }
 

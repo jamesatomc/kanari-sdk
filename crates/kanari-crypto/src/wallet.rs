@@ -4,7 +4,7 @@
 //! storage, and loading of cryptocurrency wallets.
 
 use crate::keys::{CurveType, KANAHYBRID_PREFIX, KANAPQC_PREFIX, KANARI_KEY_PREFIX};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, Deserializer};
 use std::io;
 use std::str::FromStr;
 use thiserror::Error;
@@ -19,6 +19,23 @@ use crate::compression;
 use crate::encryption;
 use crate::hd_wallet::{self, HdError};
 use crate::signatures; // ADDED: Import hd_wallet module
+use zeroize;
+
+// Helper functions for serializing/deserializing Zeroizing<String>
+fn serialize_zeroizing<S>(value: &zeroize::Zeroizing<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(value.as_str())
+}
+
+fn deserialize_zeroizing<'de, D>(deserializer: D) -> Result<zeroize::Zeroizing<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(zeroize::Zeroizing::new(s))
+}
 
 /// Errors that can occur during wallet operations
 #[derive(Error, Debug)]
@@ -71,10 +88,14 @@ pub enum WalletError {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Wallet {
     pub address: AccountAddress,
+    /// Private key wrapped in Zeroizing to clear memory on drop
     #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub private_key: String,
+    #[serde(serialize_with = "serialize_zeroizing", deserialize_with = "deserialize_zeroizing")]
+    pub private_key: zeroize::Zeroizing<String>,
+    /// Seed phrase wrapped in Zeroizing to clear memory on drop
     #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub seed_phrase: String,
+    #[serde(serialize_with = "serialize_zeroizing", deserialize_with = "deserialize_zeroizing")]
+    pub seed_phrase: zeroize::Zeroizing<String>,
     /// Optional derivation path (e.g. "m/44'/637'/0'/0/0") for HD wallets
     #[serde(skip_serializing_if = "Option::is_none")]
     pub derivation_path: Option<String>,
@@ -92,8 +113,8 @@ impl Wallet {
     ) -> Self {
         Self {
             address,
-            private_key,
-            seed_phrase,
+            private_key: zeroize::Zeroizing::new(private_key),
+            seed_phrase: zeroize::Zeroizing::new(seed_phrase),
             derivation_path,
             curve_type,
         }
@@ -113,18 +134,10 @@ impl Wallet {
             return Err(WalletError::InvalidPassword);
         }
 
-        // Create a temporary copy of the private key for signing
-        let private_key_copy = self.private_key.clone();
-
-        // Sign the message
-        let result = signatures::sign_message(&private_key_copy, message, self.curve_type)
-            .map_err(|e| WalletError::SigningError(e.to_string()));
-
-        // Securely clear the private key copy from memory
-        let mut private_key_bytes = private_key_copy.into_bytes();
-        signatures::secure_clear(&mut private_key_bytes);
-
-        result
+        // Sign the message - use reference to avoid unnecessary clone
+        // Zeroizing wrapper already protects the private_key field
+        signatures::sign_message(&self.private_key, message, self.curve_type)
+            .map_err(|e| WalletError::SigningError(e.to_string()))
     }
 
     /// Verify a signature made with this wallet against a message
@@ -203,8 +216,8 @@ pub fn save_wallet(
     // Create wallet object
     let wallet_data = Wallet {
         address: *address,
-        private_key: formatted_private_key,
-        seed_phrase: seed_phrase.to_string(),
+        private_key: zeroize::Zeroizing::new(formatted_private_key),
+        seed_phrase: zeroize::Zeroizing::new(seed_phrase.to_string()),
         derivation_path: derivation_path.map(|s| s.to_string()),
         curve_type,
     };
@@ -212,6 +225,14 @@ pub fn save_wallet(
     // Serialize wallet to TOML (more readable than JSON)
     let toml_string = toml::to_string(&wallet_data)
         .map_err(|e| WalletError::SerializationError(e.to_string()))?;
+
+    // Validate data size before compression to prevent DoS
+    const MAX_WALLET_SIZE: usize = 1024 * 1024; // 1MB should be more than enough for wallet data
+    if toml_string.len() > MAX_WALLET_SIZE {
+        return Err(WalletError::SerializationError(
+            format!("Wallet data too large: {} bytes (max: {})", toml_string.len(), MAX_WALLET_SIZE)
+        ));
+    }
 
     // Compress data before encryption to reduce ciphertext size
     let compressed_data = compression::compress_data(toml_string.as_bytes())
@@ -442,6 +463,14 @@ pub fn save_mnemonic(
     if mnemonic.is_empty() {
         return Err(WalletError::EncryptionError(
             "Empty mnemonic not allowed".to_string(),
+        ));
+    }
+
+    // Validate mnemonic size before compression to prevent DoS
+    const MAX_MNEMONIC_SIZE: usize = 10240; // 10KB should be more than enough for any mnemonic
+    if mnemonic.len() > MAX_MNEMONIC_SIZE {
+        return Err(WalletError::SerializationError(
+            format!("Mnemonic data too large: {} bytes (max: {})", mnemonic.len(), MAX_MNEMONIC_SIZE)
         ));
     }
 
