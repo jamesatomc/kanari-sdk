@@ -10,6 +10,9 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use thiserror::Error;
 
+// Maximum entries in rate limiter before cleanup (prevent memory leak)
+const MAX_RATE_LIMITER_ENTRIES: usize = 1000;
+
 /// Errors related to audit logging
 #[derive(Error, Debug)]
 pub enum AuditError {
@@ -259,12 +262,27 @@ impl AuditEntry {
                         return Some("[REDACTED]".to_string());
                     }
 
-                    // 3. Base64-encoded data (typical patterns)
-                    if v.len() >= 20
-                        && v.chars()
-                            .all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=')
-                    {
-                        return Some("[REDACTED]".to_string());
+                    // 3. Base64-encoded data (more specific validation)
+                    if v.len() >= 20 && v.len() % 4 == 0 {
+                        let chars: Vec<char> = v.chars().collect();
+                        let all_valid = chars
+                            .iter()
+                            .all(|c| c.is_alphanumeric() || *c == '+' || *c == '/' || *c == '=');
+
+                        // Check padding only at end
+                        let padding_valid = chars.iter().rev().take_while(|&&c| c == '=').count()
+                            <= 2
+                            && chars
+                                .iter()
+                                .take(chars.len().saturating_sub(2))
+                                .all(|&c| c != '=');
+
+                        // Require at least one base64-specific character (+, /, or =)
+                        let has_b64_chars = v.contains('+') || v.contains('/') || v.contains('=');
+
+                        if all_valid && padding_valid && has_b64_chars {
+                            return Some("[REDACTED]".to_string());
+                        }
                     }
 
                     // 4. Mnemonic phrases (6+ words)
@@ -349,6 +367,13 @@ impl AuditLogger {
             // Recover from poisoned mutex
             poisoned.into_inner()
         });
+
+        // Cleanup expired entries if too many accumulated (prevent memory leak)
+        if last_times.len() > MAX_RATE_LIMITER_ENTRIES {
+            last_times.retain(|_, &mut last_time| {
+                now.saturating_sub(last_time) < self.rate_limit_secs * 2
+            });
+        }
 
         if let Some(&last_time) = last_times.get(&entry_key) {
             if now.saturating_sub(last_time) < self.rate_limit_secs {

@@ -65,19 +65,23 @@ pub fn derive_keypair_from_path(
 
     // Extract private key bytes (32 bytes) and format as hex
     let priv_bytes = derived.private_key().to_bytes();
-    let raw_hex = hex::encode(priv_bytes);
+
+    // Prepend kanari prefix (keys module expects this format)
+    let mut formatted = format!("{}{}", KANARI_KEY_PREFIX, hex::encode(priv_bytes));
 
     // Zeroize sensitive data immediately
     use zeroize::Zeroize;
     let mut priv_bytes_mut = priv_bytes.to_vec();
     priv_bytes_mut.zeroize();
 
-    // Prepend kanari prefix (keys module expects this format)
-    let formatted = format!("{}{}", KANARI_KEY_PREFIX, raw_hex);
-
     // Build KeyPair using existing helper
-    keypair_from_private_key(&formatted, curve)
-        .map_err(|e| HdError::DerivationFailed(e.to_string()))
+    let result = keypair_from_private_key(&formatted, curve)
+        .map_err(|e| HdError::DerivationFailed(e.to_string()));
+
+    // Zeroize the formatted string before returning
+    formatted.zeroize();
+
+    result
 }
 
 /// Derive multiple addresses using a path template that contains `{index}`.
@@ -133,7 +137,7 @@ pub fn derive_multiple_addresses(
             )));
         }
 
-        *count_in_window += count;
+        // Don't increment counter yet - wait until after validation and successful derivation
     }
 
     // Validate inputs
@@ -168,6 +172,16 @@ pub fn derive_multiple_addresses(
         let path = path_template.replace("{index}", &i.to_string());
         let kp = derive_keypair_from_path(mnemonic_phrase, password, &path, curve)?;
         out.push(kp);
+    }
+
+    // Increment rate limiter counter only after successful completion
+    {
+        let mut limiter = DERIVE_RATE_LIMITER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((count_in_window, _)) = limiter.get_mut(&mnemonic_hash) {
+            *count_in_window += count;
+        }
     }
 
     Ok(out)

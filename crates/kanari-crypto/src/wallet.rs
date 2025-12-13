@@ -719,7 +719,7 @@ mod tests {
                 )));
             }
             other => {
-                assert!(false, "Expected EncryptionError, got: {:?}", other);
+                panic!("Expected EncryptionError, got: {:?}", other);
             }
         }
     }

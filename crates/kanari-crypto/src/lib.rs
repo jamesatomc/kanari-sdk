@@ -210,11 +210,11 @@ pub fn is_password_strong(password: &str) -> bool {
         return false;
     }
 
-    // Check for common weak passwords (case-insensitive)
+    // Check for common weak passwords (exact match, case-insensitive)
     let password_lower = password.to_lowercase();
     if COMMON_WEAK_PASSWORDS
         .iter()
-        .any(|weak| password_lower.contains(weak))
+        .any(|weak| password_lower == weak.to_lowercase())
     {
         return false;
     }
@@ -240,18 +240,19 @@ fn has_repetitive_pattern(password: &str) -> bool {
     // Prevent DoS: limit password length for pattern checking
     const MAX_PATTERN_CHECK_LEN: usize = 128;
 
-    if password.len() > MAX_PATTERN_CHECK_LEN {
-        // For very long passwords, just check the first part
+    // Iteratively truncate password to MAX_PATTERN_CHECK_LEN chars if needed
+    let mut pw = password;
+    while pw.chars().count() > MAX_PATTERN_CHECK_LEN {
         // Use char_indices to ensure we don't split UTF-8 characters
-        let truncate_pos = password
+        let truncate_pos = pw
             .char_indices()
             .nth(MAX_PATTERN_CHECK_LEN)
             .map(|(idx, _)| idx)
-            .unwrap_or(password.len());
-        return has_repetitive_pattern(&password[..truncate_pos]);
+            .unwrap_or(pw.len());
+        pw = &pw[..truncate_pos];
     }
 
-    let chars: Vec<char> = password.chars().collect();
+    let chars: Vec<char> = pw.chars().collect();
 
     // Check for 3+ consecutive identical characters
     for i in 0..chars.len().saturating_sub(2) {

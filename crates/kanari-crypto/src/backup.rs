@@ -336,10 +336,12 @@ impl BackupManager {
             let path = entry.path();
 
             // Security: Block symlinks to prevent directory traversal
-            let metadata = entry.metadata()?;
-            if metadata.is_symlink() {
+            let symlink_meta = path.symlink_metadata()?;
+            if symlink_meta.is_symlink() {
                 continue; // Skip symlinks
             }
+            // Use regular metadata for file size and other checks
+            let metadata = entry.metadata()?;
 
             // Security: Validate path is within backup directory
             if let Ok(canonical_path) = path.canonicalize() {
