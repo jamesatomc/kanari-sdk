@@ -1,7 +1,7 @@
 name: kanari_crypto
 description: "A Flutter package for Kanari's cryptographic functionalities."
 version: 0.1.4
-homepage: ""
+homepage: "https://github.com/kanari-network/kanari-sdk"
 
 # Repository and issue tracker — replace the placeholders below with your
 # project's actual URLs before publishing.
@@ -12,12 +12,12 @@ environment:
   sdk: ^3.9.2
   flutter: ">=1.17.0"
 
-documentation: "README.md"
+documentation: "https://github.com/kanari-network/kanari-sdk/blob/main/packages/kanari_flutter/flutter/kanari_crypto/README.md"
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_rust_bridge: 2.11.1
+  flutter_rust_bridge: ^2.11.1
 
 dev_dependencies:
   flutter_test:
