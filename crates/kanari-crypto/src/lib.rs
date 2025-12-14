@@ -5,7 +5,6 @@
 //! - Digital signatures
 //! - Encryption and decryption
 //! - Wallet operations
-//! - Hardware Security Module (HSM) support
 //! - Key rotation and lifecycle management
 //! - Security audit logging
 //! - Backup and restore functionality
@@ -361,13 +360,13 @@ pub const SECURITY_LEVEL: &str = "Maximum - Post-Quantum Ready with Hybrid Crypt
 /// Version information for the crypto library
 #[must_use]
 pub const fn version() -> &'static str {
-    "2.0.0-pqc"
+    "3.0.0-pqc"
 }
 
 /// Returns security information about the library
 #[must_use]
 pub const fn security_info() -> &'static str {
-    "🔒 Kanari Crypto v2.0 - Post-Quantum Ready
+    "🔒 Kanari Crypto v3.0 - Post-Quantum Ready
     
     Classical Algorithms:
     - AES-256-GCM encryption
@@ -378,12 +377,10 @@ pub const fn security_info() -> &'static str {
     Post-Quantum Algorithms (NIST Standard):
     - Dilithium2/3/5 signatures (ML-DSA)
     - SPHINCS+ hash-based signatures
-    - Kyber768/1024 key encapsulation (ML-KEM)
     
     Hybrid Schemes:
     - Ed25519+Dilithium3 signatures
     - K256+Dilithium3 signatures
-    - AES+Kyber encryption
     
     Security: Resistant to quantum computer attacks (Shor's and Grover's algorithms)
     Always use post-quantum or hybrid schemes for long-term security!"
