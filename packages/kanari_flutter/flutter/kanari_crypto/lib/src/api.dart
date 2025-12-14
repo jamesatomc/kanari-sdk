@@ -62,17 +62,28 @@ Future<bool> verifySignatureApi({
 Future<String> generateMnemonicApi({required BigInt wordCount}) =>
     RustLib.instance.api.crateApiGenerateMnemonicApi(wordCount: wordCount);
 
-/// ดึงข้อมูล curve ทั้งหมดที่รองรับ
+/// Returns the list of supported cryptographic curves with their metadata.
 Future<List<CurveInfo>> listSupportedCurves() =>
-    RustLib.instance.api.crateApiListSupportedCurves();
+  RustLib.instance.api.crateApiListSupportedCurves();
 
-/// แสดงชื่อ curve อย่างปลอดภัยสำหรับ Dart
+/// Information about a supported cryptographic curve.
+///
+/// Provides a stable, Dart-safe representation of metadata exposed by the
+/// underlying native library.
 class CurveInfo {
+  /// The curve's canonical name (for example, "k256", "dilithium3").
   final String name;
+
+  /// True when the curve uses post-quantum cryptography.
   final bool isPostQuantum;
+
+  /// True when the curve is a hybrid construction (classical + post-quantum).
   final bool isHybrid;
+
+  /// Security level as an integer (higher means stronger security).
   final int securityLevel;
 
+  /// Creates a new `CurveInfo` instance.
   const CurveInfo({
     required this.name,
     required this.isPostQuantum,
