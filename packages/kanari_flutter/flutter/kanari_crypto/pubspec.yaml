@@ -1,6 +1,6 @@
 name: kanari_crypto
 description: "A Flutter package for Kanari's cryptographic functionalities."
-version: 0.1.4
+version: 0.1.5
 homepage: "https://github.com/kanari-network/kanari-sdk"
 
 # Repository and issue tracker — replace the placeholders below with your
