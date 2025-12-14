@@ -24,7 +24,9 @@ members = [
       "crates/kanari-node",
       "crates/kanari-rpc-api", 
       "crates/kanari-rpc-client", 
-      "crates/kanari-rpc-server"
+      "crates/kanari-rpc-server",
+      "packages/kanari_flutter/rust"
+      
 ]
 
 # Workspace Package Configuration: Metadata for the entire workspace as a package.

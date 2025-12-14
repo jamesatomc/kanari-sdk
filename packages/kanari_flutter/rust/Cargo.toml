@@ -1,0 +1,84 @@
+[package]
+name = "rust"
+edition.workspace = true
+categories.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bip39.workspace = true
+# Flutter Rust Bridge runtime (generated bindings depend on this)
+flutter_rust_bridge = "2.11.1"
+# Core crypto libraries
+k256 = { workspace = true, features = ["ecdsa", "std"] }
+p256 = { workspace = true, features = ["ecdsa", "std"] }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+sha3.workspace = true
+zstd.workspace = true
+sha2.workspace = true
+hmac = "0.12"
+secp256k1 = { workspace = true, features = ["recovery"] }
+
+
+# Post-Quantum Cryptography (PQC) - NIST Standards
+pqcrypto-dilithium = { workspace = true, optional = true }   # Post-quantum signatures
+# pqcrypto-kyber = { workspace = true, optional = true }       # Post-quantum key encapsulation
+pqcrypto-sphincsplus = { workspace = true, optional = true } # Hash-based signatures (ultra-secure)
+pqcrypto-traits = { workspace = true, optional = true }      # Common traits for PQC
+
+# Make blake3 optional and enabled via the blake3 feature
+blake3 = { workspace = true, optional = true }
+bincode.workspace = true
+
+# BIP32/BIP44 HD wallet support
+bip32.workspace = true
+
+rand.workspace = true
+hex.workspace = true
+serde_json = { workspace = true, default-features = true }
+lazy_static.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+log.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+argon2.workspace = true
+base64.workspace = true
+aes-gcm.workspace = true
+
+# Memory security
+zeroize.workspace = true
+fs2 = "0.4"
+
+# Time handling for audit logging
+chrono = { workspace = true }
+
+# Add common dependency
+kanari-common.workspace = true
+move-vm-runtime = { workspace = true }
+move-vm-types = { workspace = true }
+move-core-types = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+# keep blake3 optional in Cargo.toml but enable it in the crate default features
+default = ["blake3", "pqc"]
+# Enable optional PQC crates when `pqc` feature is activated
+pqc = [
+	# "pqcrypto-kyber",
+	"pqcrypto-traits",
+	"pqcrypto-dilithium",
+	"pqcrypto-sphincsplus",
+]
+hybrid = ["pqc"]            # Hybrid classical + PQC schemes
