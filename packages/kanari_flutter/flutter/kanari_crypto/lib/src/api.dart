@@ -10,11 +10,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These functions are ignored because they are not marked as `pub`: `parse_curve_type`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`
 
-/// สร้าง keypair ตามประเภท curve
+/// Generate a keypair for the given curve.
 Future<KeyPairData> generateKeypairApi({required String curveName}) =>
-    RustLib.instance.api.crateApiGenerateKeypairApi(curveName: curveName);
+  RustLib.instance.api.crateApiGenerateKeypairApi(curveName: curveName);
 
-/// สร้าง keypair จาก mnemonic (BIP39)
+/// Derive a keypair from a BIP39 mnemonic and optional password.
 Future<KeyPairData> deriveKeypairFromMnemonic({
   required String mnemonic,
   required String curveName,
@@ -25,7 +25,7 @@ Future<KeyPairData> deriveKeypairFromMnemonic({
   password: password,
 );
 
-/// สร้าง keypair จาก private key ที่ให้มา
+/// Create/import a keypair from a provided private key.
 Future<KeyPairData> importKeypairFromPrivateKey({
   required String privateKey,
   required String curveName,
@@ -34,7 +34,7 @@ Future<KeyPairData> importKeypairFromPrivateKey({
   curveName: curveName,
 );
 
-/// ลงนามข้อความ
+/// Sign a message with the given private key for the specified curve.
 Future<Uint8List> signMessageApi({
   required String privateKey,
   required List<int> message,
@@ -45,7 +45,7 @@ Future<Uint8List> signMessageApi({
   curveName: curveName,
 );
 
-/// ตรวจสอบลายเซ็น
+/// Verify a signature for a message and address using the specified curve.
 Future<bool> verifySignatureApi({
   required String address,
   required List<int> message,
@@ -58,9 +58,9 @@ Future<bool> verifySignatureApi({
   curveName: curveName,
 );
 
-/// สร้าง mnemonic แบบสุ่ม
+/// Generate a random mnemonic with the specified word count.
 Future<String> generateMnemonicApi({required BigInt wordCount}) =>
-    RustLib.instance.api.crateApiGenerateMnemonicApi(wordCount: wordCount);
+  RustLib.instance.api.crateApiGenerateMnemonicApi(wordCount: wordCount);
 
 /// Returns the list of supported cryptographic curves with their metadata.
 Future<List<CurveInfo>> listSupportedCurves() =>
@@ -109,7 +109,7 @@ class CurveInfo {
           securityLevel == other.securityLevel;
 }
 
-/// โครงสร้างข้อมูล keypair ที่ปลอดภัยสำหรับส่งผ่าน FFI
+/// Keypair data structure safe for FFI transfer between Dart and native code.
 class KeyPairData {
   final String privateKey;
   final String publicKey;

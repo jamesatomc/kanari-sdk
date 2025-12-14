@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:kanari_crypto/kanari_crypto.dart';
 
 /// Minimal example demonstrating basic usage of `kanari_crypto`.
