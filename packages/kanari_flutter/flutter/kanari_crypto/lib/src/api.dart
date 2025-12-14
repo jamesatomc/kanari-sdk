@@ -12,7 +12,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Generate a keypair for the given curve.
 Future<KeyPairData> generateKeypairApi({required String curveName}) =>
-  RustLib.instance.api.crateApiGenerateKeypairApi(curveName: curveName);
+    RustLib.instance.api.crateApiGenerateKeypairApi(curveName: curveName);
 
 /// Derive a keypair from a BIP39 mnemonic and optional password.
 Future<KeyPairData> deriveKeypairFromMnemonic({
@@ -60,11 +60,11 @@ Future<bool> verifySignatureApi({
 
 /// Generate a random mnemonic with the specified word count.
 Future<String> generateMnemonicApi({required BigInt wordCount}) =>
-  RustLib.instance.api.crateApiGenerateMnemonicApi(wordCount: wordCount);
+    RustLib.instance.api.crateApiGenerateMnemonicApi(wordCount: wordCount);
 
 /// Returns the list of supported cryptographic curves with their metadata.
 Future<List<CurveInfo>> listSupportedCurves() =>
-  RustLib.instance.api.crateApiListSupportedCurves();
+    RustLib.instance.api.crateApiListSupportedCurves();
 
 /// Information about a supported cryptographic curve.
 ///
@@ -142,7 +142,7 @@ class KeyPairData {
           publicKey == other.publicKey &&
           address == other.address &&
           _bytesEqual(rawPublicKey, other.rawPublicKey) &&
-        curveType == other.curveType;
+          curveType == other.curveType;
 }
 
 bool _bytesEqual(Uint8List a, Uint8List b) {
