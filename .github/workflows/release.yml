@@ -50,30 +50,49 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    - name: Install cross-compilation tools (Linux ARM64)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
+    - name: Install cross for cross-compilation
+      if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-pc-windows-msvc'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+        cargo install cross --git https://github.com/cross-rs/cross
 
-    - name: Build release
+    - name: Build Move frameworks (native)
+      if: matrix.target != 'aarch64-unknown-linux-gnu' && matrix.target != 'aarch64-pc-windows-msvc'
+      run: cargo build --package kanari-framework-builder --release
+
+    - name: Build Move frameworks (cross)
+      if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-pc-windows-msvc'
+      run: cargo build --package kanari-framework-builder --release
+
+    - name: Build release (native)
+      if: matrix.target != 'aarch64-unknown-linux-gnu' && matrix.target != 'aarch64-pc-windows-msvc'
       run: cargo build --release --target ${{ matrix.target }}
 
-    - name: Create archive (Unix)
-      if: matrix.archive == 'tar.gz'
-      run: |
-        cd target/${{ matrix.target }}/release
-        tar czf ../../../kanari-${{ matrix.target }}.tar.gz kanari-node kanari kanari-faucet || tar czf ../../../kanari-${{ matrix.target }}.tar.gz kanari-node kanari || true
+    - name: Build release (cross)
+      if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-pc-windows-msvc'
+      run: cross build --release --target ${{ matrix.target }}
 
-    - name: Create archive (Windows)
+    - name: Package with Move frameworks (Unix)
+      if: matrix.archive == 'tar.gz'
+      shell: bash
+      run: |
+        mkdir -p package
+        cp target/${{ matrix.target }}/release/kanari-node package/ 2>/dev/null || true
+        cp target/${{ matrix.target }}/release/kanari package/ 2>/dev/null || true
+        cp target/${{ matrix.target }}/release/kanari-faucet package/ 2>/dev/null || true
+        cp -r crates/kanari-frameworks/packages package/crates/kanari-frameworks/ 2>/dev/null || true
+        cd package
+        tar czf ../kanari-${{ matrix.target }}.tar.gz *
+
+    - name: Package with Move frameworks (Windows)
       if: matrix.archive == 'zip'
       shell: pwsh
       run: |
-        cd target/${{ matrix.target }}/release
-        Compress-Archive -Path kanari-node.exe, kanari.exe, kanari-faucet.exe -DestinationPath ../../../kanari-${{ matrix.target }}.zip -ErrorAction SilentlyContinue
-        if (-not (Test-Path ../../../kanari-${{ matrix.target }}.zip)) {
-          Compress-Archive -Path kanari-node.exe, kanari.exe -DestinationPath ../../../kanari-${{ matrix.target }}.zip
-        }
+        New-Item -ItemType Directory -Path package -Force
+        Copy-Item target/${{ matrix.target }}/release/kanari-node.exe package/ -ErrorAction SilentlyContinue
+        Copy-Item target/${{ matrix.target }}/release/kanari.exe package/ -ErrorAction SilentlyContinue
+        Copy-Item target/${{ matrix.target }}/release/kanari-faucet.exe package/ -ErrorAction SilentlyContinue
+        Copy-Item -Recurse crates/kanari-frameworks/packages package/crates/kanari-frameworks/ -ErrorAction SilentlyContinue
+        Compress-Archive -Path package/* -DestinationPath kanari-${{ matrix.target }}.zip
 
     - name: Upload release assets
       if: github.event_name == 'release'

@@ -62,6 +62,9 @@ jobs:
       run: cargo clippy --all-targets --all-features -- -D warnings
       continue-on-error: true
 
+    - name: Build Move frameworks
+      run: cargo build --package kanari-framework-builder --release
+
     - name: Build
       run: cargo build --verbose --all-features
 

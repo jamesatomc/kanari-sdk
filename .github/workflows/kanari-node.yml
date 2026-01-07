@@ -38,7 +38,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             platform: Linux ARM64
             binary: kanari-node
-            cross: true
+            use_cross: true
             
           # Windows x64
           - os: windows-latest
@@ -69,11 +69,10 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    - name: Install cross-compilation tools (Linux ARM64)
-      if: matrix.cross == true
+    - name: Install cross for cross-compilation
+      if: matrix.use_cross == true
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+        cargo install cross --git https://github.com/cross-rs/cross
 
     - name: Cache cargo
       uses: actions/cache@v4
@@ -89,11 +88,25 @@ jobs:
           ${{ runner.os }}-${{ matrix.target }}-cargo-node-
           ${{ runner.os }}-${{ matrix.target }}-cargo-
 
-    - name: Build kanari-node
+    - name: Build Move frameworks
+      run: cargo build --package kanari-framework-builder --release
+
+    - name: Verify Move frameworks
+      run: |
+        ls -la crates/kanari-frameworks/packages/move-stdlib/build/MoveStdlib/bytecode_modules/ || echo "Move stdlib not found"
+        ls -la crates/kanari-frameworks/packages/kanari-system/build/KanariSystem/bytecode_modules/ || echo "Kanari system not found"
+      shell: bash
+
+    - name: Build kanari-node (native)
+      if: matrix.use_cross != true
       run: cargo build --release --package kanari-node --target ${{ matrix.target }}
 
+    - name: Build kanari-node (cross)
+      if: matrix.use_cross == true
+      run: cross build --release --package kanari-node --target ${{ matrix.target }}
+
     - name: Test kanari-node (native only)
-      if: matrix.cross != true
+      if: matrix.use_cross != true
       run: cargo test --package kanari-node --target ${{ matrix.target }}
       continue-on-error: true
 
@@ -109,18 +122,24 @@ jobs:
       run: |
         Get-Item target/${{ matrix.target }}/release/${{ matrix.binary }} | Select-Object Name, Length, LastWriteTime
 
+    - name: Prepare package directory
+      shell: bash
+      run: |
+        mkdir -p package/kanari-node
+        cp target/${{ matrix.target }}/release/${{ matrix.binary }} package/kanari-node/
+        cp -r crates/kanari-frameworks/packages package/kanari-node/crates/kanari-frameworks/ || echo "Move packages not found"
+
     - name: Create tarball (Unix)
       if: runner.os != 'Windows'
       run: |
-        cd target/${{ matrix.target }}/release
-        tar czf kanari-node-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
-        mv kanari-node-${{ matrix.target }}.tar.gz ../../..
+        cd package
+        tar czf ../kanari-node-${{ matrix.target }}.tar.gz kanari-node/
 
     - name: Create zip (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.binary }} -DestinationPath kanari-node-${{ matrix.target }}.zip
+        Compress-Archive -Path package/kanari-node -DestinationPath kanari-node-${{ matrix.target }}.zip
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
