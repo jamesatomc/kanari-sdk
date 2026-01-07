@@ -25,7 +25,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
-libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub", "mdns", "kad", "identify", "macros", "tokio"] }
+libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub", "mdns", "kad", "identify", "macros", "tokio", "relay", "dcutr", "autonat"] }
 libp2p-identity = { version = "0.2.13" }
 serde = { workspace = true }
 serde_json = { workspace = true }

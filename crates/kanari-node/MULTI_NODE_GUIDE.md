@@ -323,6 +323,16 @@ INFO kanari_node: Received new block #123 from network
   - Block validation ตรวจสอบ merkle root integrity
   - RPC endpoint `kanari_getTransactionMerkleProof` สำหรับ proof generation
   - Support proof verification สำหรับ light clients
+- [x] **Fork resolution** - Logic สำหรับจัดการ chain forks และเลือก canonical chain
+  - Longest chain rule - เลือก chain ที่มี work (length) มากที่สุด
+  - Automatic chain reorganization เมื่อพบ fork ที่ยาวกว่า
+  - เก็บ alternative chains ไว้สำหรับ rollback
+  - Prune old forks เพื่อประหยัด memory
+- [x] **NAT traversal** - รองรับการเชื่อมต่อข้าม WAN (relay, hole punching)
+  - libp2p relay client สำหรับ relay connections
+  - DCUtR (Direct Connection Upgrade through Relay) สำหรับ hole punching
+  - AutoNAT สำหรับตรวจสอบ NAT status
+  - Support การเชื่อมต่อ peer-to-peer ข้าม NAT/firewall
 
 ## Merkle Tree Architecture
 
@@ -347,9 +357,90 @@ Kanari ใช้ **2 ประเภท** ของ Merkle trees:
 ### 🚧 TODO items ที่สามารถพัฒนาต่อได้
 
 - [ ] **Consensus mechanism** - PoS, PoW, หรือ BFT consensus
-- [ ] **Fork resolution** - Logic สำหรับจัดการ chain forks และเลือก canonical chain
-- [ ] **NAT traversal** - รองรับการเชื่อมต่อข้าม WAN (relay, hole punching)
 - [ ] **Metrics และ monitoring dashboard** - Real-time network statistics
+
+## Fork Resolution
+
+Kanari รองรับ fork resolution โดยใช้ **longest chain rule**:
+
+### การทำงาน
+
+1. **Fork Detection** - เมื่อ node รับ blocks จาก peer อื่น จะตรวจสอบว่ามี fork เกิดขึ้นหรือไม่
+2. **Common Ancestor** - หา block ที่เป็น common ancestor ระหว่าง 2 chains
+3. **Chain Comparison** - เปรียบเทียบ chain work (length) ของทั้ง 2 chains
+4. **Reorganization** - ถ้า fork chain ยาวกว่า จะ reorganize ไปใช้ fork chain
+5. **State Rebuild** - Rebuild state จาก blocks ใน canonical chain
+
+### API
+
+```rust
+// Handle fork และ reorganize ถ้าจำเป็น
+blockchain.handle_fork(fork_blocks)?;
+
+// ดู canonical chain (main chain)
+let canonical = blockchain.get_canonical_chain();
+
+// ดู alternative forks
+let forks = blockchain.get_forks();
+
+// Prune old forks (เก็บแค่ recent forks)
+blockchain.prune_forks(max_depth);
+```
+
+### ตัวอย่าง
+
+```
+Initial state:
+  Genesis -> Block 1 -> Block 2 -> Block 3 (ours)
+
+Fork detected:
+  Genesis -> Block 1 -> Block 2 -> Block 3' -> Block 4' (fork)
+
+Result (fork is longer):
+  Old chain: [Block 3] -> stored in forks
+  New chain: Genesis -> Block 1 -> Block 2 -> Block 3' -> Block 4'
+```
+
+## NAT Traversal
+
+Kanari รองรับ NAT traversal เพื่อให้ nodes สามารถเชื่อมต่อกันได้แม้อยู่หลัง NAT/firewall:
+
+### Protocols
+
+1. **Relay** - Nodes สามารถใช้ relay node เป็นตัวกลางในการส่งข้อมูล
+2. **DCUtR** (Direct Connection Upgrade through Relay) - Hole punching เพื่อสร้าง direct connection
+3. **AutoNAT** - ตรวจสอบ NAT status อัตโนมัติ
+
+### การทำงาน
+
+```
+Node A (behind NAT) <-> Relay Node <-> Node B (behind NAT)
+         |                                    |
+         +-------- DCUtR Hole Punch  ---------+
+         |                                    |
+         +-------- Direct Connection ---------+
+```
+
+### Logs ที่เกี่ยวข้อง
+
+```
+INFO kanari_node: Relay reservation accepted by 12D3KooW...
+INFO kanari_node: DCUtR event: RemoteInitiatedDirectConnectionUpgrade
+INFO kanari_node: Hole punching successful with 12D3KooW...
+INFO kanari_node: NAT status changed from Unknown to Public
+```
+
+### การใช้งาน
+
+Nodes จะพยายาม NAT traversal อัตโนมัติ ไม่ต้องตั้งค่าเพิ่มเติม แต่ถ้าต้องการใช้ relay node:
+
+```bash
+# Start relay node (ต้องมี public IP)
+kanari-node start --p2p-port 19000 --rpc-port 19001 --relay-mode
+
+# Client nodes จะค้นหา relay nodes อัตโนมัติผ่าน DHT
+kanari-node start --p2p-port 19010 --rpc-port 19011
+```
 
 ## License
 

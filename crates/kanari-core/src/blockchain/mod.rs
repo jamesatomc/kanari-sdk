@@ -367,6 +367,9 @@ pub struct Blockchain {
     pub blocks: Vec<Block>,
     #[serde(skip)]
     executed_tx_hashes: std::collections::HashSet<String>,
+    /// Store alternative chains (forks) - each fork is a chain starting from divergence point
+    #[serde(skip)]
+    pub forks: Vec<Vec<Block>>,
 }
 
 impl Blockchain {
@@ -375,6 +378,7 @@ impl Blockchain {
         Self {
             blocks: vec![genesis],
             executed_tx_hashes: std::collections::HashSet::new(),
+            forks: Vec::new(),
         }
     }
 
@@ -445,6 +449,112 @@ impl Blockchain {
     pub fn get_transaction_count(&self) -> usize {
         self.blocks.iter().map(|b| b.transactions.len()).sum()
     }
+
+    /// Calculate total difficulty/work of a chain (longest chain rule)
+    fn calculate_chain_work(blocks: &[Block]) -> u64 {
+        blocks.len() as u64
+    }
+
+    /// Handle potential fork by comparing with incoming chain
+    /// Returns true if we switched to the new chain
+    pub fn handle_fork(&mut self, fork_blocks: Vec<Block>) -> Result<bool> {
+        if fork_blocks.is_empty() {
+            return Ok(false);
+        }
+
+        // Find common ancestor by checking from the beginning of fork
+        let mut common_height = 0;
+        for block in fork_blocks.iter() {
+            if let Some(our_block) = self.get_block(block.header.height) {
+                if our_block.hash() == block.hash() {
+                    // This block is the same in both chains
+                    common_height = block.header.height;
+                } else {
+                    // Found divergence point
+                    break;
+                }
+            } else {
+                // Fork extends beyond our chain
+                break;
+            }
+        }
+
+        // Get divergent portion of the fork (blocks after common ancestor)
+        let fork_divergent: Vec<Block> = fork_blocks
+            .into_iter()
+            .filter(|b| b.header.height > common_height)
+            .collect();
+
+        if fork_divergent.is_empty() {
+            return Ok(false); // No new blocks
+        }
+
+        // Compare chain work (longest chain rule)
+        let our_work = Self::calculate_chain_work(&self.blocks);
+        let mut fork_chain = self.blocks[..=common_height as usize].to_vec();
+        fork_chain.extend(fork_divergent.clone());
+        let fork_work = Self::calculate_chain_work(&fork_chain);
+
+        if fork_work > our_work {
+            // Fork is longer - reorganize to fork chain
+            tracing::info!(
+                "Fork detected! Reorganizing chain from height {} (our_work: {}, fork_work: {})",
+                common_height + 1,
+                our_work,
+                fork_work
+            );
+
+            // Save old chain as fork for potential rollback
+            let old_chain = self.blocks[(common_height as usize + 1)..].to_vec();
+            if !old_chain.is_empty() {
+                self.forks.push(old_chain);
+            }
+
+            // Replace with new chain
+            self.blocks.truncate((common_height + 1) as usize);
+            for block in fork_divergent {
+                // Don't validate against previous block since we already validated the fork
+                self.add_block_with_validation(block, false)?;
+            }
+
+            // Rebuild transaction hash index
+            self.rebuild_tx_hash_index();
+
+            Ok(true)
+        } else {
+            // Our chain is longer or equal - keep it and store fork
+            tracing::debug!(
+                "Fork detected but our chain is longer (our_work: {}, fork_work: {})",
+                our_work,
+                fork_work
+            );
+            self.forks.push(fork_divergent);
+            Ok(false)
+        }
+    }
+
+    /// Get canonical chain (main chain)
+    pub fn get_canonical_chain(&self) -> &[Block] {
+        &self.blocks
+    }
+
+    /// Get all stored forks
+    pub fn get_forks(&self) -> &[Vec<Block>] {
+        &self.forks
+    }
+
+    /// Prune old forks (keep only recent forks within depth)
+    pub fn prune_forks(&mut self, max_fork_depth: u64) {
+        let current_height = self.height();
+        self.forks.retain(|fork| {
+            if let Some(first_block) = fork.first() {
+                current_height - first_block.header.height <= max_fork_depth
+            } else {
+                false
+            }
+        });
+    }
+
 }
 
 impl Default for Blockchain {

@@ -12,6 +12,7 @@ use libp2p::{
     mdns, noise,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux,
+    relay, dcutr, autonat,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
@@ -43,6 +44,9 @@ pub struct KanariBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub mdns: mdns::tokio::Behaviour,
     pub kademlia: kad::Behaviour<MemoryStore>,
+    pub relay_client: relay::client::Behaviour,
+    pub dcutr: dcutr::Behaviour,
+    pub autonat: autonat::Behaviour,
 }
 
 pub struct P2PNetwork {
@@ -61,12 +65,15 @@ impl P2PNetwork {
         let local_peer_id = PeerId::from(keypair.public());
         info!("Local peer id: {}", local_peer_id);
 
-        // Create transport
+        // Create base TCP transport
         let transport = tcp::tokio::Transport::default()
             .upgrade(upgrade::Version::V1)
             .authenticate(noise::Config::new(&keypair)?)
             .multiplex(yamux::Config::default())
             .boxed();
+
+        // Create relay client for NAT traversal (will be used by behaviour)
+        let (_relay_transport, relay_client) = relay::client::new(local_peer_id);
 
         // Create Gossipsub behavior
         let message_id_fn = |message: &gossipsub::Message| {
@@ -107,11 +114,26 @@ impl P2PNetwork {
         // Bootstrap Kademlia
         kademlia.set_mode(Some(kad::Mode::Server));
 
+        // Create DCUtR (Direct Connection Upgrade through Relay) for hole punching
+        let dcutr = dcutr::Behaviour::new(local_peer_id);
+
+        // Create AutoNAT for detecting NAT status
+        let autonat = autonat::Behaviour::new(
+            local_peer_id,
+            autonat::Config {
+                only_global_ips: false,
+                ..Default::default()
+            },
+        );
+
         // Create behavior
         let behaviour = KanariBehaviour {
             gossipsub,
             mdns,
             kademlia,
+            relay_client,
+            dcutr,
+            autonat,
         };
 
         // Create swarm
@@ -302,6 +324,23 @@ impl P2PEventHandler {
                     "Connection closed with {} (remaining: {}) - {:?}",
                     peer_id, num_established, cause
                 );
+            }
+            // Handle relay events
+            SwarmEvent::Behaviour(KanariBehaviourEvent::RelayClient(
+                relay::client::Event::ReservationReqAccepted { relay_peer_id, .. },
+            )) => {
+                info!("Relay reservation accepted by {}", relay_peer_id);
+            }
+            // Handle DCUtR events (hole punching)
+            SwarmEvent::Behaviour(KanariBehaviourEvent::Dcutr(event)) => {
+                info!("DCUtR event: {:?}", event);
+            }
+            // Handle AutoNAT events
+            SwarmEvent::Behaviour(KanariBehaviourEvent::Autonat(autonat::Event::StatusChanged {
+                old,
+                new,
+            })) => {
+                info!("NAT status changed from {:?} to {:?}", old, new);
             }
             _ => {}
         }
