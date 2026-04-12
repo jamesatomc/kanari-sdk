@@ -70,7 +70,10 @@ impl Block {
         let tx_count = transactions.len();
 
         // Compute merkle root from transaction hashes
-        let tx_hashes: Vec<Vec<u8>> = transactions.iter().map(|tx| tx.hash()).collect();
+        let tx_hashes: Vec<Vec<u8>> = transactions
+            .iter()
+            .map(|tx| tx.hash().0.0.to_vec())
+            .collect();
         let merkle_root = compute_merkle_root(&tx_hashes);
 
         let header = BlockHeader::new(
@@ -148,7 +151,11 @@ impl Block {
         }
 
         // Verify merkle root
-        let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(|tx| tx.hash()).collect();
+        let tx_hashes: Vec<Vec<u8>> = self
+            .transactions
+            .iter()
+            .map(|tx| tx.hash().0.0.to_vec())
+            .collect();
         let computed_merkle_root = compute_merkle_root(&tx_hashes);
         if self.header.merkle_root != computed_merkle_root {
             anyhow::bail!(
@@ -160,9 +167,9 @@ impl Block {
 
         // Verify each transaction has valid structure
         for (i, signed_tx) in self.transactions.iter().enumerate() {
-            // Verify transaction hash is valid
             let tx_hash = signed_tx.transaction.hash();
-            if tx_hash.is_empty() {
+
+            if tx_hash.0.0 == [0u8; 32] {
                 anyhow::bail!("Transaction {} has empty hash", i);
             }
 

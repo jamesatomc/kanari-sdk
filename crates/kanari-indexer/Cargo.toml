@@ -1,0 +1,21 @@
+[package]
+name = "kanari-indexer"
+edition.workspace = true
+categories.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+kanari-types = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+log = "0.4.29"
+hex = { workspace = true }
+# ไลบรารีสำหรับ SQLite (bundled จะช่วยให้คอมไพล์ง่ายโดยไม่ต้องลง SQLite ในเครื่อง)
+rusqlite = { version = "0.39.0", features = ["bundled"] }

@@ -6,7 +6,6 @@ pub use scheduler::TransactionScheduler;
 
 pub mod changeset;
 
-pub mod gas_v2;
 pub mod kanari_gas_meter;
 pub mod move_runtime;
 
@@ -18,7 +17,6 @@ pub mod storage;
 
 pub use changeset::{AccountChange, ChangeSet};
 
-pub use gas_v2::{GasConfig, GasError, GasEstimate, GasMeter, GasOperation, TransactionGas};
 pub use kanari_crypto::keys::CurveType;
 #[deprecated(note = "Use `runtime::MoveRuntime` instead")]
 pub use move_runtime::MoveRuntime;

@@ -22,3 +22,11 @@ pub mod object;
 pub mod block;
 pub mod event;
 pub mod transaction;
+
+pub mod gas;
+pub mod gas_v2;
+
+pub use gas_v2::{GasConfig, GasError, GasEstimate, GasMeter, GasOperation, TransactionGas};
+
+pub mod digest;
+pub mod effects;

@@ -23,12 +23,13 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
-libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub", "mdns", "kad", "identify", "macros", "tokio", "relay", "dcutr", "ping"] }
+libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub", "mdns", "kad", "identify", "macros", "tokio", "relay", "dcutr", "ping", "quic"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 bincode = { workspace = true }
 tempfile = { workspace = true }
 flate2 = "1.0" # Add compression support for large networks
+kanari-indexer = { workspace = true }
 
 [profile.dev]
 opt-level = 0

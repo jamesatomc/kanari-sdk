@@ -7,6 +7,8 @@ use move_core_types::account_address::AccountAddress;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
+use crate::digest::{Digest, TransactionDigest};
+
 /// Signed transaction wrapper
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedTransaction {
@@ -24,7 +26,7 @@ impl SignedTransaction {
 
     pub fn sign(&mut self, private_key: &str, curve_type: CurveType) -> Result<()> {
         let tx_hash = self.transaction.hash();
-        let signature = sign_message(private_key, &tx_hash, curve_type)
+        let signature = sign_message(private_key, &tx_hash.0.0, curve_type)
             .map_err(|e| anyhow::anyhow!("Failed to sign transaction: {}", e))?;
         self.signature = signature;
         Ok(())
@@ -36,23 +38,19 @@ impl SignedTransaction {
         }
 
         let signature = &self.signature;
-
         let tx_hash = self.transaction.hash();
         let sender = self.transaction.sender();
 
-        verify_signature(sender, &tx_hash, signature)
+        verify_signature(sender, &tx_hash.0.0, signature)
             .map_err(|e| anyhow::anyhow!("Signature verification failed: {}", e))
     }
 
-    pub fn hash(&self) -> Vec<u8> {
-        let serialized = match bcs::to_bytes(self) {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to serialize SignedTransaction for hashing: {}", e);
-                Vec::new()
-            }
-        };
-        hash_data_blake3(&serialized)
+    pub fn hash(&self) -> TransactionDigest {
+        let serialized = bcs::to_bytes(self).unwrap_or_default();
+        let hash_bytes = kanari_crypto::hash_data_blake3(&serialized);
+
+        // แปลง Vec<u8> 32 bytes ให้เป็น TransactionDigest อย่างปลอดภัย
+        TransactionDigest(Digest::from_bytes(&hash_bytes).expect("Hash must be 32 bytes"))
     }
 }
 
@@ -99,15 +97,18 @@ pub enum Transaction {
 }
 
 impl Transaction {
-    pub fn hash(&self) -> Vec<u8> {
+    pub fn hash(&self) -> TransactionDigest {
         let serialized = match bcs::to_bytes(self) {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to serialize Transaction for hashing: {}", e);
-                Vec::new()
+                vec![0u8; 32]
             }
         };
-        hash_data_blake3(&serialized)
+        let hash_bytes = hash_data_blake3(&serialized);
+
+        // คืนค่าเป็น Strongly Typed
+        TransactionDigest(Digest::from_bytes(&hash_bytes).expect("Hash must be 32 bytes"))
     }
 
     pub fn sender(&self) -> &str {

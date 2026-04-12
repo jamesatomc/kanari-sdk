@@ -8,7 +8,7 @@ use crate::command::common::{
 };
 use anyhow::{Result, bail};
 use clap::*;
-use kanari_move_runtime::gas_v2::{GasEstimate, GasOperation};
+use kanari_types::gas_v2::{GasEstimate, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use log::error;
 use move_package::BuildConfig;
@@ -77,7 +77,7 @@ impl Publish {
             let op = GasOperation::PublishModule {
                 module_size: bytes.len(),
             };
-            let est = kanari_move_runtime::gas_v2::GasEstimate::from_operation(op, self.gas_price);
+            let est = kanari_types::gas_v2::GasEstimate::from_operation(op, self.gas_price);
             total_estimated_gas = total_estimated_gas.saturating_add(est.gas_units);
         }
         if modules_to_publish.len() > 1 {

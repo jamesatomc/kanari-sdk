@@ -413,13 +413,19 @@ pub async fn handle_get_transaction(state: &RpcServerState, request: &RpcRequest
 
     for block in chain.blocks.iter().rev() {
         for tx in block.transactions.iter().rev() {
-            let tx_hash = hex::encode(tx.hash());
+            let tx_hash = hex::encode(tx.hash().0.0);
             if tx_hash.to_lowercase() == normalized {
+                // 🚀 ค้นหาสถานะจริงจาก SQLite Indexer
+                let mut final_status = "committed".to_string();
+                if let Ok(Some(db_status)) = state.indexer.get_transaction_status(&normalized) {
+                    final_status = db_status;
+                }
+
                 let details = map_transaction_to_details(
                     state,
                     &tx.transaction,
                     &tx_hash,
-                    "committed",
+                    &final_status,
                     Some(block.header.height),
                     Some(hex::encode(&block.header.state_root)),
                 );
@@ -434,7 +440,7 @@ pub async fn handle_get_transaction(state: &RpcServerState, request: &RpcRequest
     });
 
     for tx in pending.iter() {
-        let tx_hash = hex::encode(tx.hash());
+        let tx_hash = hex::encode(tx.hash().0.0);
         if tx_hash.to_lowercase() == normalized {
             let details =
                 map_transaction_to_details(state, &tx.transaction, &tx_hash, "pending", None, None);
@@ -451,20 +457,16 @@ pub async fn handle_get_transaction(state: &RpcServerState, request: &RpcRequest
 }
 
 /// Handle request to list all transactions (committed + pending)
-/// Optimized: Fetches latest transactions first and implements pagination (Limit)
 pub async fn handle_get_all_transactions(
     state: &RpcServerState,
     request: &RpcRequest,
 ) -> RpcResponse {
-    // 🚨 1. กำหนดค่า Limit (ดึงสูงสุดกี่รายการ) เพื่อป้องกันโหนดค้าง
-    // พยายามดึงจาก params["limit"] ถ้าไม่มีให้ใช้ค่าเริ่มต้นที่ 50 รายการ
     let limit = request
         .params
         .get("limit")
         .and_then(|v| v.as_u64())
         .unwrap_or(50) as usize;
 
-    // แกะที่อยู่กระเป๋า (Account) จาก Params (รองรับทั้งแบบ String และ Object)
     let account_norm = request
         .params
         .as_str()
@@ -478,13 +480,11 @@ pub async fn handle_get_all_transactions(
 
     let mut results: Vec<TransactionDetails> = Vec::new();
 
-    // 🚨 2. เริ่มดึงจาก "Pending Transactions" ก่อน (ธุรกรรมที่ใหม่ที่สุดที่กำลังรอเข้าบล็อก)
     let pending = state.engine.pending_txs.read().unwrap_or_else(|p| {
         error!("pending_txs lock poisoned while listing transactions; recovering");
         p.into_inner()
     });
 
-    // วนลูปจากหลังไปหน้า (Newest Pending First)
     for tx in pending.iter().rev() {
         if results.len() >= limit {
             break;
@@ -507,27 +507,24 @@ pub async fn handle_get_all_transactions(
         results.push(map_transaction_to_details(
             state,
             &tx.transaction,
-            &hex::encode(tx.hash()),
+            &hex::encode(tx.hash().0.0),
             "pending",
             None,
             None,
         ));
     }
 
-    // 🚨 3. ถ้ายังไม่ครบ Limit ให้ไปดึงต่อจาก "Committed Transactions" (บล็อกที่คอนเฟิร์มแล้ว)
     if results.len() < limit {
         let chain = state.engine.blockchain.read().unwrap_or_else(|p| {
             error!("blockchain lock poisoned while listing transactions; recovering");
             p.into_inner()
         });
 
-        // วนลูปบล็อกย้อนกลับ (Latest Blocks First)
         for block in chain.blocks.iter().rev() {
             if results.len() >= limit {
                 break;
             }
 
-            // วนลูปธุรกรรมในบล็อกย้อนกลับ (Latest TX in block first)
             for tx in block.transactions.iter().rev() {
                 if results.len() >= limit {
                     break;
@@ -547,11 +544,19 @@ pub async fn handle_get_all_transactions(
                     }
                 }
 
+                let tx_hash_hex = hex::encode(tx.hash().0.0);
+
+                // 🚀 ค้นหาสถานะจริงจาก SQLite Indexer
+                let mut final_status = "committed".to_string();
+                if let Ok(Some(db_status)) = state.indexer.get_transaction_status(&tx_hash_hex) {
+                    final_status = db_status;
+                }
+
                 results.push(map_transaction_to_details(
                     state,
                     &tx.transaction,
-                    &hex::encode(tx.hash()),
-                    "committed",
+                    &tx_hash_hex,
+                    &final_status,
                     Some(block.header.height),
                     Some(hex::encode(&block.header.state_root)),
                 ));
@@ -731,8 +736,6 @@ pub async fn handle_call_function(state: &RpcServerState, request: &RpcRequest) 
                 let tx_hash_hex = hex::encode(&tx_hash);
                 let mut cs_value = format_changeset_json(state, &changeset);
 
-                // Fallback: If no objects were explicitly created in the ChangeSet,
-                // fetch recent owned objects for CLI feedback.
                 if let Some(obj_arr) = cs_value.get("created_objects").and_then(|v| v.as_array())
                     && obj_arr.is_empty()
                     && let Ok(a) = Address::parse_to_account_address(&call_data.sender)

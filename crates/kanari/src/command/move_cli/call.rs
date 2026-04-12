@@ -7,8 +7,8 @@ use crate::command::common::{
 };
 use anyhow::{Context, Result};
 use clap::*;
-use kanari_move_runtime::gas_v2::{GasEstimate, GasOperation};
 use kanari_rpc_api::{CallFunctionRequest, RpcRequest, RpcResponse, methods};
+use kanari_types::gas_v2::{GasEstimate, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use log::error;
 use move_core_types::{parser, runtime_value::MoveValue};

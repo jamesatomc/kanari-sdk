@@ -4,6 +4,8 @@
 use hex;
 use kanari_crypto::hash_data_blake3;
 use kanari_types::coin::TreasuryCap;
+use kanari_types::digest::{Digest, ObjectDigest, TransactionDigest};
+use kanari_types::effects::{ExecutionStatus, GasCostSummary, ObjectRef, TransactionEffects};
 use kanari_types::object::UIDRecord;
 use kanari_types::{balance::BalanceRecord, event::Event};
 use move_core_types::account_address::AccountAddress;
@@ -376,6 +378,67 @@ impl ChangeSet {
             input.extend_from_slice(data);
             let hash = hash_data_blake3(&input);
             format!("0x{}", hex::encode(&hash[0..32]))
+        }
+    }
+
+    /// แปลง ChangeSet ภายใน ให้เป็นใบเสร็จ TransactionEffects อย่างเป็นทางการ
+    pub fn into_effects(self, tx_digest: TransactionDigest) -> TransactionEffects {
+        // 1. จัดการสถานะ (Success / Failure)
+        let status = if self.success {
+            ExecutionStatus::Success
+        } else {
+            ExecutionStatus::Failure {
+                error: self
+                    .error_message
+                    .unwrap_or_else(|| "Unknown Execution Error".to_string()),
+            }
+        };
+
+        // 2. จัดการค่า Gas (ปัจจุบันเรารวมไว้อยู่ใน computation_cost ก่อน)
+        let gas_used = GasCostSummary {
+            computation_cost: self.gas_used,
+            storage_cost: 0,   // TODO: คำนวณจากขนาด byte ของ created_objects ในอนาคต
+            storage_rebate: 0, // TODO: คำนวณจาก deleted_objects
+        };
+
+        // 3. แมป Object ที่ถูกสร้างใหม่
+        let mut created = Vec::new();
+        for (id_str, obj) in self.created_objects {
+            if let Ok(addr) = AccountAddress::from_hex_literal(&id_str) {
+                // ทำการ Hash ตัวข้อมูล (data) เพื่อสร้าง ObjectDigest แบบสไตล์ Sui
+                let hash_bytes = kanari_crypto::hash_data_blake3(&obj.data);
+                let digest = ObjectDigest(Digest::from_bytes(&hash_bytes).unwrap());
+
+                created.push(ObjectRef {
+                    object_id: addr,
+                    version: obj.version,
+                    digest,
+                });
+            }
+        }
+
+        // 4. แมป Object ที่ถูกลบ (Tombstone)
+        let mut deleted = Vec::new();
+        for id_str in self.deleted_objects {
+            if let Ok(addr) = AccountAddress::from_hex_literal(&id_str) {
+                deleted.push(ObjectRef {
+                    object_id: addr,
+                    version: 0, // สำหรับ Object ที่ลบ อาจจะใช้ version สุดท้าย แต่ใส่ 0 ไปก่อน
+                    digest: ObjectDigest(Digest([0u8; 32])), // ใช้ 0 ล้วนเป็นสัญลักษณ์การลบ
+                });
+            }
+        }
+
+        // 5. แมป Object ที่ถูกแก้ไข (ตอนนี้เว้นไว้ก่อน จะมาดึงจาก account_changes ภายหลัง)
+        let mutated = Vec::new();
+
+        TransactionEffects {
+            transaction_digest: tx_digest,
+            status,
+            gas_used,
+            created,
+            mutated,
+            deleted,
         }
     }
 }

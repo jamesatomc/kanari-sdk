@@ -34,7 +34,8 @@ members = [
       "crates/kanari-system-natives",
       "crates/kanari-db-common", 
       "crates/centauri", 
-      "sdk/wallet",
+      "sdk/wallet", 
+      "crates/kanari-indexer",
 ]
 
 # Workspace Package Configuration: Metadata for the entire workspace as a package.
@@ -139,12 +140,18 @@ num-integer = { version = "0.1.46" }
 
 flutter_rust_bridge = "=2.12.0"
 
+tikv-jemallocator = { git = "https://github.com/jamesatomc/jemallocator.git", features = [
+    "unprefixed_malloc_on_supported_platforms",
+    "profiling",
+] }
+
 kanari-common = { path = "crates/kanari-common" }
 kanari-crypto = { path = "crates/kanari-crypto" }
 kanari-types = { path = "crates/kanari-types" }
 kanari-move-runtime = { path = "crates/kanari-move-runtime" }
 kanari-framework-builder = { path = "crates/kanari-framework-builder" }
 kanari-frameworks = { path = "crates/kanari-frameworks" }
+kanari-indexer = { path = "crates/kanari-indexer" }
 kanari-rpc-api = { path = "crates/kanari-rpc-api" }
 kanari-rpc-client = { path = "crates/kanari-rpc-client" }
 kanari-rpc-server = { path = "crates/kanari-rpc-server" }

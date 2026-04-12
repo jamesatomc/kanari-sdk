@@ -5,13 +5,15 @@ use anyhow::{Context, Result};
 use centauri::blockchain::Blockchain;
 use centauri::consensus::{Checkpoint, PersistentDagState};
 use kanari_move_runtime::changeset::ChangeSet;
-use kanari_move_runtime::gas_v2::{GasMeter, GasOperation};
 use kanari_move_runtime::move_runtime::MoveRuntime;
 use kanari_move_runtime::state::StateManager;
 use kanari_move_runtime::storage::persistent_store::PersistentStore;
 pub use kanari_rpc_api::{AccountInfo, BlockData, BlockchainStats, FullBlockData, ObjectInfo};
 use kanari_types::address::Address as KanariAddress;
+use kanari_types::digest::TransactionDigest;
+use kanari_types::effects::TransactionEffects;
 use kanari_types::event::Event;
+use kanari_types::gas_v2::{GasMeter, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use log::{error, info, warn};
 use lru::LruCache;
@@ -33,7 +35,7 @@ pub use produce_dag_vertex::{CheckpointInfo, DagBlockInfo, DagEngine};
 
 pub type BlockInfo = DagBlockInfo;
 
-pub type ExecutionResult = Result<(Vec<u8>, ChangeSet)>;
+pub type ExecutionResult = Result<(TransactionDigest, ChangeSet, TransactionEffects)>;
 pub type ParallelTxResult = (SignedTransaction, ExecutionResult);
 
 const MAX_MEMPOOL_SIZE: usize = 50_000;
@@ -275,14 +277,15 @@ impl BlockchainEngine {
         timestamp: Option<u64>,
         persist_objects: bool,
         strict_mode: bool,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, usize, Vec<TransactionEffects>)> {
         let mut executed_count = 0;
         let mut failed_count = 0;
+        let mut all_effects = Vec::new();
 
         let waves = kanari_move_runtime::TransactionScheduler::schedule(transactions);
 
         for wave in waves {
-            let results: Vec<Result<ChangeSet>> = wave
+            let results: Vec<Result<(ChangeSet, TransactionEffects)>> = wave
                 .par_iter()
                 .enumerate()
                 .map(|(i, signed_tx)| {
@@ -301,7 +304,7 @@ impl BlockchainEngine {
             let mut state_write = state_arc.write().unwrap();
             for res in results {
                 match res {
-                    Ok(cs) => {
+                    Ok((cs, effects)) => {
                         if persist_objects {
                             let runtime = &self.runtime_pool[0];
                             runtime.persist_created_objects(&cs);
@@ -316,6 +319,7 @@ impl BlockchainEngine {
                             failed_count += 1;
                         } else {
                             executed_count += 1;
+                            all_effects.push(effects);
                         }
                     }
                     Err(e) => {
@@ -329,7 +333,7 @@ impl BlockchainEngine {
             }
         }
 
-        Ok((executed_count, failed_count))
+        Ok((executed_count, failed_count, all_effects))
     }
 
     pub fn new_dir(dir: &str) -> Result<Self> {
@@ -521,8 +525,8 @@ impl BlockchainEngine {
             anyhow::bail!("Invalid or missing transaction signature");
         }
 
-        let tx_hash = signed_tx.hash();
-        let tx_hash_hex = hex::encode(&tx_hash);
+        let tx_digest = signed_tx.hash();
+        let tx_hash_hex = hex::encode(tx_digest.0.0);
         let sender_address = signed_tx.transaction.sender_address();
 
         let expected_seq = self.get_expected_sequence(sender_address);
@@ -552,7 +556,7 @@ impl BlockchainEngine {
 
         let mut pending = self.pending_txs.write().unwrap();
         for ptx in pending.iter() {
-            if ptx.hash() == tx_hash {
+            if ptx.hash() == tx_digest {
                 anyhow::bail!("Transaction {} already in pending pool", tx_hash_hex);
             }
         }
@@ -562,7 +566,7 @@ impl BlockchainEngine {
             "[MEMPOOL] Transaction {} accepted and added to queue",
             tx_hash_hex
         );
-        Ok(tx_hash)
+        Ok(tx_digest.0.0.to_vec())
     }
 
     pub fn execute_transaction_immediate(
@@ -573,7 +577,7 @@ impl BlockchainEngine {
             anyhow::bail!("Invalid transaction signature");
         }
 
-        let tx_hash = signed_tx.hash();
+        let tx_digest = signed_tx.hash();
         let tx = signed_tx.transaction;
 
         let changeset = {
@@ -592,7 +596,7 @@ impl BlockchainEngine {
             self.execute_transaction_with_runtime(&tx, runtime, &state_arc, None)?
         };
 
-        Ok((tx_hash, changeset))
+        Ok((tx_digest.0.0.to_vec(), changeset))
     }
 
     // =====================================================================
@@ -624,7 +628,7 @@ impl BlockchainEngine {
                 );
 
                 let final_result = match result {
-                    Ok(cs) => Ok((tx.hash(), cs)),
+                    Ok((cs, effects)) => Ok((tx.hash(), cs, effects)),
                     Err(e) => Err(anyhow::anyhow!("Parallel execution failed: {}", e)),
                 };
 
@@ -639,23 +643,13 @@ impl BlockchainEngine {
     pub fn process_dag_checkpoint(
         &self,
         checkpoint_txs: Vec<SignedTransaction>,
-        consensus_timestamp_ms: Option<u64>, // Allow timestamp from consensus layer
+        consensus_timestamp_ms: Option<u64>,
     ) -> Result<Vec<u8>> {
         log::info!(
             "[DAG CONSENSUS] Applying new checkpoint with {} transactions",
             checkpoint_txs.len()
         );
 
-        info!(
-            "Executing {} transactions in checkpoint",
-            checkpoint_txs.len()
-        );
-
-        // =================================================================
-        // 🚨 Update the time on the Blockchain before executing user transactions.
-        // =================================================================
-        // Use timestamp from consensus layer to ensure all nodes have identical state
-        // CRITICAL: All nodes must use the same timestamp to ensure deterministic state transitions
         let current_timestamp_ms = consensus_timestamp_ms.expect(
             "CRITICAL ERROR: Consensus timestamp must be provided for blockchain state consistency. "
         );
@@ -667,7 +661,6 @@ impl BlockchainEngine {
             );
             return Err(e);
         }
-        // =================================================================
 
         let execution_results = self.execute_transactions_parallel(checkpoint_txs);
 
@@ -680,7 +673,7 @@ impl BlockchainEngine {
 
         for (tx, result) in execution_results {
             match result {
-                Ok((_tx_hash, changeset)) => {
+                Ok((_tx_hash, changeset, _effects)) => {
                     runtime.persist_created_objects(&changeset);
                     runtime.persist_deleted_objects(&changeset);
 
@@ -732,9 +725,10 @@ impl BlockchainEngine {
         state_arc: &Arc<RwLock<StateManager>>,
         timestamp: Option<u64>,
     ) -> Result<ChangeSet> {
-        self.execute_transaction_with_runtime_internal(
+        let (cs, _effects) = self.execute_transaction_with_runtime_internal(
             tx, runtime, state_arc, true, timestamp, false,
-        )
+        )?;
+        Ok(cs)
     }
 
     pub(crate) fn execute_transaction_with_runtime_internal(
@@ -745,8 +739,10 @@ impl BlockchainEngine {
         validate_sequence: bool,
         timestamp: Option<u64>,
         persist_runtime_state: bool,
-    ) -> Result<ChangeSet> {
+    ) -> Result<(ChangeSet, TransactionEffects)> {
+        let tx_digest = tx.hash();
         let sender_addr = KanariAddress::parse_to_account_address(tx.sender_address())?;
+
         if validate_sequence {
             let state = state_arc.read().unwrap();
             state
@@ -801,7 +797,8 @@ impl BlockchainEngine {
                     gas_cost,
                     gas_meter.gas_used,
                 )?;
-                return Ok(changeset);
+                let effects = changeset.clone().into_effects(tx_digest);
+                return Ok((changeset, effects));
             }
         }
 
@@ -842,7 +839,8 @@ impl BlockchainEngine {
                         "Invalid module format. Expected: address::module".to_string(),
                     );
                     changeset.set_gas_used(0);
-                    return Ok(changeset);
+                    let effects = changeset.clone().into_effects(tx_digest);
+                    return Ok((changeset, effects));
                 }
 
                 let addr = KanariAddress::parse_to_account_address(parts[0])?;
@@ -867,7 +865,7 @@ impl BlockchainEngine {
                     Some(sender_addr),
                     Some((tx.gas_limit(), tx.gas_price())),
                     timestamp,
-                    Some(tx.hash()),
+                    Some(tx_digest.0.0.to_vec()),
                     persist_runtime_state,
                 ) {
                     Ok(move_cs) => changeset.merge(move_cs),
@@ -888,7 +886,8 @@ impl BlockchainEngine {
         }
 
         Self::apply_gas_and_sequence(&mut changeset, sender_addr, gas_cost, gas_meter.gas_used)?;
-        Ok(changeset)
+        let effects = changeset.clone().into_effects(tx_digest);
+        Ok((changeset, effects))
     }
 
     pub fn produce_block(&self) -> Result<BlockInfo> {

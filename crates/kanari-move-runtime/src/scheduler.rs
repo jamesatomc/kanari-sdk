@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use kanari_types::transaction::SignedTransaction;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Transaction Scheduler for parallel execution
 /// Organizes transactions into "waves" where transactions in the same wave can be executed in parallel.
@@ -23,45 +23,64 @@ impl TransactionScheduler {
     /// - Transactions with conflicts are ordered sequentially (preserving causal order).
     /// - Transactions without conflicts are placed in the earliest possible wave (maximizing parallelism).
     pub fn schedule(transactions: Vec<SignedTransaction>) -> Vec<Vec<SignedTransaction>> {
+        if transactions.is_empty() {
+            return vec![];
+        }
+
+        // 🚀 FAST PATH (อัปเกรดเพื่อ 100K TPS): 
+        // เช็คก่อนเลยว่าถ้าธุรกรรมทั้งหมดไม่มีการแก้ไข Object ที่ซ้ำกันเลย (Fully Parallelizable)
+        // ให้จับทั้งหมดมัดรวมเป็น Wave เดียว แล้วส่งไปให้ CPU ทุก Core รันพร้อมกันทันที
+        // (ข้ามขั้นตอนการจัดคิวที่กิน CPU ด้านล่างไปเลย)
+        if Self::is_fully_parallelizable(&transactions) {
+            return vec![transactions];
+        }
+
         let mut waves: Vec<Vec<SignedTransaction>> = Vec::new();
-        // Map: Conflict Key -> Index of the last wave that touched this key
-        // We use isize here to represent "no wave yet" as -1, so the first wave is 0.
-        // Actually, let's just use usize and 0-based indexing.
-        let mut key_last_wave: HashMap<String, usize> =
-            HashMap::with_capacity(transactions.len() * 2);
+        // เก็บว่า Object Key นี้ ถูกใช้งานล่าสุดที่ Wave ไหน
+        let mut last_used_in_wave: HashMap<String, usize> = HashMap::new();
 
         for tx in transactions {
             let keys = tx.transaction.get_conflict_keys();
+            let mut target_wave = 0;
 
-            // Find the earliest wave this transaction can be placed in
-            // It must be AFTER the latest wave of any of its dependencies.
-            // If a key has been used in wave N, this tx must be in wave N+1.
-            let mut target_wave_idx = 0;
-
+            // หา Wave ที่ต่ำที่สุดที่สามารถเอาธุรกรรมนี้ไปแทรกได้โดยไม่ชนใคร
             for key in &keys {
-                if let Some(&last_wave) = key_last_wave.get(key) {
-                    // Conflict found in `last_wave`. Must schedule in `last_wave + 1`
-                    if last_wave + 1 > target_wave_idx {
-                        target_wave_idx = last_wave + 1;
-                    }
+                if let Some(&wave_idx) = last_used_in_wave.get(key)
+                    && wave_idx >= target_wave
+                {
+                    target_wave = wave_idx + 1; // ต้องขยับไป Wave ถัดไป
                 }
             }
 
-            // Ensure the wave exists
-            while waves.len() <= target_wave_idx {
+            // ถ้าต้องเปิด Wave ใหม่
+            while waves.len() <= target_wave {
                 waves.push(Vec::new());
             }
 
-            // Add transaction to the wave
-            waves[target_wave_idx].push(tx);
+            waves[target_wave].push(tx);
 
-            // Update the last wave index for all keys
+            // อัปเดตสถานะการจอง Lock ของ Keys
             for key in keys {
-                key_last_wave.insert(key, target_wave_idx);
+                last_used_in_wave.insert(key, target_wave);
             }
         }
 
         waves
+    }
+
+    /// (Optional) สำหรับรันแบบ Block-STM เต็มรูปแบบในอนาคตที่ใช้ Optimistic Execution
+    /// ปัจจุบันเราใช้ Explicit Wave ที่ปลอดภัย 100% ควบคู่ไปกับ Rayon Par_Iter
+    pub fn is_fully_parallelizable(transactions: &[SignedTransaction]) -> bool {
+        let mut seen_keys = HashSet::new();
+        for tx in transactions {
+            let keys = tx.transaction.get_conflict_keys();
+            for k in keys {
+                if !seen_keys.insert(k) {
+                    return false; // มีการชนกันเกิดขึ้น
+                }
+            }
+        }
+        true
     }
 }
 

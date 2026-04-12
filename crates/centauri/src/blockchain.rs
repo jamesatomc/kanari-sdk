@@ -97,7 +97,7 @@ impl Blockchain {
         // Rebuild from blocks (compatibility)
         for block in &self.blocks {
             for signed_tx in &block.transactions {
-                let tx_hash = hex::encode(signed_tx.hash());
+                let tx_hash = hex::encode(signed_tx.hash().0.0);
                 self.executed_tx_hashes.insert(tx_hash);
             }
         }
@@ -105,7 +105,7 @@ impl Blockchain {
         // Rebuild from DAG checkpoints (primary mode)
         for checkpoint in &self.dag_checkpoints {
             for signed_tx in &checkpoint.transactions {
-                let tx_hash = hex::encode(signed_tx.hash());
+                let tx_hash = hex::encode(signed_tx.hash().0.0);
                 self.executed_tx_hashes.insert(tx_hash);
             }
         }
@@ -157,7 +157,7 @@ impl Blockchain {
 
         // Mark transactions as executed (for state-level deduplication)
         for signed_tx in &checkpoint.transactions {
-            let tx_hash = hex::encode(signed_tx.hash());
+            let tx_hash = hex::encode(signed_tx.hash().0.0);
             self.mark_transaction_executed(tx_hash);
         }
 

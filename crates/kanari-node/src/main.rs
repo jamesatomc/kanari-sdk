@@ -6,6 +6,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use kanari_core::BlockchainEngine;
 use kanari_crypto::wallet::list_wallet_files;
+use kanari_indexer::KanariIndexer;
 use kanari_rpc_server::start_server;
 use kanari_types::address::Address as KanariAddress;
 use kanari_types::kanari::KanariModule;
@@ -293,6 +294,13 @@ async fn run_node(
     let dev_addr = KanariAddress::DEV_ADDRESS;
     tracing::info!("RPC Server sequencer address: ({})", dev_addr);
 
+    // 🟢 1. สร้างและรัน SQLite Indexer เพื่อเก็บประวัติทั้งหมดลง Database แบบรวดเร็ว
+    let db_path = data_dir.join("kanari_index.db");
+    let db_path_str = db_path.to_str().unwrap().to_string(); // เตรียม path ไว้ให้ Reader ด้วย
+    let (indexer, indexer_tx) = KanariIndexer::new(&db_path_str, 100_000);
+    tokio::spawn(indexer.run());
+    tracing::info!("SQLite Indexer started successfully at {:?}", db_path);
+
     // Create channels for P2P message handling (used even in local mode, messages will be dropped)
     let (p2p_msg_tx, mut p2p_msg_rx) = tokio::sync::mpsc::unbounded_channel::<P2PMessage>();
     let (network_tx, network_rx) = tokio::sync::mpsc::unbounded_channel::<P2PMessage>();
@@ -396,9 +404,21 @@ async fn run_node(
 
     let engine_for_rpc = engine.clone();
     let bind_addr_clone = bind_addr.clone();
+
     tokio::spawn(async move {
-        if let Err(e) = start_server(engine_for_rpc, &bind_addr_clone).await {
-            tracing::error!("RPC server error: {}", e);
+        // 🚀 2. สร้าง Reader เพื่ออ่าน DB (แบบ Read-Only จะได้ไม่ไปล็อกคิวการเขียนของโหนดหลัก)
+        match kanari_indexer::IndexerReader::new(&db_path_str) {
+            Ok(reader) => {
+                let indexer_reader = Arc::new(reader);
+                // โยน Reader เข้าไปใน RPC Server
+                if let Err(e) = start_server(engine_for_rpc, indexer_reader, &bind_addr_clone).await
+                {
+                    tracing::error!("RPC server error: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to start IndexerReader for RPC: {}", e);
+            }
         }
     });
 
@@ -417,7 +437,6 @@ async fn run_node(
             wallets.len()
         );
 
-        // ✅ 1. เพิ่มตัวแปรเช็คสถานะว่ารอบนี้มีการสร้างบล็อกหรือไม่
         let mut did_work = false;
 
         // Only produce blocks when there are pending transactions
@@ -425,7 +444,7 @@ async fn run_node(
         if stats.pending_transactions > 0 {
             match engine.produce_block() {
                 Ok(block_info) => {
-                    did_work = true; // ✅ 2. อัปเดตสถานะว่าเพิ่งทำงานเสร็จไป
+                    did_work = true;
 
                     tracing::info!(
                         "DAG Vertex (Round #{}) produced: {} txs ({} executed, {} failed)",
@@ -434,6 +453,19 @@ async fn run_node(
                         block_info.executed,
                         block_info.failed
                     );
+
+                    // 🟢 3. ส่งใบเสร็จ (Effects) เข้าไปใน SQLite Indexer ทันที!
+                    if !block_info.effects.is_empty() {
+                        let tx = indexer_tx.clone();
+                        let effects = block_info.effects.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = tx.send(effects).await {
+                                tracing::error!("Failed to send effects to indexer: {}", e);
+                            } else {
+                                tracing::debug!("Successfully sent effects to SQLite Indexer");
+                            }
+                        });
+                    }
 
                     // Broadcast the DAG vertex to other nodes
                     if let Some(vertex) = block_info.vertex {
@@ -467,13 +499,12 @@ async fn run_node(
                     if block_info.checkpoint.is_some() {
                         let current_height = engine.blockchain.read().unwrap().height();
                         if let Some(full_block_data) = engine.get_full_block(current_height)
-                            && let Ok(block_str) = serde_json::to_string(&full_block_data)
-                        {
-                            let msg = P2PMessage::NewBlock(block_str);
-                            if let Err(e) = network_tx.send(msg) {
-                                tracing::warn!("Failed to queue block broadcast: {}", e);
+                            && let Ok(block_str) = serde_json::to_string(&full_block_data) {
+                                let msg = P2PMessage::NewBlock(block_str);
+                                if let Err(e) = network_tx.send(msg) {
+                                    tracing::warn!("Failed to queue block broadcast: {}", e);
+                                }
                             }
-                        }
                     }
                 }
                 Err(e) => {

@@ -9,13 +9,13 @@ use move_core_types::account_address::AccountAddress;
 use std::time::Instant;
 
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<()> {
     // Simple harness: create engine, pre-fund accounts, submit N transfers into pending_txs,
     // call produce_block() once and measure duration.
     let args: Vec<String> = std::env::args().collect();
-    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10_000);
+    let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(100_000);
 
     eprintln!("TPS harness: creating engine and preparing {} txs", n);
     let temp_dir = tempfile::Builder::new().prefix("kanari_tps").tempdir()?;

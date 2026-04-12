@@ -19,6 +19,7 @@ kanari-crypto = { workspace = true }
 anyhow = { workspace = true }
 tempfile = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
+tikv-jemallocator.workspace = true
 
 [profile.dev]
 opt-level = 0

@@ -5,6 +5,8 @@ use crate::storage::resolver::KanariMoveResolver;
 use anyhow::Result;
 use kanari_crypto::hash_data_blake3;
 use kanari_types::clock::ClockModule;
+use kanari_types::digest::TransactionDigest;
+use kanari_types::effects::TransactionEffects;
 use kanari_types::event::Event;
 use log::debug;
 use move_binary_format::file_format::CompiledModule;
@@ -19,8 +21,8 @@ mod helpers;
 mod load_system_modules;
 mod object_ops;
 mod parsers;
-use crate::gas_v2::GasOperation;
 use kanari_types::address::Address as KanariAddress;
+use kanari_types::gas_v2::GasOperation;
 use kanari_types::tx_context::TxContextModule;
 pub mod move_runtime_extensions;
 use crate::changeset::ChangeSet;
@@ -619,6 +621,63 @@ impl MoveRuntime {
                 bypass_entry_check: true,
             },
         )
+    }
+
+    /// 🚀 ฟังก์ชันหลักสำหรับโหนด DAG เพื่อรันธุรกรรมและคายใบเสร็จ (Effects) ออกมา
+    /// โดยจะ *ยังไม่บันทึกลง Database ทันที* เพื่อไม่ให้เกิดคอขวด (รอ Consensus คอนเฟิร์มก่อนค่อยบันทึก)
+    pub fn execute_and_generate_effects(
+        &self,
+        module_id: &ModuleId,
+        function_name: &str,
+        type_args: Vec<TypeTag>,
+        args: Vec<Vec<u8>>,
+        sender: AccountAddress,
+        gas_info: (u64, u64),
+        timestamp: u64,
+        tx_digest: TransactionDigest,
+    ) -> Result<(ChangeSet, TransactionEffects)> {
+        let tx_hash_vec = tx_digest.0.0.to_vec();
+
+        // 1. สั่งรัน Move VM แบบ In-Memory (ปิด persist_runtime_state)
+        let cs = self.execute_entry_function_internal(
+            module_id,
+            function_name,
+            type_args,
+            args,
+            ExecutionOptions {
+                sender: Some(sender),
+                gas_info: Some(gas_info),
+                timestamp: Some(timestamp),
+                tx_hash: Some(tx_hash_vec),
+                persist_runtime_state: false, // <--- จุดปลดเบรก 100k TPS ไม่ต้องรอเขียนดิสก์!
+                bypass_entry_check: false,
+            },
+        )?;
+
+        // 2. แปลง ChangeSet ภายใน ให้เป็นใบเสร็จทางการ
+        let effects = cs.clone().into_effects(tx_digest);
+
+        // 3. คืนค่าทั้งคู่: cs ไว้รอเขียน DB ภายหลัง, effects ให้ DAG นำไปแพร่กระจาย
+        Ok((cs, effects))
+    }
+
+    /// 🚀 สำหรับ Publish Smart Contract และออกใบเสร็จ (ยังไม่ลง Database ทันที)
+    pub fn publish_and_generate_effects(
+        &self,
+        module_bytes: Vec<u8>,
+        sender: AccountAddress,
+        gas_info: (u64, u64),
+        tx_digest: TransactionDigest,
+    ) -> Result<(ChangeSet, TransactionEffects)> {
+        let cs = self.publish_module_with_persistence(
+            module_bytes,
+            sender,
+            Some(gas_info),
+            false, // <--- จุดปลดเบรก ไม่เขียนดิสก์ทันที
+        )?;
+
+        let effects = cs.clone().into_effects(tx_digest);
+        Ok((cs, effects))
     }
 
     fn execute_entry_function_internal(

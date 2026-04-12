@@ -409,7 +409,11 @@ impl CheckpointBuilder {
         signatures: Vec<CheckpointSignature>,
     ) -> LightCheckpoint {
         // Calculate tx_root from actual transactions
-        let tx_hashes: Vec<Vec<u8>> = checkpoint.transactions.iter().map(|tx| tx.hash()).collect();
+        let tx_hashes: Vec<Vec<u8>> = checkpoint
+            .transactions
+            .iter()
+            .map(|tx| tx.hash().0.0.to_vec())
+            .collect();
         let tx_root = if tx_hashes.is_empty() {
             vec![0u8; 32]
         } else {

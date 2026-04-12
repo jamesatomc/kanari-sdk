@@ -1,4 +1,3 @@
-// 📌 นำไปแก้ไขทับไฟล์ apply_checkpoint.rs
 use super::BlockchainEngine;
 use anyhow::{Context, Result};
 use centauri::consensus::Checkpoint;
@@ -8,7 +7,6 @@ use log::{error, info, warn};
 use std::sync::{Arc, RwLock};
 
 impl BlockchainEngine {
-    /// Helper: ขั้นตอนร่วมสำหรับการสรุป Checkpoint ลงฐานข้อมูล
     fn finalize_checkpoint(&self, checkpoint: Checkpoint, new_state: StateManager) -> Result<()> {
         // 1. Update canonical state
         {
@@ -62,7 +60,6 @@ impl BlockchainEngine {
             return self.apply_checkpoint(checkpoint);
         }
 
-        // เรียกใช้งาน Helper
         self.finalize_checkpoint(checkpoint, precomputed_state.read().unwrap().clone())
     }
 
@@ -80,19 +77,19 @@ impl BlockchainEngine {
         {
             let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
             for signed_tx in &checkpoint.transactions {
-                if !chain.is_transaction_executed(&hex::encode(signed_tx.hash())) {
+                let tx_digest = signed_tx.hash();
+                if !chain.is_transaction_executed(&hex::encode(tx_digest.0.0)) {
                     to_execute.push(signed_tx.clone());
                 }
             }
         }
 
-        // 🚨 เรียกใช้งาน Helper จาก engine.rs แทนการเขียนลูป Par_iter ใหม่
-        let (_executed_count, _) = self.execute_tx_waves_parallel(
+        let (_executed_count, _failed_count, _effects) = self.execute_tx_waves_parallel(
             to_execute,
             &state_arc,
             Some(checkpoint.timestamp),
-            true, // persist_objects = true
-            true, // strict_mode = true (ล้มเหลวให้ Throw ทันที)
+            true,
+            true,
         )?;
 
         let verified_state = {
@@ -105,7 +102,6 @@ impl BlockchainEngine {
             state_read.clone()
         };
 
-        // เรียกใช้งาน Helper
         self.finalize_checkpoint(checkpoint, verified_state)
     }
 }

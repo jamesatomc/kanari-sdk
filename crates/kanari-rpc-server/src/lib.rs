@@ -8,6 +8,7 @@
 use anyhow::Result;
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
 use kanari_core::BlockchainEngine;
+use kanari_indexer::IndexerReader;
 use kanari_rpc_api::*;
 
 use std::sync::Arc;
@@ -41,11 +42,12 @@ pub mod transaction;
 #[derive(Clone)]
 pub struct RpcServerState {
     pub engine: Arc<BlockchainEngine>,
+    pub indexer: Arc<IndexerReader>,
 }
 
 impl RpcServerState {
-    pub fn new(engine: Arc<BlockchainEngine>) -> Self {
-        Self { engine }
+    pub fn new(engine: Arc<BlockchainEngine>, indexer: Arc<IndexerReader>) -> Self {
+        Self { engine, indexer }
     }
 }
 
@@ -149,8 +151,12 @@ async fn handle_rpc(
 }
 
 /// Start RPC server
-pub async fn start_server(engine: Arc<BlockchainEngine>, addr: &str) -> Result<()> {
-    let state = RpcServerState::new(engine);
+pub async fn start_server(
+    engine: Arc<BlockchainEngine>,
+    indexer: Arc<IndexerReader>,
+    addr: &str,
+) -> Result<()> {
+    let state = RpcServerState::new(engine, indexer);
     let app = create_router(state);
 
     info!("Starting RPC server on {}", addr);

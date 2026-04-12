@@ -25,6 +25,9 @@ pub struct DagBlockInfo {
     pub checkpoint: Option<CheckpointInfo>,
     /// The actual DAG vertex for network broadcast
     pub vertex: Option<centauri::consensus::DagVertex>,
+    // 🟢 เพิ่มตัวแปร effects ออกมาให้ Indexer ใช้งาน (ใช้ skip เพื่อไม่ให้กระทบขนาดข้อมูล P2P)
+    #[serde(skip)]
+    pub effects: Vec<kanari_types::effects::TransactionEffects>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -88,9 +91,6 @@ impl DagEngine {
         })
     }
 
-    // =====================================================================
-    // 💡 HELPER: รวบรวม Transaction ที่ไม่ซ้ำและยังไม่เคยรันมาก่อน (History + Current)
-    // =====================================================================
     fn collect_unexecuted_txs<'a>(
         &self,
         history_vertices: &[VertexId],
@@ -101,13 +101,12 @@ impl DagEngine {
         let mut all_to_execute = Vec::new();
         let consensus = self.consensus.read().unwrap();
 
-        // 1. ดึงจาก History เก่า (Vertex รุ่นพ่อแม่)
         for v_id in history_vertices {
             if let Some(v) = consensus.store().get_vertex(v_id) {
                 for signed_tx in &v.transactions {
-                    let tx_hash = signed_tx.hash();
-                    if seen_tx_hashes.insert(tx_hash.clone())
-                        && !chain.is_transaction_executed(&hex::encode(&tx_hash))
+                    let tx_digest = signed_tx.hash();
+                    if seen_tx_hashes.insert(tx_digest)
+                        && !chain.is_transaction_executed(&hex::encode(tx_digest.0.0))
                     {
                         all_to_execute.push(signed_tx.clone());
                     }
@@ -115,11 +114,10 @@ impl DagEngine {
             }
         }
 
-        // 2. ดึงจาก ปัจจุบัน (Vertex ล่าสุด)
         for signed_tx in current_txs {
-            let tx_hash = signed_tx.hash();
-            if seen_tx_hashes.insert(tx_hash.clone())
-                && !chain.is_transaction_executed(&hex::encode(&tx_hash))
+            let tx_digest = signed_tx.hash();
+            if seen_tx_hashes.insert(tx_digest)
+                && !chain.is_transaction_executed(&hex::encode(tx_digest.0.0))
             {
                 all_to_execute.push(signed_tx.clone());
             }
@@ -128,7 +126,6 @@ impl DagEngine {
         Ok(all_to_execute)
     }
 
-    /// Produce a DAG vertex with pending transactions
     pub fn produce_vertex(&self) -> Result<DagBlockInfo> {
         let (history_vertices, history_tx_hashes) = {
             let consensus = self.consensus.read().unwrap();
@@ -161,13 +158,13 @@ impl DagEngine {
             let mut to_remove = Vec::new();
 
             for tx in pending.iter().take(500_000) {
-                let hash = tx.hash();
-                let hash_hex = hex::encode(&hash);
+                let digest = tx.hash();
+                let hash_hex = hex::encode(digest.0.0);
 
-                if history_tx_hashes.contains(&hash) {
+                if history_tx_hashes.contains(&digest) {
                     continue;
                 } else if chain.is_transaction_executed(&hash_hex) {
-                    to_remove.push(hash);
+                    to_remove.push(digest);
                 } else {
                     to_include.push(tx.clone());
                 }
@@ -192,14 +189,12 @@ impl DagEngine {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        // 🚨 3. ประมวลผลธุรกรรมโดยใช้ Helper แบบสั้นๆ!
-        let (executed_state, state_root, executed, failed) = {
+        let (executed_state, state_root, executed, failed, effects) = {
             let state_guard = self.engine.state.read().unwrap();
             let state_clone = state_guard.clone();
             let chain = self.engine.blockchain.read().unwrap();
             let state_arc = Arc::new(RwLock::new(state_clone));
 
-            // ดึง TX ทั้งหมดด้วย Helper
             let all_to_execute =
                 self.collect_unexecuted_txs(&history_vertices, transactions.iter(), &chain)?;
 
@@ -208,20 +203,20 @@ impl DagEngine {
                 all_to_execute.len()
             );
 
-            // 🚀 เรียกใช้ Engine Helper โดยตรง (ไม่เขียนลูปซ้ำแล้ว)
-            let (executed_count, failed_count) = self
+            // 🟢 รับ effects ออกมาจากการรัน Move VM
+            let (executed_count, failed_count, effects_list) = self
                 .engine
                 .execute_tx_waves_parallel(
                     all_to_execute,
                     &state_arc,
                     Some(timestamp),
-                    false, // persist_objects = false (รอมั่นใจตอน Commit ค่อยเซฟจริง)
-                    false, // strict_mode = false (ล้มเหลวก็แค่บวก failed_count แล้วไปต่อ)
+                    false,
+                    false,
                 )
-                .unwrap_or((0, 0));
+                .unwrap_or((0, 0, vec![]));
 
             let root = state_arc.write().unwrap().compute_state_root();
-            (state_arc, root, executed_count, failed_count)
+            (state_arc, root, executed_count, failed_count, effects_list)
         };
 
         let events: Vec<Event> = Vec::new();
@@ -303,6 +298,7 @@ impl DagEngine {
             events,
             checkpoint: checkpoint_info,
             vertex: Some(vertex_for_broadcast),
+            effects, // 🟢 ส่ง effects ออกไป
         })
     }
 
@@ -348,21 +344,12 @@ impl DagEngine {
         if !transactions.is_empty() {
             {
                 let mut pending = self.engine.pending_txs.write().unwrap();
-                let tx_hashes: std::collections::HashSet<Vec<u8>> =
+                let tx_hashes: std::collections::HashSet<kanari_types::digest::TransactionDigest> =
                     transactions.iter().map(|tx| tx.hash()).collect();
                 pending.retain(|tx| !tx_hashes.contains(&tx.hash()));
-
-                if !pending.is_empty() {
-                    info!(
-                        "[DAG SYNC] Removed {} transactions from pending pool (keeping {})",
-                        transactions.len(),
-                        pending.len()
-                    );
-                }
             }
 
-            // 🚨 ใช้ Helper ในการประมวลผล Network Vertex (เหมือนตอน Produce Block)
-            let (computed_state_root, executed, failed) = {
+            let (computed_state_root, _executed, _failed) = {
                 let state_clone = self.engine.state.read().unwrap().clone();
                 let chain = self.engine.blockchain.read().unwrap();
                 let state_arc = Arc::new(RwLock::new(state_clone));
@@ -375,60 +362,29 @@ impl DagEngine {
                 let all_to_execute =
                     self.collect_unexecuted_txs(&history_vertices, transactions.iter(), &chain)?;
 
-                if all_to_execute.is_empty() {
-                    info!(
-                        "[DAG SYNC] No new transactions to execute for vertex round {} (ID: {})",
-                        vertex.round, vertex_id_hex
-                    );
-                } else {
-                    info!(
-                        "[DAG SYNC] Validating {} transactions in parallel waves for vertex round {}",
-                        all_to_execute.len(),
-                        vertex.round
-                    );
-                }
-
-                // 🚀 เรียกใช้ Engine Helper
-                let (executed_count, failed_count) = self
+                let (executed_count, failed_count, _effects) = self
                     .engine
                     .execute_tx_waves_parallel(
                         all_to_execute,
                         &state_arc,
                         Some(vertex.timestamp),
-                        false, // persist_objects = false
-                        false, // strict_mode = false
+                        false,
+                        false,
                     )
-                    .unwrap_or((0, 0));
+                    .unwrap_or((0, 0, vec![]));
 
                 let root = state_arc.write().unwrap().compute_state_root();
                 (root, executed_count, failed_count)
             };
 
-            info!(
-                "[DAG SYNC] Validation result for vertex round {}: executed={}, failed={}, computed_root={}",
-                vertex.round,
-                executed,
-                failed,
-                hex::encode(&computed_state_root)
-            );
-
             let expected_state_root = &vertex.metadata.state_root;
             if computed_state_root != *expected_state_root {
                 error!(
-                    "[DAG SYNC] STATE ROOT MISMATCH for vertex round {}!\n  Expected: {}\n  Computed: {}\n  Transactions: {}\nRejecting vertex due to state divergence.",
-                    vertex.round,
-                    hex::encode(expected_state_root),
-                    hex::encode(&computed_state_root),
-                    transactions.len()
+                    "[DAG SYNC] STATE ROOT MISMATCH for vertex round {}!",
+                    vertex.round
                 );
                 anyhow::bail!("STATE ROOT MISMATCH for vertex round {}", vertex.round);
             }
-
-            info!(
-                "[DAG SYNC] State root validated successfully for vertex round {}: {}",
-                vertex.round,
-                hex::encode(&computed_state_root)
-            );
         }
 
         let checkpoint = {
@@ -438,17 +394,8 @@ impl DagEngine {
         };
 
         if let Some(checkpoint) = checkpoint {
-            info!(
-                "[DAG SYNC] Committed checkpoint {} with {} transactions",
-                checkpoint.sequence,
-                checkpoint.transactions.len()
-            );
-
             if let Err(e) = self.engine.apply_checkpoint(checkpoint.clone()) {
-                error!(
-                    "[DAG SYNC] Failed to apply committed checkpoint to engine: {}",
-                    e
-                );
+                error!("[DAG SYNC] Failed to apply committed checkpoint: {}", e);
             } else {
                 let mut consensus = self.consensus.write().unwrap_or_else(|e| e.into_inner());
                 let _ = consensus.add_checkpoint(checkpoint);

@@ -77,11 +77,28 @@ impl P2PNetwork {
         let local_peer_id = PeerId::from(keypair.public());
         info!("Local peer id: {}", local_peer_id);
 
-        // Create transport
-        let transport = tcp::tokio::Transport::default()
+        // 🟢 1. สร้าง QUIC Transport (เร็วที่สุด ไม่ติด Head-of-line blocking)
+        let quic_transport =
+            libp2p::quic::tokio::Transport::new(libp2p::quic::Config::new(&keypair));
+
+        // 🟢 2. สร้าง TCP Transport เป็น Fallback (สำหรับโหนดที่บล็อก UDP)
+        let tcp_transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
             .upgrade(upgrade::Version::V1)
             .authenticate(noise::Config::new(&keypair)?)
-            .multiplex(yamux::Config::default())
+            .multiplex(yamux::Config::default());
+
+        // 🟢 3. รวมทั้งคู่เข้าด้วยกัน โดยให้ QUIC เป็นความสำคัญหลัก
+        let transport = libp2p::core::transport::OrTransport::new(quic_transport, tcp_transport)
+            .map(|either_output, _| match either_output {
+                // 🟢 เปลี่ยนจาก EitherOutput::First เป็น Either::Left
+                libp2p::futures::future::Either::Left((peer_id, muxer)) => {
+                    (peer_id, libp2p::core::muxing::StreamMuxerBox::new(muxer))
+                }
+                // 🟢 เปลี่ยนจาก EitherOutput::Second เป็น Either::Right
+                libp2p::futures::future::Either::Right((peer_id, muxer)) => {
+                    (peer_id, libp2p::core::muxing::StreamMuxerBox::new(muxer))
+                }
+            })
             .boxed();
 
         // Create Gossipsub behavior
@@ -182,9 +199,12 @@ impl P2PNetwork {
                 .with_idle_connection_timeout(Duration::from_secs(60)),
         );
 
-        // Listen on all interfaces
-        let listen_addr = format!("/ip4/0.0.0.0/tcp/{}", listen_port);
-        swarm.listen_on(listen_addr.parse()?)?;
+        // 🟢 Listen on both TCP and QUIC (UDP)
+        let listen_addr_tcp = format!("/ip4/0.0.0.0/tcp/{}", listen_port);
+        let listen_addr_quic = format!("/ip4/0.0.0.0/udp/{}/quic-v1", listen_port);
+
+        swarm.listen_on(listen_addr_tcp.parse()?)?;
+        swarm.listen_on(listen_addr_quic.parse()?)?;
 
         Ok(Self {
             swarm,
@@ -207,7 +227,6 @@ impl P2PNetwork {
             P2PMessage::NewDagVertex(_) => &self.topics.dag_vertices,
             P2PMessage::CompressedBlock(_) => &self.topics.blocks,
             P2PMessage::CompressedDagVertex(_) => &self.topics.dag_vertices,
-            // ✅ FIX 2.1: เพิ่มการจัดการ Topic ให้กับ CompressedBlockResponse
             P2PMessage::CompressedBlockResponse(_) => &self.topics.blocks,
         };
 
@@ -228,7 +247,6 @@ impl P2PNetwork {
             P2PMessage::BlockRequest(h, t) => {
                 info!("[P2P] Publishing BlockRequest: height={}, ts={}", h, t);
             }
-            // ✅ เพิ่ม Log สำหรับ BlockResponse ด้วย
             P2PMessage::BlockResponse(data) => {
                 info!("[P2P] Publishing BlockResponse (size: {})", data.len());
             }
@@ -261,7 +279,6 @@ impl P2PNetwork {
                 );
                 P2PMessage::CompressedDagVertex(compressed_data)
             }
-            // ✅ FIX 2.2: ทำการบีบอัด BlockResponse ที่มีขนาดใหญ่กว่า 100KB
             P2PMessage::BlockResponse(ref data) if data.len() > 100_000 => {
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
                 encoder.write_all(data.as_bytes())?;
@@ -291,13 +308,11 @@ impl P2PNetwork {
             Err(e) => {
                 let err_str = e.to_string();
                 // Handle duplicate messages gracefully
-                // "Duplicate" comes from gossipsub when message is already seen
                 if err_str.contains("Duplicate") || err_str.contains("duplicate") {
                     // Duplicate is not an error, just skip silently
                     return Ok(());
                 }
                 if err_str.contains("InsufficientPeers") {
-                    // This is normal when starting up or isolated - just log debug/info
                     tracing::debug!("No peers subscribed to topic yet");
                     return Ok(());
                 }

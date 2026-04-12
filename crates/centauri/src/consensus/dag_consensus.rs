@@ -166,7 +166,7 @@ impl DagVertex {
         }
 
         for tx in &self.transactions {
-            data.extend_from_slice(&tx.hash());
+            data.extend_from_slice(&tx.hash().0.0);
         }
 
         data.extend_from_slice(&self.timestamp.to_le_bytes());
@@ -1119,7 +1119,7 @@ impl DagConsensus {
                     log::debug!(
                         "[DAG Consensus] First tx hash in checkpoint #{}: 0x{}",
                         latest.sequence + 1,
-                        hex::encode(all_transactions[0].hash())
+                        hex::encode(all_transactions[0].hash().0.0)
                     );
                 }
 
