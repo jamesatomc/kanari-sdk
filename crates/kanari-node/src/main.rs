@@ -198,7 +198,11 @@ async fn main() -> Result<()> {
             // Ensure data directory exists
             std::fs::create_dir_all(&data_dir_path)?;
             // Create engine with the same data directory for consistency
-            let engine = BlockchainEngine::new_dir(data_dir_path.to_str().unwrap())?;
+            let engine = BlockchainEngine::new_dir(
+                data_dir_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid data directory path"))?,
+            )?;
             run_node(
                 Arc::new(engine),
                 0,
@@ -471,7 +475,11 @@ async fn run_node(
 
                     // Index the locally produced block
                     if let Some(ref node_idx) = node_indexer {
-                        let current_height = engine.blockchain.read().unwrap().height();
+                        let current_height = engine
+                            .blockchain
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .height();
                         if let Some(full_block_data) = engine.get_full_block(current_height) {
                             // Use the same conversion logic as in sync.rs
                             use kanari_types::block::{Block, BlockHeader};
@@ -521,7 +529,11 @@ async fn run_node(
 
                     // If a checkpoint was created, broadcast the new blocks as well
                     if block_info.checkpoint.is_some() {
-                        let current_height = engine.blockchain.read().unwrap().height();
+                        let current_height = engine
+                            .blockchain
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .height();
                         if let Some(full_block_data) = engine.get_full_block(current_height)
                             && let Ok(block_str) = serde_json::to_string(&full_block_data)
                         {
