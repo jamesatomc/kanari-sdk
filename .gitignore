@@ -1,43 +1,23 @@
-```
-# Dependencies
-target/
-
-# Compiled files
+```rust
+# Compiled and build artifacts
 *.o
 *.obj
-*.a
-*.so
-*.dll
 *.exe
-*.pyc
-*.class
+*.dll
+*.so
+*.a
 *.out
 
-# Build artifacts
-build/
-dist/
-
-# Python specific
-__pycache__/
-*.pyc
-*.pyo
-.Python
-env/
-venv/
-.venv/
-.mypy_cache/
-.pytest_cache/
-.coverage
-coverage/
-htmlcov/
+# Dependencies
+target/
+**/target/
 
 # Logs and temp files
 *.log
 *.tmp
 *.swp
-*.swo
 
-# Environment variables
+# Environment
 .env
 .env.local
 *.env.*
@@ -45,12 +25,24 @@ htmlcov/
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# System files
-.DS_Store
-Thumbs.db
+# Rust-specific
+Cargo.lock
+**/Cargo.lock
+**/target/
+**/Cargo.toml.orig
+**/Cargo.lock~
+**/Cargo.toml~
 
-# Compressed files
+# Coverage
+coverage/
+htmlcov/
+*.gcda
+*.gcno
+
+# Compression
 *.zip
 *.gz
 *.tar
