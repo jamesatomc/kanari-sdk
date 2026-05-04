@@ -1,25 +1,30 @@
 ```
-# Compiled and build artifacts
-*.pyc
-__pycache__/
+# Dependencies
+target/
+
+# Compiled files
 *.o
 *.obj
-*.exe
-*.dll
-*.so
 *.a
+*.so
+*.dll
+*.exe
+*.pyc
+*.class
 *.out
-target/
+
+# Build artifacts
 build/
 dist/
 
-# Dependencies
-.venv/
+# Python specific
+__pycache__/
+*.pyc
+*.pyo
+.Python
+env/
 venv/
-node_modules/
-.julia/
-zig*/
-.cargo/
+.venv/
 .mypy_cache/
 .pytest_cache/
 .coverage
@@ -32,7 +37,7 @@ htmlcov/
 *.swp
 *.swo
 
-# Environment
+# Environment variables
 .env
 .env.local
 *.env.*
@@ -40,8 +45,6 @@ htmlcov/
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
 # System files
 .DS_Store

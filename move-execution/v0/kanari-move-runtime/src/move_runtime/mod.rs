@@ -29,6 +29,10 @@ use crate::changeset::ChangeSet;
 use crate::state::StateManager;
 use crate::storage::move_vm_state::MoveVMState;
 use crate::storage::object_storage::{ObjectStorage, ObjectStore, StoredObject};
+use kanari_system_natives::dynamic_field::DynamicFieldsExt;
+use kanari_system_natives::event::EventsExt;
+use kanari_system_natives::object::{DeletedObjectsExt, SavedObjectsExt};
+use kanari_system_natives::transfer_natives::TransferredObjectsExt;
 use kanari_types::tx_context::TxContextRecord;
 use move_vm_types::loaded_data::runtime_types::Type as RuntimeType;
 
@@ -833,11 +837,6 @@ impl MoveRuntime {
             }
         }
 
-        use kanari_system_natives::dynamic_field::DynamicFieldsExt;
-        use kanari_system_natives::event::EventsExt;
-        use kanari_system_natives::object::{DeletedObjectsExt, SavedObjectsExt};
-        use kanari_system_natives::transfer_natives::TransferredObjectsExt;
-
         // Add extensions only if they don't already exist (avoid "multiple extensions" panic)
         let exts = session.get_native_extensions();
 
@@ -1068,13 +1067,6 @@ impl MoveRuntime {
         &'r self,
         vm_guard: &'r std::sync::RwLockReadGuard<'r, MoveVM>,
     ) -> Session<'r, 'r, KanariMoveResolver> {
-        use kanari_system_natives::{
-            dynamic_field::DynamicFieldsExt,
-            event::EventsExt,
-            object::{DeletedObjectsExt, SavedObjectsExt},
-            transfer_natives::TransferredObjectsExt,
-        };
-
         // Create extensions container and add all required extensions
         let mut extensions = NativeContextExtensions::default();
         extensions.add(DynamicFieldsExt::default());
