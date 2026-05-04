@@ -550,7 +550,7 @@ impl DagStore {
 
                 // Allow reasonable future tolerance based on parent median
                 // FIX #5: Handle node restart scenarios where parents are very old
-                // If parent median is more than 1 hour behind current time, assume node just restarted
+                // If parent median is more than 10 minutes behind current time, assume node just restarted/paused
                 // and use current time as baseline instead of old parent timestamps
                 let current_time = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -558,7 +558,7 @@ impl DagStore {
                     .unwrap_or(0);
 
                 const MAX_TIMESTAMP_DRIFT_SECS: u64 = 300; // 5 minutes for normal operation
-                const RESTART_THRESHOLD_SECS: u64 = 900; // 15 minutes threshold for restart detection
+                const RESTART_THRESHOLD_SECS: u64 = 600; // 10 minutes threshold for restart detection (reduced from 15min)
 
                 let max_allowed =
                     if current_time.saturating_sub(median_timestamp) > RESTART_THRESHOLD_SECS {

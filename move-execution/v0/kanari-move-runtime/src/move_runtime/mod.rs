@@ -4,6 +4,10 @@
 use crate::storage::resolver::KanariMoveResolver;
 use anyhow::Result;
 use kanari_crypto::hash_data_blake3;
+use kanari_system_natives::dynamic_field::DynamicFieldsExt;
+use kanari_system_natives::event::EventsExt;
+use kanari_system_natives::object::{DeletedObjectsExt, SavedObjectsExt};
+use kanari_system_natives::transfer_natives::TransferredObjectsExt;
 use kanari_types::clock::ClockModule;
 use kanari_types::event::Event;
 use log::debug;
@@ -833,28 +837,7 @@ impl MoveRuntime {
             }
         }
 
-        use kanari_system_natives::dynamic_field::DynamicFieldsExt;
-        use kanari_system_natives::event::EventsExt;
-        use kanari_system_natives::object::{DeletedObjectsExt, SavedObjectsExt};
-        use kanari_system_natives::transfer_natives::TransferredObjectsExt;
-
-        // Add extensions only if they don't already exist (avoid "multiple extensions" panic)
-        let exts = session.get_native_extensions();
-
-        // Helper to safely add extension without panicking if it already exists
-        macro_rules! safe_add_ext {
-            ($ext_type:ty) => {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    exts.add(<$ext_type>::default());
-                }));
-            };
-        }
-
-        safe_add_ext!(TransferredObjectsExt);
-        safe_add_ext!(EventsExt);
-        safe_add_ext!(SavedObjectsExt);
-        safe_add_ext!(DeletedObjectsExt);
-        safe_add_ext!(DynamicFieldsExt);
+        // Extensions are already added by create_session_with_storage_ext() - no need to add again
 
         let execution_result = if bypass_entry_check {
             let mut unmetered_gas = UnmeteredGasMeter;
@@ -881,6 +864,7 @@ impl MoveRuntime {
 
         match execution_result {
             Ok(return_values) => {
+                // Extract data from native extensions before finishing the session
                 let (
                     transferred,
                     captured_events,
@@ -1068,13 +1052,6 @@ impl MoveRuntime {
         &'r self,
         vm_guard: &'r std::sync::RwLockReadGuard<'r, MoveVM>,
     ) -> Session<'r, 'r, KanariMoveResolver> {
-        use kanari_system_natives::{
-            dynamic_field::DynamicFieldsExt,
-            event::EventsExt,
-            object::{DeletedObjectsExt, SavedObjectsExt},
-            transfer_natives::TransferredObjectsExt,
-        };
-
         // Create extensions container and add all required extensions
         let mut extensions = NativeContextExtensions::default();
         extensions.add(DynamicFieldsExt::default());
