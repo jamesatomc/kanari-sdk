@@ -144,7 +144,8 @@ impl SyncManager {
                 if block_height > stats.height {
                     // Buffer the block
                     {
-                        let mut buffer = self.block_buffer.lock().unwrap();
+                        let mut buffer =
+                            self.block_buffer.lock().unwrap_or_else(|e| e.into_inner());
                         // Check if buffer is full
                         if buffer.len() >= self.max_buffer_size {
                             warn!(
@@ -168,7 +169,7 @@ impl SyncManager {
                     // If we're still behind, request missing blocks
                     let new_stats = self.engine.get_stats();
                     let latest_buffered = {
-                        let buffer = self.block_buffer.lock().unwrap();
+                        let buffer = self.block_buffer.lock().unwrap_or_else(|e| e.into_inner());
                         buffer.keys().last().cloned().unwrap_or(0)
                     };
 
@@ -200,7 +201,7 @@ impl SyncManager {
             let next_height = stats.height + 1;
 
             let next_block = {
-                let mut buffer = self.block_buffer.lock().unwrap();
+                let mut buffer = self.block_buffer.lock().unwrap_or_else(|e| e.into_inner());
                 buffer.remove(&next_height)
             };
 
@@ -250,7 +251,7 @@ impl SyncManager {
 
                     // Check buffer for gaps
                     {
-                        let buffer = self.block_buffer.lock().unwrap();
+                        let buffer = self.block_buffer.lock().unwrap_or_else(|e| e.into_inner());
                         if !buffer.is_empty() {
                             let buffered_heights: Vec<_> = buffer.keys().collect();
                             info!(
@@ -270,7 +271,7 @@ impl SyncManager {
         // Clean up old blocks from buffer
         {
             let stats = self.engine.get_stats();
-            let mut buffer = self.block_buffer.lock().unwrap();
+            let mut buffer = self.block_buffer.lock().unwrap_or_else(|e| e.into_inner());
             let initial_len = buffer.len();
             buffer.retain(|&h, _| h > stats.height);
             if buffer.len() < initial_len {
@@ -302,7 +303,7 @@ impl SyncManager {
                 if let Some(dag_engine_arc) = self.engine.get_dag_engine() {
                     // Check and initialize with write lock to prevent TOCTOU race
                     {
-                        let mut guard = dag_engine_arc.write().unwrap();
+                        let mut guard = dag_engine_arc.write().unwrap_or_else(|e| e.into_inner());
 
                         // Only initialize if still None after acquiring write lock
                         if guard.is_none() {
@@ -330,7 +331,7 @@ impl SyncManager {
 
                     // Get the engine with a read lock for processing
                     let dag_engine_opt = {
-                        let guard = dag_engine_arc.read().unwrap();
+                        let guard = dag_engine_arc.read().unwrap_or_else(|e| e.into_inner());
                         guard.as_ref().cloned()
                     };
 
@@ -399,7 +400,8 @@ impl SyncManager {
                 if block.height > stats.height {
                     // Buffer the block with size limit check
                     let buffer_len = {
-                        let mut buffer = self.block_buffer.lock().unwrap();
+                        let mut buffer =
+                            self.block_buffer.lock().unwrap_or_else(|e| e.into_inner());
                         // Check if buffer is full
                         if buffer.len() >= self.max_buffer_size {
                             warn!(
@@ -504,7 +506,7 @@ impl SyncManager {
         for height in from..=actual_to {
             // Check if we already have this block in buffer before requesting
             {
-                let buffer = self.block_buffer.lock().unwrap();
+                let buffer = self.block_buffer.lock().unwrap_or_else(|e| e.into_inner());
                 if buffer.contains_key(&height) {
                     continue;
                 }

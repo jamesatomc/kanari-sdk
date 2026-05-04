@@ -28,10 +28,12 @@ impl MoveRuntime {
             if !self.has_module(&dep) {
                 // Allow dependencies on stdlib (0x1) and system (0x2)
                 let addr = dep.address();
-                if addr != &AccountAddress::from_hex_literal(KanariAddress::STD_ADDRESS).unwrap()
+                if addr
+                    != &AccountAddress::from_hex_literal(KanariAddress::STD_ADDRESS)
+                        .expect("STD_ADDRESS must be valid hex")
                     && addr
                         != &AccountAddress::from_hex_literal(KanariAddress::KANARI_SYSTEM_ADDRESS)
-                            .unwrap()
+                            .expect("KANARI_SYSTEM_ADDRESS must be valid hex")
                 {
                     anyhow::bail!(
                         "Missing dependency: {}::{}",
@@ -56,9 +58,12 @@ impl MoveRuntime {
     pub fn has_module(&self, module_id: &ModuleId) -> bool {
         // Check by assuming stdlib/system modules are always available
         let addr = module_id.address();
-        if addr == &AccountAddress::from_hex_literal(KanariAddress::STD_ADDRESS).unwrap()
+        if addr
+            == &AccountAddress::from_hex_literal(KanariAddress::STD_ADDRESS)
+                .expect("STD_ADDRESS must be valid hex")
             || addr
-                == &AccountAddress::from_hex_literal(KanariAddress::KANARI_SYSTEM_ADDRESS).unwrap()
+                == &AccountAddress::from_hex_literal(KanariAddress::KANARI_SYSTEM_ADDRESS)
+                    .expect("KANARI_SYSTEM_ADDRESS must be valid hex")
         {
             return true;
         }
@@ -78,7 +83,7 @@ impl MoveRuntime {
         // Return modules from our maintained index
         self.published_modules
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .cloned()
             .collect()

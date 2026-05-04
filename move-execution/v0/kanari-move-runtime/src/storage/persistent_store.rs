@@ -104,7 +104,10 @@ impl PersistentStore {
         if let Some(db) = &self.db {
             db.put(key, value)?;
         } else if let Some(store) = &self.memory_store {
-            store.write().unwrap().insert(key.to_vec(), value.to_vec());
+            store
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key.to_vec(), value.to_vec());
         }
         Ok(())
     }
@@ -120,7 +123,10 @@ impl PersistentStore {
         if let Some(db) = &self.db {
             db.put(key, &bytes)?;
         } else if let Some(store) = &self.memory_store {
-            store.write().unwrap().insert(key.to_vec(), bytes);
+            store
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key.to_vec(), bytes);
         }
 
         Ok(())
@@ -140,7 +146,7 @@ impl PersistentStore {
                 None => Ok(None),
             }
         } else if let Some(store) = &self.memory_store {
-            let guard = store.read().unwrap();
+            let guard = store.read().unwrap_or_else(|e| e.into_inner());
             match guard.get(key) {
                 Some(bytes) => {
                     let value = bcs::from_bytes(bytes)?;
@@ -165,7 +171,7 @@ impl PersistentStore {
         if let Some(db) = &self.db {
             db.delete(key)?;
         } else if let Some(store) = &self.memory_store {
-            store.write().unwrap().remove(key);
+            store.write().unwrap_or_else(|e| e.into_inner()).remove(key);
         }
         Ok(())
     }

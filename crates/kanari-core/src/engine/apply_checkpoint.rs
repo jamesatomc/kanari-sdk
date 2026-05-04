@@ -65,7 +65,13 @@ impl BlockchainEngine {
         }
 
         // Call Helper
-        self.finalize_checkpoint(checkpoint, precomputed_state.read().unwrap().clone())
+        self.finalize_checkpoint(
+            checkpoint,
+            precomputed_state
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        )
     }
 
     pub fn apply_checkpoint(&self, mut checkpoint: Checkpoint) -> Result<()> {
@@ -75,7 +81,7 @@ impl BlockchainEngine {
             checkpoint.transactions.len()
         );
 
-        let state_snapshot = self.state.read().unwrap().clone();
+        let state_snapshot = self.state.read().unwrap_or_else(|e| e.into_inner()).clone();
         let state_arc = Arc::new(RwLock::new(state_snapshot));
         let mut to_execute: Vec<SignedTransaction> = Vec::new();
 
@@ -98,7 +104,7 @@ impl BlockchainEngine {
         )?;
 
         let verified_state = {
-            let state_read = state_arc.read().unwrap();
+            let state_read = state_arc.read().unwrap_or_else(|e| e.into_inner());
             let computed_root = state_read.compute_state_root();
             if computed_root != checkpoint.state_root {
                 warn!("[ENGINE] State root mismatch! Updating to computed root.");

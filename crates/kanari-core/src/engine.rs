@@ -153,7 +153,7 @@ impl BlockchainEngine {
         let runtime = &self.runtime_pool[0];
 
         // Acquire the write lock once to ensure atomicity of the entire operation
-        let mut state_write = self.state.write().unwrap();
+        let mut state_write = self.state.write().unwrap_or_else(|e| e.into_inner());
 
         // Get the clock ID
         let clock_id = runtime.ensure_system_clock(&mut state_write)?;
@@ -176,7 +176,7 @@ impl BlockchainEngine {
         let mut seq = self
             .state
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get_account_by_hex(address_hex)
             .map(|acc| acc.sequence_number)
             .unwrap_or(0);
@@ -299,7 +299,7 @@ impl BlockchainEngine {
                 })
                 .collect();
 
-            let mut state_write = state_arc.write().unwrap();
+            let mut state_write = state_arc.write().unwrap_or_else(|e| e.into_inner());
             for res in results {
                 match res {
                     Ok(cs) => {
@@ -455,9 +455,9 @@ impl BlockchainEngine {
     }
 
     fn load_state(store: &Option<Arc<PersistentStore>>) -> Arc<RwLock<StateManager>> {
-        let store = store
-            .clone()
-            .unwrap_or_else(|| Arc::new(PersistentStore::open_in_memory().unwrap()));
+        let store = store.clone().unwrap_or_else(|| {
+            Arc::new(PersistentStore::open_in_memory().expect("Failed to open in-memory store"))
+        });
         info!("Initializing StateManager with persistent store support (RocksDB)");
         Arc::new(RwLock::new(StateManager::new(store)))
     }
@@ -512,7 +512,11 @@ impl BlockchainEngine {
     // 🛡️ Mempool Security
     // =====================================================================
     pub fn submit_transaction(&self, signed_tx: SignedTransaction) -> Result<Vec<u8>> {
-        let pending_count = self.pending_txs.read().unwrap().len();
+        let pending_count = self
+            .pending_txs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
         if pending_count >= MAX_MEMPOOL_SIZE {
             log::warn!("[MEMPOOL] Rejecting transaction: Queue is full (Anti-DDoS active)");
             anyhow::bail!("Mempool is currently full. Please try again later.");
@@ -545,13 +549,13 @@ impl BlockchainEngine {
         }
 
         {
-            let chain = self.blockchain.read().unwrap();
+            let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
             if chain.is_transaction_executed(&tx_hash_hex) {
                 anyhow::bail!("Transaction {} already executed", tx_hash_hex);
             }
         }
 
-        let mut pending = self.pending_txs.write().unwrap();
+        let mut pending = self.pending_txs.write().unwrap_or_else(|e| e.into_inner());
         for ptx in pending.iter() {
             if ptx.hash() == tx_hash {
                 anyhow::bail!("Transaction {} already in pending pool", tx_hash_hex);
@@ -578,14 +582,15 @@ impl BlockchainEngine {
         let tx = signed_tx.transaction;
 
         let changeset = {
-            let mut state_snapshot = { self.state.read().unwrap().clone() };
+            let mut state_snapshot =
+                { self.state.read().unwrap_or_else(|e| e.into_inner()).clone() };
             let sender_addr = tx.sender_address();
             let addr = KanariAddress::parse_to_account_address(sender_addr)?;
 
             self.for_each_pending_tx_from_sender(sender_addr, |_| {
                 if let Some(mut acct) = state_snapshot.get_account(&addr) {
                     acct.increment_sequence();
-                    state_snapshot.save_account(&acct).unwrap();
+                    state_snapshot.save_account(&acct).unwrap_or(());
                 }
             });
             let state_arc = Arc::new(RwLock::new(state_snapshot));
@@ -685,7 +690,7 @@ impl BlockchainEngine {
                     runtime.persist_created_objects(&changeset);
                     runtime.persist_deleted_objects(&changeset);
 
-                    let mut state = self.state.write().unwrap();
+                    let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
                     if let Err(e) = state.apply_changeset(&changeset) {
                         error!("[DAG COMMIT] Failed to apply changeset to state: {}", e);
                     }
@@ -699,7 +704,7 @@ impl BlockchainEngine {
             }
         }
 
-        let mut chain = self.blockchain.write().unwrap();
+        let mut chain = self.blockchain.write().unwrap_or_else(|e| e.into_inner());
         let height = chain.blocks.len() as u64;
         let prev_hash = chain.blocks.back().map(|b| b.hash()).unwrap_or_default();
 
@@ -711,7 +716,7 @@ impl BlockchainEngine {
             all_events_for_block,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or(std::time::Duration::ZERO)
                 .as_secs(),
         );
         let block_hash = new_block.hash();
@@ -749,7 +754,7 @@ impl BlockchainEngine {
     ) -> Result<ChangeSet> {
         let sender_addr = KanariAddress::parse_to_account_address(tx.sender_address())?;
         if validate_sequence {
-            let state = state_arc.read().unwrap();
+            let state = state_arc.read().unwrap_or_else(|e| e.into_inner());
             state
                 .validate_sequence(&sender_addr, tx.sequence_number())
                 .context("Sequence number validation failed")?;
@@ -778,7 +783,7 @@ impl BlockchainEngine {
         let total_required = required_amount.saturating_add(gas_cost);
 
         {
-            let state = state_arc.read().unwrap();
+            let state = state_arc.read().unwrap_or_else(|e| e.into_inner());
             let balance = state
                 .get_account(&sender_addr)
                 .map(|acc| acc.balance)
@@ -833,7 +838,7 @@ impl BlockchainEngine {
                 ..
             } => {
                 {
-                    let state = state_arc.read().unwrap();
+                    let state = state_arc.read().unwrap_or_else(|e| e.into_inner());
                     Self::preload_objects_for_args(args, &state, runtime);
                 }
 
@@ -894,10 +899,10 @@ impl BlockchainEngine {
 
     pub fn produce_block(&self) -> Result<BlockInfo> {
         let dag_engine = {
-            let mut dag_engine_guard = self.dag_engine.write().unwrap();
+            let mut dag_engine_guard = self.dag_engine.write().unwrap_or_else(|e| e.into_inner());
             if dag_engine_guard.is_none() {
                 {
-                    let mut chain = self.blockchain.write().unwrap();
+                    let mut chain = self.blockchain.write().unwrap_or_else(|e| e.into_inner());
                     if !chain.dag_mode {
                         chain.enable_dag_mode();
                     }
@@ -910,12 +915,14 @@ impl BlockchainEngine {
                 )?;
                 *dag_engine_guard = Some(engine);
             }
-            dag_engine_guard.as_ref().unwrap().clone()
+            dag_engine_guard.as_ref().cloned()
         };
+
+        let dag_engine = dag_engine.expect("DAG engine should be initialized");
 
         {
             let consensus_lock = dag_engine.consensus();
-            let consensus = consensus_lock.read().unwrap();
+            let consensus = consensus_lock.read().unwrap_or_else(|e| e.into_inner());
             let store = consensus.store();
             let current_round = store.current_round();
             let num_authorities = store.num_authorities();
@@ -963,7 +970,7 @@ impl BlockchainEngine {
         }
         self.authority_id = normalize(authority_id);
         self.authorities = authorities.into_iter().map(normalize).collect();
-        *self.dag_engine.write().unwrap() = None;
+        *self.dag_engine.write().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     pub fn get_authority_id(&self) -> String {
@@ -979,9 +986,9 @@ impl BlockchainEngine {
     }
 
     pub fn get_stats(&self) -> BlockchainStats {
-        let state = self.state.read().unwrap();
-        let chain = self.blockchain.read().unwrap();
-        let pending = self.pending_txs.read().unwrap();
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        let pending = self.pending_txs.read().unwrap_or_else(|e| e.into_inner());
 
         BlockchainStats {
             height: chain.height(),
@@ -1071,7 +1078,7 @@ impl BlockchainEngine {
     }
 
     pub fn get_block(&self, height: u64) -> Option<BlockData> {
-        let chain = self.blockchain.read().unwrap();
+        let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
         chain.get_block(height).map(|block| BlockData {
             height: block.header.height,
             timestamp: block.header.timestamp,
@@ -1084,7 +1091,7 @@ impl BlockchainEngine {
     }
 
     pub fn get_full_block(&self, height: u64) -> Option<FullBlockData> {
-        let chain = self.blockchain.read().unwrap();
+        let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
         let block = chain.get_block(height)?;
         let checkpoint = chain.get_checkpoint(height);
 
@@ -1163,7 +1170,7 @@ impl BlockchainEngine {
             .context("Invalid state root format in block data")?;
 
         let prev_hash = {
-            let chain = self.blockchain.read().unwrap();
+            let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
             chain.latest_checkpoint().hash()?
         };
 
