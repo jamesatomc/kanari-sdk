@@ -175,7 +175,7 @@ impl MoveRuntime {
             .map_err(|e| anyhow::anyhow!("Failed to reload MoveVM: {:?}", e))?;
 
         // Overwrite old MoveVM with newly created one, clearing all caches
-        *self.vm.write().unwrap() = new_vm;
+        *self.vm.write().unwrap_or_else(|e| e.into_inner()) = new_vm;
 
         // Preload essential system modules into the new VM's cache to ensure dependencies are available
         // This is critical for module upgrades where dependencies must be resolvable
@@ -187,14 +187,14 @@ impl MoveRuntime {
 
     /// Preload system modules into the VM cache to ensure dependencies are available
     fn preload_system_modules_into_vm(&self) -> Result<()> {
-        let vm_guard = self.vm.read().unwrap();
+        let vm_guard = self.vm.read().unwrap_or_else(|e| e.into_inner());
         let session = self.create_session_with_storage_ext(&vm_guard);
 
         // Get all published module IDs from our index
         let module_ids: Vec<ModuleId> = self
             .published_modules
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .cloned()
             .collect();
@@ -277,7 +277,7 @@ impl MoveRuntime {
 
         let (move_changeset, events) = {
             // 🟢 Separate Lock into a variable first to prevent it from being dropped immediately
-            let vm_guard = self.vm.read().unwrap();
+            let vm_guard = self.vm.read().unwrap_or_else(|e| e.into_inner());
             let mut session = self.create_session_with_storage_ext(&vm_guard);
 
             let provided_gas_limit = gas_info.map(|(limit, _)| limit).unwrap_or(1_000_000);
@@ -368,7 +368,7 @@ impl MoveRuntime {
         let epoch_timestamp_ms = timestamp.unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_else(|_| std::time::Duration::ZERO)
                 .as_millis() as u64
         });
         let tx_hash = if let Some(raw_tx_hash) = tx_hash {
@@ -676,7 +676,7 @@ impl MoveRuntime {
             bypass_entry_check,
         } = options;
 
-        let vm_guard = self.vm.read().unwrap();
+        let vm_guard = self.vm.read().unwrap_or_else(|e| e.into_inner());
         let mut session = self.create_session_with_storage_ext(&vm_guard);
 
         let mut auto_merged_coin_ids = Vec::new();
@@ -795,8 +795,8 @@ impl MoveRuntime {
                                     }) {
                                         let event_type = TypeTag::Struct(Box::new(StructTag {
                                             address: KanariAddress::kanari_system_account_address(),
-                                            module: Identifier::new("system_events").unwrap(),
-                                            name: Identifier::new("AutoMergeReceipt").unwrap(),
+                                            module: Identifier::new("system_events").expect("system_events is a valid identifier"),
+                                            name: Identifier::new("AutoMergeReceipt").expect("AutoMergeReceipt is a valid identifier"),
                                             type_params: vec![TypeTag::Struct(struct_tag.clone())],
                                         }));
                                         synthetic_events.push((event_type, event_bytes));
