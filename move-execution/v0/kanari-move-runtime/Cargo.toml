@@ -42,6 +42,9 @@ kanari-frameworks = { workspace = true }
 move-package = { workspace = true }
 tempfile = { workspace = true }
 kanari-types = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+bcs = { workspace = true }
 
 [features]
 default = []

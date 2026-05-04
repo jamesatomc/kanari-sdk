@@ -1,8 +1,29 @@
-*~
-.idea
-.DS_Store
-target
-tmp
+```
+# Build artifacts
+target/
+
+# Dependencies
 Cargo.lock
-frameworks/kanari-framework/build
-data
+
+# Test coverage
+**/test_results/
+**/target/debug/deps/
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# Rust-specific
+**/Cargo.lock
+**/target/
+```
