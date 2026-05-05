@@ -1,8 +1,21 @@
-*~
-.idea
-.DS_Store
-target
-tmp
+```
+# Rust/Cargo specific ignores
+target/
 Cargo.lock
-frameworks/kanari-framework/build
-data
+**/*.rs.bk
+
+# Dependencies
+vendor/
+
+# Build artifacts
+build/
+dist/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```
