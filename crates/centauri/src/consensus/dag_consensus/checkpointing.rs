@@ -443,7 +443,7 @@ impl DagConsensus {
     pub(crate) fn checkpoint_state_root(
         &self,
         _vertices_to_commit: &[VertexId],
-        _checkpoint_transactions: &[SignedTransaction],
+        checkpoint_transactions: &[SignedTransaction],
     ) -> Result<Vec<u8>> {
         // DAG vertices carry speculative execution roots that may depend on a broader
         // parent ancestry than the transaction set that will ultimately be committed in
@@ -454,7 +454,42 @@ impl DagConsensus {
         // Until that canonical root is computed, consensus should advertise only the
         // latest finalized checkpoint root as a provisional placeholder instead of
         // reusing a vertex-local speculative root.
-        Ok(self.store.latest_checkpoint().state_root.clone())
+        
+        // Compute the canonical state root by replaying checkpoint transactions
+        // against the latest checkpoint state
+        let latest_checkpoint = self.store.latest_checkpoint();
+        let state_snapshot = self.execution_engine.state_read().clone();
+        let state_arc = Arc::new(RwLock::new(state_snapshot));
+        
+        // Filter out already executed transactions
+        let to_execute: Vec<SignedTransaction> = checkpoint_transactions
+            .iter()
+            .filter(|tx| !self.store.executed_tx_hashes.contains(&logical_tx_hash(tx)))
+            .cloned()
+            .collect();
+        
+        // Apply system prologue if there are transactions to execute
+        if !to_execute.is_empty() {
+            let timestamp = canonical_checkpoint_timestamp(latest_checkpoint.sequence + 1);
+            self.execution_engine.apply_system_prologue_to_state(
+                &state_arc,
+                timestamp,
+                false,
+            )?;
+            
+            // Execute transactions without persisting objects
+            self.execution_engine.execute_tx_waves_strict_serial(
+                to_execute,
+                &state_arc,
+                Some(timestamp),
+                false,
+            )?;
+        }
+        
+        // Compute the new state root
+        let verified_state = state_arc.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let computed_root = verified_state.compute_state_root();
+        Ok(computed_root)
     }
 
     pub fn try_commit(&mut self) -> Result<Option<Checkpoint>> {
