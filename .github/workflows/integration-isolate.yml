@@ -1,0 +1,38 @@
+name: Integration isolate
+
+on:
+  pull_request:
+    branches: [kanari-sdk]
+
+permissions:
+  contents: read
+
+jobs:
+  check-branch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+          - security/fix-critical-object-view-20260620
+          - security/consensus-hash-binding-20260620
+          - security/disable-unsafe-views-20260620
+          - security/node-startup-hardening-20260620
+          - fix/session-lifetime-20260620
+          - fix/mempool-admission-20260620
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/full-remediation-20260620
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Merge one branch
+        run: |
+          git config user.name kanari-ci
+          git config user.email ci@users.noreply.github.com
+          git fetch -q origin "${{ matrix.branch }}"
+          git merge -q --no-edit --no-ff "origin/${{ matrix.branch }}"
+      - name: Cargo check
+        run: cargo check -q -p kanari-auth -p kanari-node -p kanari-core -p kanari-rpc-server -p kanari-move-runtime-v1
