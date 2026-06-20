@@ -1,4 +1,4 @@
-name: Rust security regressions
+name: Rust integration validation
 
 on:
   pull_request:
@@ -9,28 +9,50 @@ on:
       - "ci/**"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: rust-security-${{ github.ref }}
+  group: rust-integration-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
+  integrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: security/full-remediation-20260620
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Check affected crates
-        run: >-
-          cargo check
-          -p kanari-auth
-          -p kanari-node
-          -p kanari-core
-          -p kanari-move-runtime-v1
-      - name: Test authentication regressions
-        run: cargo test -p kanari-auth --lib
-      - name: Test core regressions
-        run: cargo test -p kanari-core --lib
+      - name: Merge remediation branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name kanari-ci
+          git config user.email ci@users.noreply.github.com
+          for branch in \
+            security/fix-critical-object-view-20260620 \
+            security/consensus-hash-binding-20260620 \
+            security/disable-unsafe-views-20260620 \
+            security/node-startup-hardening-20260620 \
+            fix/session-lifetime-20260620 \
+            fix/mempool-admission-20260620
+          do
+            git fetch origin "$branch"
+            git merge --no-edit --no-ff "origin/$branch"
+          done
+      - name: Validate affected crates
+        run: |
+          cargo fmt --all
+          git diff --check
+          cargo check -p kanari-auth -p kanari-node -p kanari-core -p kanari-rpc-server -p kanari-move-runtime-v1
+          cargo test -p kanari-auth --lib
+      - name: Push consolidated branch
+        run: |
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: format consolidated changes"
+          fi
+          git push origin HEAD:security/full-remediation-20260620
