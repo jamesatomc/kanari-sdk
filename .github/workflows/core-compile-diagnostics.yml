@@ -1,0 +1,21 @@
+name: Core compile diagnostics
+
+on:
+  pull_request:
+    branches: [kanari-sdk]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check consolidated core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone -q --depth 1 --branch security/full-remediation-20260620 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          cargo check -q -p kanari-core
