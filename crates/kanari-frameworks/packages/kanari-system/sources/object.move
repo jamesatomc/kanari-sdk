@@ -6,6 +6,10 @@ module kanari_system::object {
     use kanari_system::tx_context::TxContext;
     use std::signer;
 
+    /// Mutable object lookup by an arbitrary address is disabled until the
+    /// runtime enforces object ownership/capability authorization.
+    const E_MUTABLE_OBJECT_BORROW_DISABLED: u64 = 9005;
+
     /// Simple UID wrapper used for resource IDs in this package.
     /// The UID contains an object-style address generated from the
     /// transaction context, ensuring it is unique per creation.
@@ -80,19 +84,24 @@ module kanari_system::object {
     // This is required because entry functions do not automatically write back modified arguments.
     public native fun save_object<T: key>(obj: &T);
 
-    /// Load an object from storage by its address and return a mutable reference.
-    /// This enables runtime resolution of object IDs passed from CLI.
-    /// 
-    /// # Example
-    /// ```move
-    /// let coin_ref = borrow_global_mut<Coin<USDC>>(coin_object_id);
-    /// // Use coin_ref to modify the coin
-    /// ```
-    public native fun borrow_global_mut<T: key>(addr: address): &mut T;
+    /// Mutable lookup by a caller-supplied address is intentionally fail-closed.
+    ///
+    /// The previous native implementation returned `&mut T` after checking only
+    /// the object's type. It did not prove that the transaction sender owned the
+    /// object or held a capability authorizing mutation. Keeping that behavior
+    /// would allow an arbitrary module to mutate another account's object.
+    ///
+    /// This compatibility wrapper preserves the existing function signature so
+    /// dependent packages still compile, but every call aborts. Re-enable this
+    /// only after the runtime binds the loaded object's owner/capability to the
+    /// authenticated transaction sender.
+    public fun borrow_global_mut<T: key>(_addr: address): &mut T {
+        abort E_MUTABLE_OBJECT_BORROW_DISABLED
+    }
 
     /// Load an object from storage by its address and return an immutable reference.
     /// This allows reading any object's data without requiring ownership or mutability.
-    /// 
+    ///
     /// # Example
     /// ```move
     /// let coin_ref = borrow_global<Coin<USDC>>(coin_object_id);
@@ -115,7 +124,7 @@ module kanari_system::object {
         let test_u64 = signer::address_to_u64(test_addr);
 
         let uid = UID { addr: test_addr };
-        
+
         // 1. Check UID address
         assert!(uid_address(&uid) == test_addr, 0);
 
