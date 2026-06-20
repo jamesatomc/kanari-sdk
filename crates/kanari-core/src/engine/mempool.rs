@@ -18,6 +18,18 @@ impl BlockchainEngine {
             anyhow::bail!("Transaction batch exceeds the maximum mempool size");
         }
 
+        // Reject obviously full queues before doing signature work. Admission is
+        // checked again under the write lock immediately before insertion.
+        if self
+            .mempool_read()
+            .pending_txs
+            .len()
+            .saturating_add(batch_size)
+            > MAX_MEMPOOL_SIZE
+        {
+            anyhow::bail!("Mempool is currently full. Please try again later.");
+        }
+
         let mut sender_cache = ahash::AHashMap::with_capacity(batch_size);
         for signed_tx in &signed_txs {
             let sender = signed_tx.transaction.sender_address();
@@ -26,9 +38,7 @@ impl BlockchainEngine {
                 .or_insert_with(|| Self::normalize_addr(sender));
         }
 
-        // Signature verification and hashing are expensive, so perform them before
-        // entering the serialized admission section. No shared mempool state is read
-        // until the write lock is held.
+        // Expensive signature verification stays outside the admission lock.
         let mut verified_txs = signed_txs
             .into_par_iter()
             .map(
@@ -36,9 +46,10 @@ impl BlockchainEngine {
                     let verified = signed_tx.into_verified()?;
                     let tx_hash = verified.hash().to_vec();
                     let sender = verified.transaction().sender_address();
-                    let normalized_sender = sender_cache.get(sender).cloned().ok_or_else(|| {
-                        anyhow::anyhow!("Sender cache missing verified transaction sender")
-                    })?;
+                    let normalized_sender = sender_cache
+                        .get(sender)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Sender cache entry is missing"))?;
                     let sequence_number = verified.transaction().sequence_number();
                     Ok((
                         verified.into_signed_transaction(),
@@ -61,17 +72,7 @@ impl BlockchainEngine {
             .map(|(_, hash, sender, sequence)| (hash.clone(), sender.clone(), *sequence))
             .collect();
 
-        // Admission is one critical section. Duplicate checks, sequence checks and
-        // insertion all observe the same pending-pool snapshot, preventing two
-        // concurrent submissions from both passing stale pre-lock validation.
-        let mut mempool = self.mempool_write();
-
-        if mempool.pending_txs.len().saturating_add(batch_size) > MAX_MEMPOOL_SIZE {
-            log::warn!("[MEMPOOL] Rejecting batch: queue would exceed max size");
-            anyhow::bail!("Mempool is currently full. Please try again later.");
-        }
-
-        let base_sequences = {
+        let base_sequences: std::collections::HashMap<String, u64> = {
             let state = self.state_read();
             let mut sequences = std::collections::HashMap::with_capacity(batch_metadata.len());
             for (_, sender, _) in &batch_metadata {
@@ -100,8 +101,9 @@ impl BlockchainEngine {
             if !chain.has_executed_transactions() {
                 AHashSet::new()
             } else {
+                use rayon::prelude::*;
                 batch_metadata
-                    .iter()
+                    .par_iter()
                     .filter_map(|(tx_hash, _, _)| {
                         if chain.is_transaction_hash_executed(tx_hash) {
                             Some(tx_hash.clone())
@@ -109,21 +111,23 @@ impl BlockchainEngine {
                             None
                         }
                     })
+                    .collect::<Vec<_>>()
+                    .into_iter()
                     .collect::<AHashSet<_>>()
             }
         };
 
         let mut batch_hashes = AHashSet::with_capacity(batch_size);
         let mut accepted_hashes = Vec::with_capacity(batch_size);
-        let mut accepted_counts_by_sender = ahash::AHashMap::new();
-        let mut sequence_groups = ahash::AHashMap::new();
+        let mut accepted_counts_by_sender: ahash::AHashMap<String, u64> =
+            ahash::AHashMap::new();
+        let mut sequence_groups: ahash::AHashMap<String, Vec<u64>> =
+            ahash::AHashMap::new();
 
         for (tx_hash, sender, tx_seq) in &batch_metadata {
-            if mempool.pending_tx_hashes.contains(tx_hash)
-                || !batch_hashes.insert(tx_hash.clone())
-            {
+            if !batch_hashes.insert(tx_hash.clone()) {
                 anyhow::bail!(
-                    "Transaction {} already in pending pool or batch",
+                    "Transaction {} appears more than once in the batch",
                     hex::encode(tx_hash)
                 );
             }
@@ -132,26 +136,52 @@ impl BlockchainEngine {
             }
 
             accepted_hashes.push(tx_hash.clone());
-            *accepted_counts_by_sender.entry(sender.clone()).or_insert(0u64) += 1;
+            *accepted_counts_by_sender.entry(sender.clone()).or_insert(0) += 1;
             sequence_groups
                 .entry(sender.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(*tx_seq);
         }
 
-        for (sender, mut tx_sequences) in sequence_groups {
-            tx_sequences.sort_unstable();
-            let base_sequence = base_sequences.get(&sender).copied().unwrap_or(0);
+        let mut sequence_groups = sequence_groups
+            .into_iter()
+            .map(|(sender, mut tx_sequences)| {
+                tx_sequences.sort_unstable();
+                let base_sequence = base_sequences.get(&sender).copied().unwrap_or(0);
+                (sender, base_sequence, tx_sequences)
+            })
+            .collect::<Vec<_>>();
+        sequence_groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Duplicate, capacity and sequence validation plus insertion form one
+        // serialized admission operation. A concurrent submit cannot pass a stale
+        // pre-lock snapshot and insert the same hash or sequence.
+        let mut mempool = self.mempool_write();
+
+        if mempool.pending_txs.len().saturating_add(batch_size) > MAX_MEMPOOL_SIZE {
+            anyhow::bail!("Mempool is currently full. Please try again later.");
+        }
+
+        for (tx_hash, _, _) in &batch_metadata {
+            if mempool.pending_tx_hashes.contains(tx_hash) {
+                anyhow::bail!(
+                    "Transaction {} already in pending pool",
+                    hex::encode(tx_hash)
+                );
+            }
+        }
+
+        for (sender, base_sequence, tx_sequences) in &sequence_groups {
             let pending_count = mempool
                 .pending_sender_counts
-                .get(&sender)
+                .get(sender)
                 .copied()
                 .unwrap_or(0);
             let expected_start = base_sequence.checked_add(pending_count).ok_or_else(|| {
                 anyhow::anyhow!("Sequence number overflow for sender {}", sender)
             })?;
 
-            for (offset, tx_seq) in tx_sequences.into_iter().enumerate() {
+            for (offset, tx_seq) in tx_sequences.iter().copied().enumerate() {
                 let offset = u64::try_from(offset)
                     .map_err(|_| anyhow::anyhow!("Sequence offset overflow"))?;
                 let expected_seq = expected_start.checked_add(offset).ok_or_else(|| {
@@ -257,5 +287,12 @@ impl BlockchainEngine {
                 counts.remove(&sender);
             }
         }
+    }
+
+    pub(crate) fn normalize_addr(addr: &str) -> String {
+        use std::str::FromStr;
+        KanariAddress::from_str(addr)
+            .map(|a| a.to_hex())
+            .unwrap_or_else(|_| addr.trim_start_matches("0x").to_lowercase())
     }
 }
