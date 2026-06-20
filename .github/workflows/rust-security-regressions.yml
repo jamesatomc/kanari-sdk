@@ -1,0 +1,36 @@
+name: Rust security regressions
+
+on:
+  pull_request:
+    branches: [kanari-sdk]
+  push:
+    branches:
+      - "security/**"
+      - "ci/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check affected crates
+        run: >-
+          cargo check
+          -p kanari-auth
+          -p kanari-node
+          -p kanari-core
+          -p kanari-move-runtime-v1
+      - name: Test authentication regressions
+        run: cargo test -p kanari-auth --lib
+      - name: Test core regressions
+        run: cargo test -p kanari-core --lib
