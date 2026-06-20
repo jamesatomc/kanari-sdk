@@ -36,3 +36,5 @@ jobs:
           git merge -q --no-edit --no-ff "origin/${{ matrix.branch }}"
       - name: Cargo check
         run: cargo check -q -p kanari-auth -p kanari-node -p kanari-core -p kanari-rpc-server -p kanari-move-runtime-v1
+
+# Re-run after mempool admission update.
