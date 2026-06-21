@@ -2,60 +2,64 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$SourceDataDir,
     [string]$BackupRoot = "$env:USERPROFILE\.kanari\backups",
-    [string]$Label = "node-backup"
+    [string]$Label = 'node-backup',
+    [string]$RpcUrl = ''
 )
 
-$resolvedSource = Resolve-Path -LiteralPath $SourceDataDir -ErrorAction Stop
-$sourceRoot = $resolvedSource.Path
-$skippedFiles = @()
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $BackupRoot)) {
-    New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
-}
-
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$backupDir = Join-Path $BackupRoot "$Label-$timestamp"
-
-Write-Host "Creating backup from $resolvedSource" -ForegroundColor Cyan
-Write-Host "Backup directory: $backupDir" -ForegroundColor Cyan
-
-New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-$backupDataDir = Join-Path $backupDir "data"
-New-Item -ItemType Directory -Path $backupDataDir -Force | Out-Null
-
-Get-ChildItem -LiteralPath $sourceRoot -Recurse -Force | ForEach-Object {
-    $relativePath = $_.FullName.Substring($sourceRoot.Length).TrimStart('\')
-    $targetPath = Join-Path $backupDataDir $relativePath
-
-    if ($_.PSIsContainer) {
-        New-Item -ItemType Directory -Path $targetPath -Force | Out-Null
-        return
+try {
+    if (Get-Process -Name 'kanari-node' -ErrorAction SilentlyContinue) {
+        throw 'Stop every kanari-node process before creating a filesystem backup.'
     }
 
-    $parentDir = Split-Path -Parent $targetPath
-    if ($parentDir -and -not (Test-Path $parentDir)) {
-        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    $source = (Resolve-Path -LiteralPath $SourceDataDir).Path
+    if (-not (Test-Path -LiteralPath $BackupRoot)) {
+        New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
     }
 
-    try {
-        Copy-Item -LiteralPath $_.FullName -Destination $targetPath -Force -ErrorAction Stop
-    } catch {
-        $skippedFiles += $relativePath
-        Write-Host "Skipping locked/unreadable file: $relativePath" -ForegroundColor Yellow
+    $backupDir = Join-Path $BackupRoot ("{0}-{1}" -f $Label, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $dataDir = Join-Path $backupDir 'data'
+    New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+    Copy-Item -Path (Join-Path $source '*') -Destination $dataDir -Recurse -Force -ErrorAction Stop
+
+    $manifest = @()
+    Get-ChildItem -LiteralPath $dataDir -Recurse -File | Sort-Object FullName | ForEach-Object {
+        $manifest += [ordered]@{
+            path = $_.FullName.Substring($dataDir.Length).TrimStart('\')
+            length = $_.Length
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
     }
-}
+    $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $backupDir 'file-manifest.json') -Encoding UTF8
 
-$metadata = @{
-    created_at = (Get-Date).ToString("o")
-    source_data_dir = $sourceRoot
-    label = $Label
-    host = $env:COMPUTERNAME
-    skipped_files = $skippedFiles
-} | ConvertTo-Json -Depth 4
+    $metadata = [ordered]@{
+        schema_version = 2
+        created_at = (Get-Date).ToUniversalTime().ToString('o')
+        source_data_dir = $source
+        host = $env:COMPUTERNAME
+        file_count = $manifest.Count
+        checkpoint_height = $null
+        checkpoint_state_root = $null
+        network = $null
+        authority_id = $null
+    }
 
-$metadata | Set-Content -LiteralPath (Join-Path $backupDir "backup-metadata.json")
+    if (-not [string]::IsNullOrWhiteSpace($RpcUrl)) {
+        . (Join-Path $PSScriptRoot 'node-script-common.ps1')
+        $health = Get-NodeHealthStatus -RpcUrl $RpcUrl
+        $stats = Get-NodeStats -RpcUrl $RpcUrl
+        $networkStatus = Get-NodeNetworkStatus -RpcUrl $RpcUrl
+        $metadata.checkpoint_height = $stats.height
+        $metadata.checkpoint_state_root = $stats.state_root
+        $metadata.network = $health.network
+        $metadata.authority_id = $networkStatus.local_authority_id
+    }
 
-Write-Host "Backup completed: $backupDir" -ForegroundColor Green
-if ($skippedFiles.Count -gt 0) {
-    Write-Host "Skipped $($skippedFiles.Count) locked/unreadable file(s). See backup-metadata.json for details." -ForegroundColor Yellow
+    $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $backupDir 'backup-metadata.json') -Encoding UTF8
+    Write-Host "Backup completed: $backupDir" -ForegroundColor Green
+} catch {
+    Write-Host "Backup failed: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
 }
