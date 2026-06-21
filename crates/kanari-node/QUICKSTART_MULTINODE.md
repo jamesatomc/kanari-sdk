@@ -54,7 +54,6 @@ cargo run --bin kanari-node -- consensus-keygen --node-count 3 --output-dir .\co
 Start node 1:
 
 ```powershell
-$node1Key = (Get-Content .\consensus-keys\node1-consensus-private-key.hex -Raw).Trim()
 cargo run --bin kanari-node -- start `
   --network devnet `
   --p2p-port 19000 `
@@ -62,14 +61,13 @@ cargo run --bin kanari-node -- start `
   --data-dir data\node1 `
   --authority-id 0x1 `
   --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node1Key `
+  --consensus-private-key-file .\consensus-keys\node1-consensus-private-key.hex `
   --consensus-public-keys .\consensus-keys\consensus-public-keys.json
 ```
 
 Start node 2:
 
 ```powershell
-$node2Key = (Get-Content .\consensus-keys\node2-consensus-private-key.hex -Raw).Trim()
 cargo run --bin kanari-node -- start `
   --network devnet `
   --p2p-port 19010 `
@@ -77,7 +75,7 @@ cargo run --bin kanari-node -- start `
   --data-dir data\node2 `
   --authority-id 0x2 `
   --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node2Key `
+  --consensus-private-key-file .\consensus-keys\node2-consensus-private-key.hex `
   --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
   --bootstrap /ip4/<node1-ip>/tcp/19000
 ```
@@ -85,7 +83,6 @@ cargo run --bin kanari-node -- start `
 Start node 3:
 
 ```powershell
-$node3Key = (Get-Content .\consensus-keys\node3-consensus-private-key.hex -Raw).Trim()
 cargo run --bin kanari-node -- start `
   --network devnet `
   --p2p-port 19020 `
@@ -93,7 +90,7 @@ cargo run --bin kanari-node -- start `
   --data-dir data\node3 `
   --authority-id 0x3 `
   --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node3Key `
+  --consensus-private-key-file .\consensus-keys\node3-consensus-private-key.hex `
   --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
   --bootstrap /ip4/<node1-ip>/tcp/19000
 ```
