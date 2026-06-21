@@ -425,6 +425,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn consensus_key_file_rejects_group_or_world_permissions() {
+        use super::validate_start_authority_config;
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
@@ -432,21 +433,22 @@ mod tests {
         std::fs::write(&path, "11".repeat(32)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        let error = read_consensus_private_key(&path).unwrap_err();
+        let error = super::read_consensus_private_key(&path).unwrap_err();
         assert!(error.to_string().contains("insecure permissions"));
     }
 
     #[cfg(unix)]
     #[test]
     fn consensus_key_file_accepts_owner_only_permissions() {
+        use super::validate_start_authority_config;
         use std::os::unix::fs::PermissionsExt;
-
+        
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("consensus.hex");
         std::fs::write(&path, "11".repeat(32)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        let key = read_consensus_private_key(&path).unwrap();
+        let key = super::read_consensus_private_key(&path).unwrap();
         assert_eq!(key.as_str(), "11".repeat(32));
     }
 }

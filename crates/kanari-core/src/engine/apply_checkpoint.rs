@@ -112,6 +112,10 @@ impl BlockchainEngine {
                 .context("Supply invariants failed before checkpoint commit")?;
         }
 
+        if let Some(store) = &self.persistent_store {
+            Self::persist_pending_checkpoint_journal(store, &checkpoint)?;
+        }
+
         {
             let mut state = self.state_write();
             *state = new_state;
@@ -124,7 +128,13 @@ impl BlockchainEngine {
             runtime.clear_object_cache()?;
         }
 
-        self.finalize_checkpoint_metadata(checkpoint)
+        self.finalize_checkpoint_metadata(checkpoint.clone())?;
+
+        if let Some(store) = &self.persistent_store {
+            Self::clear_pending_checkpoint_journal(store)?;
+        }
+
+        Ok(())
     }
 
     fn finalize_checkpoint_metadata(&self, checkpoint: Checkpoint) -> Result<()> {
@@ -216,5 +226,75 @@ impl BlockchainEngine {
         self.ensure_checkpoint_root_matches(&checkpoint, &computed_root)?;
 
         self.apply_prepared_checkpoint(checkpoint, verified_state, to_execute, true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consensus::Checkpoint;
+    use kanari_crypto::keys::{CurveType, generate_keypair};
+    use kanari_types::transaction::{SignedTransaction, Transaction};
+
+    fn signed_transfer(sequence_number: u64) -> SignedTransaction {
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        let tx = Transaction::new_transfer(
+            sender.tagged_address(),
+            recipient.address,
+            1,
+            sequence_number,
+        );
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+        signed_tx
+    }
+
+    #[test]
+    fn restart_recovers_checkpoint_metadata_from_pending_journal() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let data_dir = temp_dir.path().to_str().unwrap();
+        let engine = BlockchainEngine::new_dir(data_dir).unwrap();
+        let tx = signed_transfer(0);
+        let tx_hash = tx.transaction_hash().to_vec();
+        let prev_hash = {
+            let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
+            chain.latest_checkpoint().hash().unwrap()
+        };
+        let draft_checkpoint = Checkpoint::new(
+            1,
+            vec![[1u8; 32]],
+            vec![tx.clone()],
+            Vec::new(),
+            42,
+            prev_hash.clone(),
+        );
+        let (computed_root, verified_state, _) = engine.prepare_checkpoint_state(&draft_checkpoint).unwrap();
+        let checkpoint = Checkpoint::new(
+            1,
+            vec![[1u8; 32]],
+            vec![tx],
+            computed_root,
+            42,
+            prev_hash,
+        );
+
+        let store = engine.persistent_store.as_ref().unwrap();
+        BlockchainEngine::persist_pending_checkpoint_journal(store, &checkpoint).unwrap();
+        {
+            let mut state = engine.state_write();
+            *state = verified_state;
+            state.commit().unwrap();
+        }
+        drop(engine);
+
+        let restarted = BlockchainEngine::new_dir(data_dir).unwrap();
+        assert_eq!(restarted.get_stats().height, 1);
+        let found = restarted.get_committed_transaction_from_history(&tx_hash);
+        assert!(found.is_some());
+        let store = restarted.persistent_store.as_ref().unwrap();
+        assert!(BlockchainEngine::load_pending_checkpoint_journal(store).unwrap().is_none());
     }
 }

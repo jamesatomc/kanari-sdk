@@ -56,6 +56,36 @@ impl BlockchainEngine {
             .unwrap_or_else(|_| Self::network_name().eq_ignore_ascii_case("mainnet"))
     }
 
+    pub fn allow_in_memory_fallback() -> bool {
+        env::var("KANARI_ALLOW_IN_MEMORY_FALLBACK")
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn checkpoint_chain_id() -> String {
+        env::var("KANARI_CHAIN_ID")
+            .unwrap_or_else(|_| format!("kanari-{}", Self::network_name().to_ascii_lowercase()))
+    }
+
+    pub fn current_epoch() -> u64 {
+        env::var("KANARI_EPOCH")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
+    }
+
+    pub fn checkpoint_protocol_version() -> u64 {
+        env::var("KANARI_PROTOCOL_VERSION")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1)
+    }
+
     pub fn fail_fast_supply_enabled() -> bool {
         StateManager::supply_invariant_fail_fast_enabled()
     }

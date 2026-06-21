@@ -132,7 +132,7 @@ fn derive_key(password: &[u8], salt: &[u8], iterations: u32) -> AuthResult<Zeroi
 
     for _ in 1..iterations {
         let mut round = Sha256::new();
-        round.update(&*block);
+        round.update(*block);
         round.update(password);
         round.update(salt);
         block.copy_from_slice(&round.finalize());

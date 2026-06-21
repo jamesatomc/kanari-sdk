@@ -205,6 +205,45 @@ impl Checkpoint {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointSignature {
+    pub authority_id: AuthorityId,
+    pub signature: Vec<u8>,
+    pub voting_power: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointCertificate {
+    pub epoch: u64,
+    pub chain_id: String,
+    pub protocol_version: u64,
+    pub sequence: u64,
+    pub checkpoint_hash: Vec<u8>,
+    pub prev_checkpoint_hash: Vec<u8>,
+    pub state_root: Vec<u8>,
+    pub certified_vertex: Option<VertexId>,
+    pub committee_digest: Vec<u8>,
+    pub signatures: Vec<CheckpointSignature>,
+    pub total_voting_power: u64,
+}
+
+impl CheckpointCertificate {
+    pub fn signing_bytes(&self) -> Result<Vec<u8>> {
+        Ok(bcs::to_bytes(&(
+            b"kanari:checkpoint-certificate:v1".as_slice(),
+            self.epoch,
+            &self.chain_id,
+            self.protocol_version,
+            self.sequence,
+            &self.checkpoint_hash,
+            &self.prev_checkpoint_hash,
+            &self.state_root,
+            self.certified_vertex,
+            &self.committee_digest,
+        ))?)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentDagState {
     pub vertices: Vec<DagVertex>,

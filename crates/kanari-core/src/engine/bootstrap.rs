@@ -31,7 +31,7 @@ impl BlockchainEngine {
             match opener() {
                 Ok(store) => Ok(Some(Arc::new(store))),
                 Err(e) => {
-                    if Self::strict_persistence_required() {
+                    if Self::strict_persistence_required() || !Self::allow_in_memory_fallback() {
                         anyhow::bail!(
                             "Failed to open {} persistent store in {} mode: {}",
                             context,
@@ -132,6 +132,8 @@ impl BlockchainEngine {
             consensus_signing_key: None,
             consensus_public_keys: BTreeMap::new(),
         };
+
+        engine.recover_pending_checkpoint_journal()?;
 
         let stats = engine.get_stats();
         tracing::info!(

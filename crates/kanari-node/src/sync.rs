@@ -1385,6 +1385,7 @@ mod tests {
         };
         let bogus_checkpoint = CheckpointSyncData {
             checkpoint: Checkpoint::new(3, vec![], vec![], vec![0u8; 32], 3, prev_hash),
+            certificate: None,
         };
 
         let runtime = tokio::runtime::Builder::new_current_thread()

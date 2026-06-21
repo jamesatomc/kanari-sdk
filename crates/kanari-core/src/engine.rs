@@ -3,7 +3,7 @@
 
 use crate::blockchain::Blockchain;
 use crate::consensus::{
-    Checkpoint, DagMetrics, DagProductionPolicy, DagVertex, PersistentDagState,
+    Checkpoint, CheckpointCertificate, DagMetrics, DagProductionPolicy, DagVertex, PersistentDagState,
 };
 use ahash::AHashMap;
 use anyhow::{Context, Result};
@@ -44,6 +44,7 @@ pub use runtime_guards::{RuntimeGuardConfig, RuntimeHealthReport};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CheckpointSyncData {
     pub checkpoint: Checkpoint,
+    pub certificate: Option<CheckpointCertificate>,
 }
 
 const MAX_MEMPOOL_SIZE: usize = 1_000_000;
@@ -53,6 +54,11 @@ const MAX_PERSISTED_RECENT_TX_HASHES: usize = 100_000;
 struct PersistedTransactionLocation {
     checkpoint_sequence: u64,
     state_root: Vec<u8>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PendingCheckpointJournal {
+    checkpoint: Checkpoint,
 }
 
 #[derive(Debug, Default)]
@@ -197,6 +203,37 @@ impl BlockchainEngine {
         b"tx_recent"
     }
 
+    fn pending_checkpoint_journal_key() -> &'static [u8] {
+        b"checkpoint_journal/pending"
+    }
+
+    fn persist_pending_checkpoint_journal(
+        store: &PersistentStore,
+        checkpoint: &Checkpoint,
+    ) -> Result<()> {
+        store
+            .save(
+                Self::pending_checkpoint_journal_key(),
+                &PendingCheckpointJournal {
+                    checkpoint: checkpoint.clone(),
+                },
+            )
+            .context("Failed to persist pending checkpoint journal")
+    }
+
+    fn load_pending_checkpoint_journal(
+        store: &PersistentStore,
+    ) -> Result<Option<PendingCheckpointJournal>> {
+        store
+            .load(Self::pending_checkpoint_journal_key())
+            .context("Failed to load pending checkpoint journal")
+    }
+
+    fn clear_pending_checkpoint_journal(store: &PersistentStore) -> Result<()> {
+        store
+            .delete(Self::pending_checkpoint_journal_key())
+            .context("Failed to clear pending checkpoint journal")
+    }
     fn vertex_transactions_key(vertex_id: &[u8; 32]) -> Vec<u8> {
         let mut key = b"dag_vertex_txs/".to_vec();
         key.extend_from_slice(hex::encode(vertex_id).as_bytes());
@@ -448,6 +485,42 @@ impl BlockchainEngine {
                 checkpoint.transactions = transactions;
             }
         }
+    }
+
+    fn recover_pending_checkpoint_journal(&self) -> Result<()> {
+        let Some(store) = &self.persistent_store else {
+            return Ok(());
+        };
+        let Some(journal) = Self::load_pending_checkpoint_journal(store)? else {
+            return Ok(());
+        };
+
+        let current_height = {
+            let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
+            chain.height()
+        };
+
+        if current_height >= journal.checkpoint.sequence {
+            Self::clear_pending_checkpoint_journal(store)?;
+            return Ok(());
+        }
+
+        let computed_root = self.state_read().compute_state_root();
+        if computed_root != journal.checkpoint.state_root {
+            anyhow::bail!(
+                "Pending checkpoint journal root mismatch for checkpoint {}",
+                journal.checkpoint.sequence
+            );
+        }
+
+        {
+            let mut chain = self.blockchain.write().unwrap_or_else(|e| e.into_inner());
+            chain.add_checkpoint_with_validation(journal.checkpoint.clone(), true)?;
+            Self::persist_blockchain_snapshot_to_store(store, &chain)?;
+        }
+
+        Self::clear_pending_checkpoint_journal(store)?;
+        Ok(())
     }
 
     pub fn get_committed_transaction_from_history(
@@ -1589,7 +1662,7 @@ mod tests {
 
     #[test]
     fn batch_submit_accepts_contiguous_sequences_for_same_sender() {
-        let engine = BlockchainEngine::new().unwrap();
+        let engine = BlockchainEngine::new_in_memory().unwrap();
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         let tx0 = signed_transfer_from(&sender, 0);
         let tx1 = signed_transfer_from(&sender, 1);
@@ -1602,7 +1675,7 @@ mod tests {
 
     #[test]
     fn batch_submit_accepts_shuffled_contiguous_sequences_for_same_sender() {
-        let engine = BlockchainEngine::new().unwrap();
+        let engine = BlockchainEngine::new_in_memory().unwrap();
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         let tx0 = signed_transfer_from(&sender, 0);
         let tx1 = signed_transfer_from(&sender, 1);
@@ -1636,7 +1709,7 @@ mod tests {
 
     #[test]
     fn batch_submit_rejects_duplicate_transactions() {
-        let engine = BlockchainEngine::new().unwrap();
+        let engine = BlockchainEngine::new_in_memory().unwrap();
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         let tx = signed_transfer_from(&sender, 0);
 
@@ -1649,7 +1722,7 @@ mod tests {
 
     #[test]
     fn batch_submit_rejects_transaction_already_indexed_in_pending_pool() {
-        let engine = BlockchainEngine::new().unwrap();
+        let engine = BlockchainEngine::new_in_memory().unwrap();
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         let tx = signed_transfer_from(&sender, 0);
 
@@ -1661,7 +1734,7 @@ mod tests {
 
     #[test]
     fn batch_submit_rejects_sequence_gaps() {
-        let engine = BlockchainEngine::new().unwrap();
+        let engine = BlockchainEngine::new_in_memory().unwrap();
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         let tx = signed_transfer_from(&sender, 1);
 

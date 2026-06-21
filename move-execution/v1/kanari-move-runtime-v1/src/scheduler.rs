@@ -1,7 +1,7 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use kanari_types::transaction::SignedTransaction;
+use kanari_types::transaction::{SignedTransaction, Transaction};
 use std::collections::HashMap;
 
 /// Transaction Scheduler for parallel execution
@@ -15,6 +15,37 @@ impl TransactionScheduler {
             .map(|last_wave| last_wave + 1)
             .max()
             .unwrap_or(0)
+    }
+
+    fn arg_declares_conflict_key(arg: &[u8]) -> bool {
+        if arg.len() == 32 {
+            return true;
+        }
+
+        let parsed_string = bcs::from_bytes::<String>(arg)
+            .or_else(|_| std::str::from_utf8(arg).map(|s| s.to_string()));
+        let Ok(parsed_string) = parsed_string else {
+            return false;
+        };
+        let trimmed = parsed_string.trim();
+        let hex_str = if trimmed.starts_with("0x") {
+            trimmed.to_string()
+        } else {
+            format!("0x{}", trimmed)
+        };
+        move_core_types::account_address::AccountAddress::from_hex_literal(&hex_str).is_ok()
+    }
+
+    fn conflict_keys_are_complete(tx: &SignedTransaction) -> bool {
+        match &tx.transaction {
+            Transaction::PublishModule { .. } => false,
+            Transaction::ExecuteFunction { args, .. } => {
+                if tx.transaction.native_call().is_some() {
+                    return true;
+                }
+                args.iter().any(|arg| Self::arg_declares_conflict_key(arg))
+            }
+        }
     }
 
     /// Schedule transactions into parallel execution waves based on object conflicts.
@@ -31,6 +62,13 @@ impl TransactionScheduler {
     /// - Transactions with conflicts are ordered sequentially (preserving causal order).
     /// - Transactions without conflicts are placed in the earliest possible wave (maximizing parallelism).
     pub fn schedule(transactions: Vec<SignedTransaction>) -> Vec<Vec<SignedTransaction>> {
+        if transactions
+            .iter()
+            .any(|tx| !Self::conflict_keys_are_complete(tx))
+        {
+            return transactions.into_iter().map(|tx| vec![tx]).collect();
+        }
+
         let mut waves: Vec<Vec<SignedTransaction>> = Vec::new();
         // Map: Conflict Key -> Index of the last wave that touched this key
         // We use isize here to represent "no wave yet" as -1, so the first wave is 0.
@@ -133,6 +171,17 @@ mod tests {
         assert_eq!(waves[0].len(), 1);
         assert_eq!(waves[1].len(), 1);
         assert_eq!(waves[2].len(), 1);
+    }
+
+    #[test]
+    fn test_schedule_unknown_conflicts_fall_back_to_serial_waves() {
+        let tx1 = create_dummy_tx("A", "M1", None);
+        let tx2 = create_dummy_tx("B", "M2", None);
+
+        let waves = TransactionScheduler::schedule(vec![tx1, tx2]);
+
+        assert_eq!(waves.len(), 2);
+        assert!(waves.iter().all(|wave| wave.len() == 1));
     }
 
     #[test]
