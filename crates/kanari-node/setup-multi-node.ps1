@@ -128,6 +128,14 @@ if ($ResetConsensusKeys -and (Test-Path $ConsensusKeyDir)) {
 }
 
 $publicKeysPath = Join-Path $ConsensusKeyDir "consensus-public-keys.json"
+$unsafeLocalMarker = Join-Path $ConsensusKeyDir ".unsafe-local-deterministic"
+
+if ($Network -eq "mainnet" -and (Test-Path $unsafeLocalMarker)) {
+    Write-Host "Error: refusing to use unsafe deterministic local committee keys on mainnet." -ForegroundColor Red
+    Write-Host "Delete $ConsensusKeyDir and generate production keys without --unsafe-local-deterministic." -ForegroundColor Yellow
+    exit 1
+}
+
 $missingConsensusKeys = -not (Test-Path $publicKeysPath)
 for ($i = 1; $i -le $NodeCount; $i++) {
     $privateKeyPath = Join-Path $ConsensusKeyDir "node$i-consensus-private-key.hex"
@@ -137,9 +145,35 @@ for ($i = 1; $i -le $NodeCount; $i++) {
     }
 }
 
+# The current certificate implementation can aggregate a local test quorum only
+# when the generated committee matches the deterministic test-key scheme used by
+# kanari-core. Existing random key directories from older builds have no marker,
+# so regenerate them automatically for testnet/devnet local clusters.
+if ($Network -ne "mainnet" -and -not (Test-Path $unsafeLocalMarker)) {
+    $missingConsensusKeys = $true
+}
+
 if ($missingConsensusKeys) {
+    if ($Network -ne "mainnet" -and $AllowReuseData -and $hasReusableData -and -not ($ResetSourceData -and $ResetReplicaData)) {
+        Write-Host "Error: local committee keys need regeneration, but existing chain data is being reused." -ForegroundColor Red
+        Write-Host "Restart with -ResetSourceData -ResetReplicaData so the committee digest and persisted checkpoints remain consistent." -ForegroundColor Yellow
+        exit 1
+    }
+
     Write-Host "Generating consensus keys for $NodeCount node(s)..." -ForegroundColor Cyan
-    & $exePath consensus-keygen --node-count $NodeCount --output-dir $ConsensusKeyDir --force
+    $keygenArgs = @(
+        "consensus-keygen",
+        "--node-count", $NodeCount,
+        "--output-dir", $ConsensusKeyDir,
+        "--force"
+    )
+    if ($Network -ne "mainnet") {
+        $keygenArgs += "--unsafe-local-deterministic"
+        Write-Host "Using deterministic LOCAL-ONLY committee keys for quorum certificate tests." -ForegroundColor Yellow
+        Write-Host "These keys are public and must never be used on mainnet." -ForegroundColor DarkYellow
+    }
+
+    & $exePath @keygenArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Failed to generate consensus keys." -ForegroundColor Red
         exit $LASTEXITCODE
