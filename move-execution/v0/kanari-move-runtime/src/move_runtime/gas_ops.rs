@@ -3,9 +3,9 @@
 
 // Gas metering and accounting operations
 use crate::changeset::ChangeSet;
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use kanari_types::address::Address as KanariAddress;
-use kanari_types::gas_v2::{GasMeter, GasOperation};
+use kanari_types::gas::{GasMeter, GasOperation};
 use move_core_types::account_address::AccountAddress;
 
 use move_core_types::language_storage::ModuleId;
@@ -25,7 +25,8 @@ impl super::MoveRuntime {
         storage_deleted: u64,
     ) -> Result<()> {
         let mut meter = GasMeter::new(gas_limit, gas_price);
-        let config = kanari_types::gas_v2::GasConfig::default();
+        let config = kanari_types::gas::GasConfig::default();
+        config.validate_price(gas_price)?;
 
         // Charge execution gas
         meter.consume(gas_op.gas_units())?;
@@ -46,8 +47,12 @@ impl super::MoveRuntime {
         let total_cost = if total_cost_signed < 0 {
             0
         } else {
-            total_cost_signed as u64
+            u64::try_from(total_cost_signed).map_err(|_| anyhow::anyhow!("Gas cost overflow"))?
         };
+        ensure!(
+            total_cost <= i64::MAX as u64,
+            "Gas cost exceeds the supported balance delta range"
+        );
 
         if let Some(saddr) = sender {
             let sender_change = cs.get_or_create_change(saddr);

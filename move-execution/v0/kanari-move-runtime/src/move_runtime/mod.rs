@@ -28,7 +28,7 @@ mod load_system_modules;
 mod object_ops;
 mod parsers;
 use kanari_types::address::Address as KanariAddress;
-use kanari_types::gas_v2::GasOperation;
+use kanari_types::gas::GasOperation;
 use kanari_types::tx_context::TxContextModule;
 pub mod move_runtime_extensions;
 use crate::changeset::ChangeSet;

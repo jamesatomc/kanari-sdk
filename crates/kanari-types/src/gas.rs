@@ -25,6 +25,26 @@ pub struct GasConfig {
     pub storage_rebate_rate: u8,
 }
 
+impl GasConfig {
+    pub fn default_transaction_gas_limit(&self) -> u64 {
+        self.max_gas_per_tx
+    }
+
+    pub fn default_transaction_gas_price(&self) -> u64 {
+        self.base_price.max(self.min_gas_price)
+    }
+
+    pub fn validate_price(&self, gas_price: u64) -> Result<(), GasError> {
+        if gas_price < self.min_gas_price {
+            return Err(GasError::PriceTooLow {
+                provided: gas_price,
+                minimum: self.min_gas_price,
+            });
+        }
+        Ok(())
+    }
+}
+
 impl Default for GasConfig {
     fn default() -> Self {
         Self {
@@ -114,28 +134,26 @@ impl GasMeter {
     }
 
     /// Charge for storage bytes written
-    pub fn charge_storage(&mut self, bytes: u64, config: &GasConfig) -> Result<(), GasError> {
-        self.storage_bytes_written += bytes;
-        // Storage is charged in Mist directly, not gas units, but we can convert for simplicity
-        // or just track it separately. Here we convert to gas units based on price ratio.
-        let mist_cost = bytes * config.storage_price_per_byte;
-        let gas_cost = mist_cost / self.gas_price.max(1); // Avoid division by zero
-        self.consume(gas_cost)
+    pub fn charge_storage(&mut self, bytes: u64, _config: &GasConfig) -> Result<(), GasError> {
+        self.storage_bytes_written = self
+            .storage_bytes_written
+            .checked_add(bytes)
+            .ok_or(GasError::Overflow)?;
+        Ok(())
     }
 
     /// Record storage rebate (refund)
     pub fn rebate_storage(&mut self, bytes: u64) {
-        self.storage_bytes_deleted += bytes;
+        self.storage_bytes_deleted = self.storage_bytes_deleted.saturating_add(bytes);
     }
 
     /// Calculate net storage fee in Mist
     pub fn net_storage_fee(&self, config: &GasConfig) -> i64 {
-        let cost = self.storage_bytes_written as i64 * config.storage_price_per_byte as i64;
-        let rebate = (self.storage_bytes_deleted as i64
-            * config.storage_price_per_byte as i64
-            * config.storage_rebate_rate as i64)
-            / 100;
-        cost - rebate
+        let price = config.storage_price_per_byte as i128;
+        let cost = self.storage_bytes_written as i128 * price;
+        let rebate =
+            self.storage_bytes_deleted as i128 * price * config.storage_rebate_rate as i128 / 100;
+        (cost - rebate).clamp(i64::MIN as i128, i64::MAX as i128) as i64
     }
 
     /// Consume gas for an operation
@@ -285,6 +303,40 @@ impl TransactionGas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gas_config_provides_valid_transaction_defaults() {
+        let config = GasConfig::default();
+
+        assert_eq!(
+            config.default_transaction_gas_limit(),
+            config.max_gas_per_tx
+        );
+        assert!(config.default_transaction_gas_price() >= config.min_gas_price);
+    }
+
+    #[test]
+    fn gas_config_rejects_price_below_minimum() {
+        let config = GasConfig::default();
+
+        assert!(matches!(
+            config.validate_price(0),
+            Err(GasError::PriceTooLow { .. })
+        ));
+        assert!(config.validate_price(config.min_gas_price).is_ok());
+    }
+
+    #[test]
+    fn storage_fee_is_not_added_to_execution_gas_units() {
+        let config = GasConfig::default();
+        let mut meter = GasMeter::new(100_000, 10);
+        meter.consume(100).unwrap();
+        meter.charge_storage(1_000, &config).unwrap();
+
+        assert_eq!(meter.gas_used, 100);
+        assert_eq!(meter.total_cost(), 1_000);
+        assert_eq!(meter.net_storage_fee(&config), 1_000);
+    }
 
     #[test]
     fn test_gas_meter_consume() {

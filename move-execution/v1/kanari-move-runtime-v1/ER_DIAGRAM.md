@@ -117,7 +117,7 @@ graph TD
 ### Gas & Metering
 
 - **KanariGasMeter**: [src/kanari_gas_meter.rs#L9](src/kanari_gas_meter.rs#L9)
-- **GasOperation**: [crates/kanari-types/src/gas_v2.rs](../../crates/kanari-types/src/gas_v2.rs)
+- **GasOperation**: [crates/kanari-types/src/gas.rs](../../crates/kanari-types/src/gas.rs)
 
 ### Runtime Extensions
 

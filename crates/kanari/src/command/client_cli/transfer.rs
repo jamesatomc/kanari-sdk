@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_api::CallFunctionRequest;
 use kanari_rpc_client::RpcClient;
+use kanari_types::GasConfig;
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use kanari_types::transaction::Transaction;
 
@@ -70,6 +71,9 @@ impl Transfer {
             .context("Failed to get sender account")?;
 
         let sender_tagged = get_sender_for_tx(&wallet, &from_addr)?;
+        let gas = GasConfig::default();
+        let gas_limit = gas.default_transaction_gas_limit();
+        let gas_price = gas.default_transaction_gas_price();
 
         let owned_objects = account
             .owned_objects
@@ -137,8 +141,8 @@ impl Transfer {
                 )
                 .context("Failed to serialize recipient address")?,
             ],
-            gas_limit: 100_000,
-            gas_price: 1000,
+            gas_limit,
+            gas_price,
             sequence_number: account.sequence_number,
             signature: None,
             execute_immediate: Some(true),

@@ -8,6 +8,7 @@ use crate::command::common::{
 use anyhow::{Context, Result};
 use clap::*;
 use kanari_rpc_api::{CallFunctionRequest, RpcRequest, RpcResponse, methods};
+use kanari_types::GasConfig;
 use kanari_types::gas_v2::{GasEstimate, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use log::error;
@@ -46,13 +47,13 @@ pub struct Call {
     #[clap(long = "args", num_args = 0..)]
     pub args: Vec<String>,
 
-    /// Gas limit for the transaction
-    #[clap(long = "gas-limit", default_value = "100000")]
-    pub gas_limit: u64,
+    /// Optional gas-limit override; defaults to the network GasConfig.
+    #[clap(long = "gas-limit")]
+    pub gas_limit: Option<u64>,
 
-    /// Gas price in Mist
-    #[clap(long = "gas-price", default_value = "10")]
-    pub gas_price: u64,
+    /// Optional gas-price override; defaults to the network GasConfig.
+    #[clap(long = "gas-price")]
+    pub gas_price: Option<u64>,
 
     /// RPC endpoint
     #[clap(long = "rpc")]
@@ -63,6 +64,13 @@ pub struct Call {
 impl Call {
     pub fn execute(self) -> Result<()> {
         let rpc = get_rpc_endpoint(self.rpc_endpoint.clone());
+        let gas = GasConfig::default();
+        let gas_limit = self
+            .gas_limit
+            .unwrap_or_else(|| gas.default_transaction_gas_limit());
+        let gas_price = self
+            .gas_price
+            .unwrap_or_else(|| gas.default_transaction_gas_price());
 
         eprintln!("Preparing function call...");
 
@@ -86,8 +94,8 @@ impl Call {
         eprintln!("   Package: {}::{}", package_normalized, module_name);
         eprintln!("   Function: {}", self.function);
         eprintln!("   Sender: {}", sender_normalized);
-        eprintln!("   Gas Limit: {}", self.gas_limit);
-        eprintln!("   Gas Price: {}", self.gas_price);
+        eprintln!("   Gas Limit: {}", gas_limit);
+        eprintln!("   Gas Price: {}", gas_price);
 
         // Load wallet (signing is required).
         let wallet = load_wallet_for(&sender_normalized, None)?;
@@ -121,10 +129,10 @@ impl Call {
 
         // Estimate gas using runtime `ExecuteFunction`
         let operation = GasOperation::ExecuteFunction { complexity: 1 };
-        let estimate = GasEstimate::from_operation(operation, self.gas_price);
+        let estimate = GasEstimate::from_operation(operation, gas_price);
         eprintln!("Gas estimation:");
         eprintln!("   Estimated: {} units", estimate.gas_units);
-        eprintln!("   Limit: {} units", self.gas_limit);
+        eprintln!("   Limit: {} units", gas_limit);
         eprintln!(
             "   Total Cost: {} Mist ({:.9} KANARI)",
             estimate.total_cost_mist, estimate.total_cost_kanari
@@ -149,8 +157,8 @@ impl Call {
                 function: self.function.clone(),
                 type_args: parsed_type_args.clone(),
                 args: parsed_args.clone(),
-                gas_limit: self.gas_limit,
-                gas_price: self.gas_price,
+                gas_limit,
+                gas_price,
                 sequence_number: seq_num,
             };
 
@@ -169,8 +177,8 @@ impl Call {
             function: self.function.clone(),
             type_args: parsed_type_args.clone(),
             args: parsed_args.clone(),
-            gas_limit: self.gas_limit,
-            gas_price: self.gas_price,
+            gas_limit,
+            gas_price,
             sequence_number: seq_num,
             signature: Some(signed_tx.signature.clone()),
             execute_immediate: Some(true),

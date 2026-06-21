@@ -42,6 +42,7 @@ impl BlockchainEngine {
             .map(
                 |signed_tx| -> Result<(SignedTransaction, Vec<u8>, String, u64)> {
                     let verified = signed_tx.into_verified()?;
+                    Self::validate_transaction_gas(verified.transaction())?;
                     let tx_hash = verified.hash().to_vec();
                     let sender = verified.transaction().sender_address();
                     let normalized_sender = sender_cache

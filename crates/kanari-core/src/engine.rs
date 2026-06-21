@@ -14,7 +14,7 @@ use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
 pub use kanari_rpc_api::{AccountInfo, BlockData, BlockchainStats, FullBlockData, ObjectInfo};
 use kanari_types::address::Address as KanariAddress;
 use kanari_types::event::Event;
-use kanari_types::gas_v2::{GasMeter, GasOperation};
+use kanari_types::gas_v2::{GasConfig, GasMeter, GasOperation};
 use kanari_types::transaction::{NativeCall, SignedTransaction, Transaction};
 use log::{error, info};
 use lru::LruCache;
@@ -948,6 +948,37 @@ impl BlockchainEngine {
         Ok(())
     }
 
+    fn gas_operation_for_transaction(tx: &Transaction) -> GasOperation {
+        match tx {
+            Transaction::PublishModule { module_bytes, .. } => GasOperation::PublishModule {
+                module_size: module_bytes.len(),
+            },
+            Transaction::ExecuteFunction { .. } if tx.native_call().is_some() => {
+                GasOperation::Transfer
+            }
+            Transaction::ExecuteFunction { .. } => GasOperation::ExecuteFunction { complexity: 1 },
+        }
+    }
+
+    fn validate_transaction_gas(tx: &Transaction) -> Result<()> {
+        let config = GasConfig::default();
+        config.validate_price(tx.gas_price())?;
+        anyhow::ensure!(
+            tx.gas_limit() <= config.max_gas_per_tx,
+            "Gas limit {} exceeds maximum {}",
+            tx.gas_limit(),
+            config.max_gas_per_tx
+        );
+        let required = Self::gas_operation_for_transaction(tx).gas_units();
+        anyhow::ensure!(
+            tx.gas_limit() >= required,
+            "Gas limit {} is below required operation cost {}",
+            tx.gas_limit(),
+            required
+        );
+        Ok(())
+    }
+
     pub(crate) fn persist_dag_state(&self, state: PersistentDagState) -> Result<()> {
         if let Some(store) = &self.persistent_store {
             Self::persist_dag_payloads(store, &state)?;
@@ -981,26 +1012,16 @@ impl BlockchainEngine {
         persist_runtime_state: bool,
     ) -> Result<ChangeSet> {
         let sender_addr = KanariAddress::parse_to_account_address(tx.sender_address())?;
+        Self::validate_transaction_gas(tx)?;
         let mut gas_meter = GasMeter::new(tx.gas_limit(), tx.gas_price());
         let mut changeset = ChangeSet::new();
 
         let native_call = tx.native_call();
-
-        let (gas_op, required_amount) = match tx {
-            Transaction::PublishModule { module_bytes, .. } => (
-                GasOperation::PublishModule {
-                    module_size: module_bytes.len(),
-                },
-                0,
-            ),
-            Transaction::ExecuteFunction { .. } => {
-                if let Some(native_call) = &native_call {
-                    (GasOperation::Transfer, native_call.required_native_amount())
-                } else {
-                    (GasOperation::ExecuteFunction { complexity: 1 }, 0)
-                }
-            }
-        };
+        let gas_op = Self::gas_operation_for_transaction(tx);
+        let required_amount = native_call
+            .as_ref()
+            .map(NativeCall::required_native_amount)
+            .unwrap_or(0);
 
         gas_meter.consume(gas_op.gas_units())?;
         let gas_cost = gas_meter.total_cost();
@@ -1657,6 +1678,37 @@ mod tests {
     }
 
     #[test]
+    fn native_transfer_charges_gas_from_gas_module() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        fund_sender(&engine, &sender.address, 1_000_000);
+        let signed_tx = signed_transfer_from(&sender, 0);
+        let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+        let dao =
+            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+
+        let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+
+        assert!(changeset.success);
+        assert_eq!(
+            changeset.gas_used,
+            kanari_types::gas_v2::GasOperation::Transfer.gas_units()
+        );
+        assert_eq!(
+            changeset
+                .account_changes
+                .get(&sender_address)
+                .unwrap()
+                .balance_delta,
+            -100_001
+        );
+        assert_eq!(
+            changeset.account_changes.get(&dao).unwrap().balance_delta,
+            100_000
+        );
+    }
+
+    #[test]
     fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
         let engine = BlockchainEngine::new_in_memory().unwrap();
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
@@ -1717,6 +1769,54 @@ mod tests {
         let err = engine.submit_transactions_batch(vec![tx]).unwrap_err();
 
         assert!(err.to_string().contains("already in pending pool"));
+    }
+
+    #[test]
+    fn batch_submit_rejects_gas_price_below_minimum() {
+        let engine = BlockchainEngine::new().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        let tx = Transaction::new_transfer_with_gas(
+            sender.tagged_address(),
+            recipient.address,
+            1,
+            0,
+            100_000,
+            0,
+        );
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+
+        let error = engine
+            .submit_transactions_batch(vec![signed_tx])
+            .unwrap_err();
+        assert!(error.to_string().contains("Gas price too low"));
+    }
+
+    #[test]
+    fn batch_submit_rejects_gas_limit_below_operation_cost() {
+        let engine = BlockchainEngine::new().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        let tx = Transaction::new_transfer_with_gas(
+            sender.tagged_address(),
+            recipient.address,
+            1,
+            0,
+            99,
+            1,
+        );
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+
+        let error = engine
+            .submit_transactions_batch(vec![signed_tx])
+            .unwrap_err();
+        assert!(error.to_string().contains("below required operation cost"));
     }
 
     #[test]

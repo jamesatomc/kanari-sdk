@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_api::CallFunctionRequest;
 use kanari_rpc_client::RpcClient;
+use kanari_types::GasConfig;
 use move_core_types::language_storage::TypeTag;
 use std::str::FromStr;
 
@@ -169,6 +170,9 @@ impl TokenTransfer {
         eprintln!("  Amount: {} (base units)", self.amount);
 
         let sender_tagged = get_sender_for_tx(&wallet, &from_addr)?;
+        let gas = GasConfig::default();
+        let gas_limit = gas.default_transaction_gas_limit();
+        let gas_price = gas.default_transaction_gas_price();
 
         // Parse token format: address::module::struct
         let module_parts: Vec<&str> = self.token.split("::").collect();
@@ -196,8 +200,8 @@ impl TokenTransfer {
                 )
                 .context("Failed to serialize recipient address")?,
             ],
-            gas_limit: 100_000,
-            gas_price: 0,
+            gas_limit,
+            gas_price,
             sequence_number: account.sequence_number,
             signature: None, // Will be set after signing
             execute_immediate: Some(true),

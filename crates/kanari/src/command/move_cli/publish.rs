@@ -8,6 +8,7 @@ use crate::command::common::{
 };
 use anyhow::{Result, bail};
 use clap::*;
+use kanari_types::GasConfig;
 use kanari_types::gas_v2::{GasEstimate, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use log::error;
@@ -24,13 +25,13 @@ pub struct Publish {
     #[clap(long = "package-path")]
     pub package_path: Option<PathBuf>,
 
-    /// Gas limit for the transaction
-    #[clap(long = "gas-limit", default_value = "100000")]
-    pub gas_limit: u64,
+    /// Optional gas-limit override; defaults to the network GasConfig.
+    #[clap(long = "gas-limit")]
+    pub gas_limit: Option<u64>,
 
-    /// Gas price in Mist
-    #[clap(long = "gas-price", default_value = "10")]
-    pub gas_price: u64,
+    /// Optional gas-price override; defaults to the network GasConfig.
+    #[clap(long = "gas-price")]
+    pub gas_price: Option<u64>,
 
     /// RPC endpoint
     #[clap(long = "rpc")]
@@ -43,6 +44,13 @@ impl Publish {
         let rerooted_path = reroot_path(path.or(self.package_path.clone()))?;
 
         let rpc = get_rpc_endpoint(self.rpc_endpoint.clone());
+        let gas = GasConfig::default();
+        let gas_limit = self
+            .gas_limit
+            .unwrap_or_else(|| gas.default_transaction_gas_limit());
+        let gas_price = self
+            .gas_price
+            .unwrap_or_else(|| gas.default_transaction_gas_price());
 
         // Normalize and validate sender address
         let sender_normalized = resolve_sender(None)?;
@@ -79,7 +87,7 @@ impl Publish {
             let op = GasOperation::PublishModule {
                 module_size: bytes.len(),
             };
-            let est = GasEstimate::from_operation(op, self.gas_price);
+            let est = GasEstimate::from_operation(op, gas_price);
             total_estimated_gas = total_estimated_gas.saturating_add(est.gas_units);
         }
         if modules_to_publish.len() > 1 {
@@ -150,9 +158,9 @@ impl Publish {
             let operation = GasOperation::PublishModule {
                 module_size: module_bytecode.len(),
             };
-            let estimate = GasEstimate::from_operation(operation, self.gas_price);
+            let estimate = GasEstimate::from_operation(operation, gas_price);
             eprintln!("   Estimated: {} units", estimate.gas_units);
-            eprintln!("   Limit: {} units", self.gas_limit);
+            eprintln!("   Limit: {} units", gas_limit);
             eprintln!(
                 "   Total Cost: {} Mist ({:.9} KANARI)",
                 estimate.total_cost_mist, estimate.total_cost_kanari
@@ -170,8 +178,8 @@ impl Publish {
                     sender: sender_for_tx.clone(),
                     module_bytes: module_bytecode.clone(),
                     module_name: module_name.clone(),
-                    gas_limit: self.gas_limit,
-                    gas_price: self.gas_price,
+                    gas_limit,
+                    gas_price,
                     sequence_number: seq_num,
                 };
 
@@ -185,8 +193,8 @@ impl Publish {
                 sender: sender_for_tx.clone(),
                 module_bytes: module_bytecode.clone(),
                 module_name: module_name.clone(),
-                gas_limit: self.gas_limit,
-                gas_price: self.gas_price,
+                gas_limit,
+                gas_price,
                 sequence_number: seq_num,
                 signature: Some(signed_tx.signature.clone()),
                 execute_immediate: Some(true),

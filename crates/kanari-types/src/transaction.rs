@@ -360,7 +360,15 @@ impl Transaction {
 
     /// Create a transfer transaction with default gas settings
     pub fn new_transfer(from: String, to: String, amount: u64, sequence_number: u64) -> Self {
-        Self::new_transfer_with_gas(from, to, amount, sequence_number, 100_000, 1000)
+        let gas = crate::gas_v2::GasConfig::default();
+        Self::new_transfer_with_gas(
+            from,
+            to,
+            amount,
+            sequence_number,
+            gas.default_transaction_gas_limit(),
+            gas.default_transaction_gas_price(),
+        )
     }
 
     pub fn new_transfer_with_gas(
@@ -388,7 +396,14 @@ impl Transaction {
 
     /// Create a burn transaction with default gas settings
     pub fn new_burn(from: String, amount: u64, sequence_number: u64) -> Self {
-        Self::new_burn_with_gas(from, amount, sequence_number, 100_000, 1000)
+        let gas = crate::gas_v2::GasConfig::default();
+        Self::new_burn_with_gas(
+            from,
+            amount,
+            sequence_number,
+            gas.default_transaction_gas_limit(),
+            gas.default_transaction_gas_price(),
+        )
     }
 
     pub fn new_burn_with_gas(
@@ -423,11 +438,16 @@ mod tests {
             Transaction::ExecuteFunction {
                 module,
                 function,
+                gas_limit,
+                gas_price,
                 sequence_number,
                 ..
             } => {
+                let gas = crate::gas_v2::GasConfig::default();
                 assert_eq!(module, Transaction::KANARI_MODULE);
                 assert_eq!(function, Transaction::TRANSFER_AMOUNT_FUNCTION);
+                assert_eq!(*gas_limit, gas.default_transaction_gas_limit());
+                assert_eq!(*gas_price, gas.default_transaction_gas_price());
                 assert_eq!(*sequence_number, 7);
             }
             Transaction::PublishModule { .. } => panic!("transfer helper must build a call"),
