@@ -144,16 +144,19 @@ function Test-ConsensusPublicKeysFile {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Consensus public-key map not found: $Path"
     }
-    $map = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable
+
+    $map = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $properties = @($map.PSObject.Properties)
     foreach ($authorityId in $AuthorityIds) {
-        if (-not $map.ContainsKey($authorityId)) {
+        $property = $map.PSObject.Properties[$authorityId]
+        if ($null -eq $property) {
             throw "Consensus public-key map is missing authority $authorityId."
         }
-        if ([string]$map[$authorityId] -notmatch '^[0-9a-fA-F]{64}$') {
+        if ([string]$property.Value -notmatch '^[0-9a-fA-F]{64}$') {
             throw "Consensus public key for $authorityId must be 32 bytes of hexadecimal data."
         }
     }
-    if ($map.Keys.Count -ne $AuthorityIds.Count) {
+    if ($properties.Count -ne $AuthorityIds.Count) {
         throw 'Consensus public-key map contains an authority set different from the committee config.'
     }
 }
@@ -166,31 +169,17 @@ function Get-NodePorts {
     )
 
     $offset = ($NodeId - 1) * 10
-    return @{
-        P2pPort = $BasePeerPort + $offset
-        RpcPort = $BaseRpcPort + $offset
-    }
+    return @{ P2pPort = $BasePeerPort + $offset; RpcPort = $BaseRpcPort + $offset }
 }
 
 function Get-NodeDataDir {
-    param(
-        [int]$NodeId,
-        [string]$DataDir,
-        [string]$BaseDataDir
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($DataDir)) {
-        return $DataDir
-    }
+    param([int]$NodeId, [string]$DataDir, [string]$BaseDataDir)
+    if (-not [string]::IsNullOrWhiteSpace($DataDir)) { return $DataDir }
     return (Join-Path $BaseDataDir "node$NodeId")
 }
 
 function Get-NodeRpcUrl {
-    param(
-        [string]$HostIp,
-        [int]$RpcPort
-    )
-
+    param([string]$HostIp, [int]$RpcPort)
     if (-not [string]::IsNullOrWhiteSpace($HostIp) -and $HostIp -ne '0.0.0.0') {
         return "http://$HostIp`:$RpcPort"
     }
@@ -199,35 +188,17 @@ function Get-NodeRpcUrl {
 
 function Find-KanariNodeExecutable {
     $localBuilds = @(
-        @{
-            Path = Join-Path $PSScriptRoot '..\..\target\release\kanari-node.exe'
-            Kind = 'release'
-            Color = 'Green'
-        },
-        @{
-            Path = Join-Path $PSScriptRoot '..\..\target\debug\kanari-node.exe'
-            Kind = 'debug'
-            Color = 'Yellow'
-        }
+        @{ Path = Join-Path $PSScriptRoot '..\..\target\release\kanari-node.exe'; Kind = 'release'; Color = 'Green' },
+        @{ Path = Join-Path $PSScriptRoot '..\..\target\debug\kanari-node.exe'; Kind = 'debug'; Color = 'Yellow' }
     ) | Where-Object { Test-Path $_.Path } | ForEach-Object {
         $resolvedPath = (Resolve-Path $_.Path).Path
-        @{
-            Path = $resolvedPath
-            Kind = $_.Kind
-            Color = $_.Color
-            LastWriteTimeUtc = (Get-Item $resolvedPath).LastWriteTimeUtc
-        }
+        @{ Path = $resolvedPath; Kind = $_.Kind; Color = $_.Color; LastWriteTimeUtc = (Get-Item $resolvedPath).LastWriteTimeUtc }
     }
 
     if ($localBuilds.Count -gt 0) {
         $selected = $localBuilds | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-        return @{
-            Path = $selected.Path
-            Label = "Using newest local $($selected.Kind) build: $($selected.Path)"
-            Color = $selected.Color
-        }
+        return @{ Path = $selected.Path; Label = "Using newest local $($selected.Kind) build: $($selected.Path)"; Color = $selected.Color }
     }
-
     if (Get-Command kanari-node -ErrorAction SilentlyContinue) {
         return @{ Path = 'kanari-node'; Label = 'Using kanari-node from PATH'; Color = 'Green' }
     }
@@ -242,34 +213,15 @@ function Invoke-KanariJsonRpc {
         [int]$RequestId = 1
     )
 
-    $body = @{
-        jsonrpc = '2.0'
-        method = $Method
-        params = $Params
-        id = $RequestId
-    } | ConvertTo-Json -Depth 12
-
+    $body = @{ jsonrpc = '2.0'; method = $Method; params = $Params; id = $RequestId } | ConvertTo-Json -Depth 12
     $response = Invoke-RestMethod -Uri $RpcUrl -Method Post -Body $body -ContentType 'application/json' -TimeoutSec 10
-    if ($response.error) {
-        throw "JSON-RPC $Method failed: $($response.error.message)"
-    }
+    if ($response.error) { throw "JSON-RPC $Method failed: $($response.error.message)" }
     return $response.result
 }
 
-function Get-NodeHealthStatus {
-    param([Parameter(Mandatory=$true)][string]$RpcUrl)
-    return Invoke-KanariJsonRpc -RpcUrl $RpcUrl -Method 'kanari_health' -RequestId 1
-}
-
-function Get-NodeStats {
-    param([Parameter(Mandatory=$true)][string]$RpcUrl)
-    return Invoke-KanariJsonRpc -RpcUrl $RpcUrl -Method 'kanari_getStats' -RequestId 2
-}
-
-function Get-NodeNetworkStatus {
-    param([Parameter(Mandatory=$true)][string]$RpcUrl)
-    return Invoke-KanariJsonRpc -RpcUrl $RpcUrl -Method 'kanari_getNetworkStatus' -RequestId 3
-}
+function Get-NodeHealthStatus { param([string]$RpcUrl) return Invoke-KanariJsonRpc -RpcUrl $RpcUrl -Method 'kanari_health' -RequestId 1 }
+function Get-NodeStats { param([string]$RpcUrl) return Invoke-KanariJsonRpc -RpcUrl $RpcUrl -Method 'kanari_getStats' -RequestId 2 }
+function Get-NodeNetworkStatus { param([string]$RpcUrl) return Invoke-KanariJsonRpc -RpcUrl $RpcUrl -Method 'kanari_getNetworkStatus' -RequestId 3 }
 
 function Test-NodeHealth {
     param(
