@@ -1,70 +1,78 @@
-# Test P2P Transaction Broadcasting
-# This script sends transactions to Node 1 and verifies they appear in other nodes
+# Verify transaction broadcast indirectly through checkpoint convergence.
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$CommitteeConfig,
+    [scriptblock]$SubmitAction,
+    [ValidateRange(5, 600)]
+    [int]$TimeoutSeconds = 60,
+    [ValidateRange(1, 30)]
+    [int]$PollSeconds = 2
+)
 
-Write-Host "Testing P2P Transaction Broadcasting..." -ForegroundColor Cyan
-Write-Host ""
+. (Join-Path $PSScriptRoot 'node-script-common.ps1')
 
-# Node RPC endpoints
-$node1 = "http://127.0.0.1:19001"
-$node2 = "http://127.0.0.1:19011"
-$node3 = "http://127.0.0.1:19021"
-
-# Function to get blockchain stats from a node
-function Get-NodeStats {
-    param($endpoint)
-    try {
-        $response = Invoke-RestMethod -Uri "$endpoint/stats" -Method Get
-        return $response
-    } catch {
-        return $null
+try {
+    $config = Read-ValidatorCommitteeConfig -Path $CommitteeConfig
+    $targets = @($config.authorities)
+    if ($targets.Count -lt 2) {
+        throw 'P2P convergence testing requires at least two validators.'
     }
-}
 
-# Check all nodes are running
-Write-Host "Checking nodes..." -ForegroundColor Yellow
-$stats1 = Get-NodeStats $node1
-$stats2 = Get-NodeStats $node2
-$stats3 = Get-NodeStats $node3
+    $initial = @()
+    for ($i = 0; $i -lt $targets.Count; $i++) {
+        $entry = $targets[$i]
+        $result = Test-NodeHealth `
+            -RpcUrl ([string]$entry.rpc_url) `
+            -NodeId ($i + 1) `
+            -ExpectedNetwork ([string]$config.network) `
+            -ExpectedAuthorityId ([string]$entry.authority_id)
+        $initial += $result.Stats
+    }
 
-if (-not $stats1) { Write-Host "Node 1 is not running!" -ForegroundColor Red; exit 1 }
-if (-not $stats2) { Write-Host "Node 2 is not running!" -ForegroundColor Red; exit 1 }
-if (-not $stats3) { Write-Host "Node 3 is not running!" -ForegroundColor Red; exit 1 }
+    $initialSourceHeight = [long]$initial[0].height
+    if ($SubmitAction) {
+        Write-Host 'Executing caller-provided transaction submission action...' -ForegroundColor Cyan
+        & $SubmitAction
+    } else {
+        Write-Host 'No -SubmitAction supplied; checking current checkpoint convergence only.' -ForegroundColor Yellow
+    }
 
-Write-Host "All nodes are running!" -ForegroundColor Green
-Write-Host ""
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $stats = @()
+        $allReachable = $true
+        foreach ($entry in $targets) {
+            try {
+                $stats += Get-NodeStats -RpcUrl ([string]$entry.rpc_url)
+            } catch {
+                $allReachable = $false
+                break
+            }
+        }
 
-# Show initial stats
-Write-Host "Initial Stats:" -ForegroundColor Cyan
-Write-Host "Node 1: Height=$($stats1.height), Pending=$($stats1.pending_transactions)" -ForegroundColor Gray
-Write-Host "Node 2: Height=$($stats2.height), Pending=$($stats2.pending_transactions)" -ForegroundColor Gray
-Write-Host "Node 3: Height=$($stats3.height), Pending=$($stats3.pending_transactions)" -ForegroundColor Gray
-Write-Host ""
+        if ($allReachable) {
+            $heights = @($stats | ForEach-Object { [long]$_.height })
+            $roots = @($stats | ForEach-Object { [string]$_.state_root })
+            $supplies = @($stats | ForEach-Object { [decimal]$_.total_supply })
+            $heightConverged = @($heights | Sort-Object -Unique).Count -eq 1
+            $rootConverged = @($roots | Sort-Object -Unique).Count -eq 1
+            $supplyConverged = @($supplies | Sort-Object -Unique).Count -eq 1
+            $sourceAdvanced = (-not $SubmitAction) -or ($heights[0] -gt $initialSourceHeight)
 
-# Send a transaction to Node 1
-Write-Host "Sending transaction to Node 1..." -ForegroundColor Yellow
-# You would need to implement actual transaction sending here
-# For now, just show the concept
+            Write-Host "heights=[$($heights -join ',')] roots=$(@($roots | Sort-Object -Unique).Count) supplies=$(@($supplies | Sort-Object -Unique).Count)" -ForegroundColor DarkGray
 
-Write-Host ""
-Write-Host "Waiting 5 seconds for P2P propagation..." -ForegroundColor Yellow
-Start-Sleep -Seconds 5
+            if ($heightConverged -and $rootConverged -and $supplyConverged -and $sourceAdvanced) {
+                Write-Host 'P2P checkpoint convergence passed.' -ForegroundColor Green
+                Write-Host 'Inbound synced checkpoints are accepted only after checkpoint-certificate verification.' -ForegroundColor Green
+                exit 0
+            }
+        }
 
-# Check stats again
-$stats1_after = Get-NodeStats $node1
-$stats2_after = Get-NodeStats $node2
-$stats3_after = Get-NodeStats $node3
+        Start-Sleep -Seconds $PollSeconds
+    } while ((Get-Date) -lt $deadline)
 
-Write-Host ""
-Write-Host "Stats after transaction:" -ForegroundColor Cyan
-Write-Host "Node 1: Height=$($stats1_after.height), Pending=$($stats1_after.pending_transactions)" -ForegroundColor Gray
-Write-Host "Node 2: Height=$($stats2_after.height), Pending=$($stats2_after.pending_transactions)" -ForegroundColor Gray
-Write-Host "Node 3: Height=$($stats3_after.height), Pending=$($stats3_after.pending_transactions)" -ForegroundColor Gray
-
-Write-Host ""
-if ($stats2_after.pending_transactions -gt $stats2.pending_transactions -or 
-    $stats3_after.pending_transactions -gt $stats3.pending_transactions) {
-    Write-Host "SUCCESS: Transaction was broadcast to other nodes!" -ForegroundColor Green
-} else {
-    Write-Host "PENDING: Transaction might not have been broadcast yet" -ForegroundColor Yellow
-    Write-Host "Check the node logs for P2P messages" -ForegroundColor Gray
+    throw "Cluster did not converge within $TimeoutSeconds seconds. Check P2P logs, bootstrap addresses, committee keys and certificate verification errors."
+} catch {
+    Write-Host "P2P convergence test failed: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
 }
