@@ -1644,7 +1644,7 @@ mod tests {
             .submit_transactions_batch(vec![tx.clone(), tx])
             .unwrap_err();
 
-        assert!(err.to_string().contains("already in pending pool"));
+        assert!(err.to_string().contains("appears more than once in the batch"));
     }
 
     #[test]

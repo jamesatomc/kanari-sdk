@@ -116,7 +116,7 @@ pub struct ObjectStorage {
 impl ObjectStorage {
     const OBJECT_INDEX_KEY: &'static str = "object_index";
 
-    // 🚨 Helper to create Key for fetching Owner Index directly from RocksDB database
+    // Helper to create Key for fetching Owner Index directly from RocksDB database
     fn owner_key(owner: &AccountAddress) -> Vec<u8> {
         let mut key = b"owner_index:".to_vec();
         key.extend_from_slice(owner.as_ref());
