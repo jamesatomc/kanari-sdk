@@ -521,9 +521,13 @@ impl DagEngine {
             timestamp,
         );
         vertex.id = vertex_id;
-        vertex.cached_hash = Some(vertex_id.to_vec());
         use ed25519_dalek::Signer;
-        vertex.signature = self.local_signing_key.sign(&vertex.id).to_bytes().to_vec();
+        let signing_digest = vertex.signing_digest()?;
+        vertex.signature = self
+            .local_signing_key
+            .sign(&signing_digest)
+            .to_bytes()
+            .to_vec();
 
         self.stage_locally_produced_vertex(&vertex, verified_state, to_execute, validate_supply)?;
         let checkpoint = self.finalize_staged_checkpoint(vertex.id)?;
@@ -682,10 +686,13 @@ impl DagEngine {
             anyhow::anyhow!("Invalid DAG vertex signature length for {}", vertex.author)
         })?;
         let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes);
+        let signing_digest = vertex.signing_digest()?;
         use ed25519_dalek::Verifier;
-        verifying_key.verify(&vertex.id, &signature).map_err(|e| {
-            anyhow::anyhow!("Invalid DAG vertex signature for {}: {}", vertex.author, e)
-        })?;
+        verifying_key
+            .verify(&signing_digest, &signature)
+            .map_err(|e| {
+                anyhow::anyhow!("Invalid DAG vertex signature for {}: {}", vertex.author, e)
+            })?;
 
         let mut seen_tx_hashes = HashSet::new();
         for (index, tx) in vertex.transactions.iter().enumerate() {
@@ -832,7 +839,10 @@ mod tests {
             123,
         );
         use ed25519_dalek::Signer;
-        vertex.signature = signing_key.sign(&vertex.id).to_bytes().to_vec();
+        vertex.signature = signing_key
+            .sign(&vertex.signing_digest().unwrap())
+            .to_bytes()
+            .to_vec();
         vertex
     }
 
@@ -952,6 +962,36 @@ mod tests {
         .unwrap();
 
         let vertex = signed_network_vertex("auth2", &wrong_key, 1, vec![]);
+        let error = dag_engine.add_network_vertex(vertex).unwrap_err();
+        assert!(error.to_string().contains("Invalid DAG vertex signature"));
+    }
+
+    #[test]
+    fn test_add_network_vertex_rejects_payload_modified_after_signing() {
+        let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+        let local_key = authority_key(11);
+        let remote_key = authority_key(22);
+        let mut public_keys = BTreeMap::new();
+        public_keys.insert(
+            "auth1".to_string(),
+            local_key.verifying_key().to_bytes().to_vec(),
+        );
+        public_keys.insert(
+            "auth2".to_string(),
+            remote_key.verifying_key().to_bytes().to_vec(),
+        );
+        let dag_engine = DagEngine::new_secure(
+            engine,
+            "auth1".to_string(),
+            vec!["auth1".to_string(), "auth2".to_string()],
+            local_key,
+            public_keys,
+        )
+        .unwrap();
+
+        let mut vertex = signed_network_vertex("auth2", &remote_key, 1, vec![]);
+        vertex.metadata.state_root[0] ^= 0xff;
+
         let error = dag_engine.add_network_vertex(vertex).unwrap_err();
         assert!(error.to_string().contains("Invalid DAG vertex signature"));
     }

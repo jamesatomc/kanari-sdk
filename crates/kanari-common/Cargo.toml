@@ -14,3 +14,6 @@ description.workspace = true
 [dependencies]
 serde_yaml = { workspace = true, default-features = true }
 dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

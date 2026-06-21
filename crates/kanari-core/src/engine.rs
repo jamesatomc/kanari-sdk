@@ -1040,12 +1040,34 @@ impl BlockchainEngine {
                     Self::apply_gas_and_sequence(
                         &mut changeset,
                         sender_addr,
-                        gas_cost,
+                        gas_cost.min(balance),
                         gas_meter.gas_used,
                     )?;
                     return Ok(changeset);
                 }
             }
+        }
+
+        if gas_cost > i64::MAX as u64 {
+            changeset.mark_failed("Gas cost exceeds the supported range".to_string());
+            changeset
+                .get_or_create_change(sender_addr)
+                .increment_sequence();
+            changeset.set_gas_used(gas_meter.gas_used);
+            return Ok(changeset);
+        }
+
+        if native_call.as_ref().is_some_and(|call| {
+            call.required_native_amount() > (i64::MAX as u64).saturating_sub(gas_cost)
+        }) {
+            changeset.mark_failed("Native amount exceeds the supported range".to_string());
+            Self::apply_gas_and_sequence(
+                &mut changeset,
+                sender_addr,
+                gas_cost,
+                gas_meter.gas_used,
+            )?;
+            return Ok(changeset);
         }
 
         match tx {
@@ -1632,6 +1654,44 @@ mod tests {
         let sender_change = changeset.account_changes.get(&sender).unwrap();
         assert_eq!(sender_change.sequence_increment, 1);
         assert_eq!(sender_change.balance_delta, -10);
+    }
+
+    #[test]
+    fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let signed_tx = signed_transfer_from(&sender, 0);
+        let dao =
+            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+        let (supply_before, dao_balance_before) = {
+            let state = engine.state_read();
+            (
+                state.total_supply,
+                state
+                    .get_account(&dao)
+                    .map(|account| account.native_balance())
+                    .unwrap_or(0),
+            )
+        };
+
+        let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+        assert!(!changeset.success);
+        {
+            let mut state = engine.state_write();
+            state.apply_changeset(&changeset).unwrap();
+            assert_eq!(state.total_supply, supply_before);
+            assert_eq!(
+                state
+                    .get_account(&dao)
+                    .map(|account| account.native_balance())
+                    .unwrap_or(0),
+                dao_balance_before
+            );
+            let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+            let sender_account = state.get_account(&sender_address).unwrap();
+            assert_eq!(sender_account.native_balance(), 0);
+            assert_eq!(sender_account.sequence_number, 1);
+        }
     }
 
     #[test]

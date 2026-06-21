@@ -294,9 +294,9 @@ impl StateManager {
         prefix: &[u8],
         token_type: &str,
         value: &T,
-    ) {
+    ) -> Result<()> {
         let key = Self::metadata_key(prefix, token_type);
-        let _ = self.save_internal(&key, value);
+        self.save_internal(&key, value)
     }
 
     fn load_token_metadata_field<T: DeserializeOwned>(
@@ -371,7 +371,7 @@ impl StateManager {
         None
     }
 
-    fn persist_coin_metadata(&mut self, token_type: &str, data: &[u8]) {
+    fn persist_coin_metadata(&mut self, token_type: &str, data: &[u8]) -> Result<()> {
         #[derive(Deserialize)]
         struct MoveString {
             bytes: Vec<u8>,
@@ -395,25 +395,26 @@ impl StateManager {
         }
 
         if let Ok(meta) = bcs::from_bytes::<ParsedCoinMetadata>(data) {
-            self.save_token_metadata_field(b"metadata_decimals:", token_type, &meta.decimals);
+            self.save_token_metadata_field(b"metadata_decimals:", token_type, &meta.decimals)?;
 
             if let Ok(name) = String::from_utf8(meta.name.bytes) {
-                self.save_token_metadata_field(b"metadata_name:", token_type, &name);
+                self.save_token_metadata_field(b"metadata_name:", token_type, &name)?;
             }
             if let Ok(symbol) = String::from_utf8(meta.symbol.bytes) {
-                self.save_token_metadata_field(b"metadata_symbol:", token_type, &symbol);
+                self.save_token_metadata_field(b"metadata_symbol:", token_type, &symbol)?;
             }
             if let Ok(description) = String::from_utf8(meta.description.bytes) {
-                self.save_token_metadata_field(b"metadata_description:", token_type, &description);
+                self.save_token_metadata_field(b"metadata_description:", token_type, &description)?;
             }
             if let Some(url_obj) = meta.icon_url.vec.into_iter().next()
                 && let Ok(url) = String::from_utf8(url_obj.inner.bytes)
             {
-                self.save_token_metadata_field(b"metadata_icon_url:", token_type, &url);
+                self.save_token_metadata_field(b"metadata_icon_url:", token_type, &url)?;
             }
         } else if data.len() > 32 {
-            self.save_token_metadata_field(b"metadata_decimals:", token_type, &data[32]);
+            self.save_token_metadata_field(b"metadata_decimals:", token_type, &data[32])?;
         }
+        Ok(())
     }
 
     fn adjust_global_supplies_for_account_delta(
@@ -916,10 +917,17 @@ impl StateManager {
     }
 
     pub fn get_account(&self, address: &AccountAddress) -> Option<Account> {
-        Some(
-            self.load_account_or_default(*address)
-                .unwrap_or_else(|_| Account::new(*address)),
-        )
+        match self.load_account(address) {
+            Ok(account) => account,
+            Err(e) => {
+                log::error!(
+                    "[StateManager] Failed to load account {}: {}",
+                    address.to_hex_literal(),
+                    e
+                );
+                None
+            }
+        }
     }
 
     pub fn get_account_by_hex(&self, hex_address: &str) -> Option<Account> {
@@ -1148,7 +1156,48 @@ impl StateManager {
         changeset: &ChangeSet,
         validate_supply: bool,
     ) -> Result<()> {
-        let mut supply_delta: i64 = 0;
+        let supply_delta = changeset
+            .account_changes
+            .values()
+            .try_fold(0i64, |total, change| {
+                total
+                    .checked_add(change.balance_delta)
+                    .ok_or_else(|| anyhow::anyhow!("Native supply delta overflow"))
+            })?;
+        let next_total_supply = if supply_delta > 0 {
+            Some(
+                self.total_supply
+                    .checked_add(supply_delta as u64)
+                    .ok_or_else(|| anyhow::anyhow!("Native total supply overflow"))?,
+            )
+        } else if supply_delta < 0 {
+            let burn_amount = supply_delta.unsigned_abs();
+            ensure!(
+                self.total_supply >= burn_amount,
+                "Native total supply underflow: tried to burn {} from {}",
+                burn_amount,
+                self.total_supply
+            );
+            Some(self.total_supply - burn_amount)
+        } else {
+            None
+        };
+
+        for (address, change) in &changeset.account_changes {
+            if change.balance_delta >= 0 {
+                continue;
+            }
+            let debit = change.balance_delta.unsigned_abs();
+            let balance = self.load_account_or_default(*address)?.native_balance();
+            ensure!(
+                balance >= debit,
+                "Insufficient native balance for {}: need {}, have {}",
+                address.to_hex_literal(),
+                debit,
+                balance
+            );
+        }
+
         let mut supplies_dirty = false;
         let mut account_index_additions = Vec::with_capacity(changeset.account_changes.len());
         let reconcile_object_locked = Self::needs_object_locked_reconciliation(changeset);
@@ -1177,23 +1226,24 @@ impl StateManager {
 
             if change.balance_delta > 0 {
                 let amount = change.balance_delta as u64;
-                let next = account.native_balance().saturating_add(amount);
+                let next = account
+                    .native_balance()
+                    .checked_add(amount)
+                    .ok_or_else(|| anyhow::anyhow!("Native account balance overflow"))?;
                 account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
-                supply_delta += change.balance_delta;
             } else if change.balance_delta < 0 {
-                let debit = (-change.balance_delta) as u64;
-                let current = account.native_balance();
-                if current >= debit {
-                    let next = current - debit;
-                    if next == 0 {
-                        account.token_balances.remove(KANARI_TOKEN_TYPE);
-                    } else {
-                        account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
-                    }
-                    supply_delta += change.balance_delta;
+                let debit = change.balance_delta.unsigned_abs();
+                let next = account.native_balance() - debit;
+                if next == 0 {
+                    account.token_balances.remove(KANARI_TOKEN_TYPE);
+                } else {
+                    account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
                 }
             }
-            account.sequence_number += change.sequence_increment;
+            account.sequence_number = account
+                .sequence_number
+                .checked_add(change.sequence_increment)
+                .ok_or_else(|| anyhow::anyhow!("Account sequence number overflow"))?;
             for module_name in &change.modules_added {
                 account.add_module(module_name.clone());
             }
@@ -1208,20 +1258,9 @@ impl StateManager {
         self.add_many_to_index_list(ACCOUNT_INDEX_KEY, account_index_additions)?;
 
         // Update total supply if there was mint/burn (supply_delta != 0)
-        if supply_delta != 0 {
-            if supply_delta > 0 {
-                self.total_supply = self
-                    .total_supply
-                    .checked_add(supply_delta as u64)
-                    .unwrap_or(self.total_supply);
-            } else {
-                let burn_amount = (-supply_delta) as u64;
-                if self.total_supply >= burn_amount {
-                    self.total_supply -= burn_amount;
-                }
-            }
-            let supply = self.total_supply;
-            self.save_internal(b"total_supply", &supply)?;
+        if let Some(next_total_supply) = next_total_supply {
+            self.total_supply = next_total_supply;
+            self.save_internal(b"total_supply", &next_total_supply)?;
         }
 
         // Apply treasury creations/updates
@@ -1365,7 +1404,7 @@ impl StateManager {
                 && let Some(end) = new_obj.type_.rfind('>')
             {
                 let token_type = &new_obj.type_[start + 1..end];
-                self.persist_coin_metadata(token_type, &new_obj.data);
+                self.persist_coin_metadata(token_type, &new_obj.data)?;
             }
         }
 
@@ -1791,7 +1830,7 @@ mod tests {
         assert!(
             state
                 .get_account(&publisher)
-                .map(|account| account.modules.contains(&"example".to_string()))
+                .map(|account| account.modules.contains("example"))
                 .unwrap_or(false)
         );
 
@@ -1961,6 +2000,37 @@ mod tests {
             materialized_sparse_root_for_test(&state)?,
             "committed SMT root must match a fully materialized sparse root"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn apply_changeset_rejects_insufficient_debit_without_partial_writes() -> Result<()> {
+        let sender = AccountAddress::from_hex_literal("0x1111")?;
+        let recipient = AccountAddress::from_hex_literal("0x2222")?;
+        let mut state = StateManager::new_in_memory();
+        state.save_account(&Account::with_native_balance(sender, 5))?;
+        let root_before = state.compute_state_root();
+
+        let mut changeset = ChangeSet::new();
+        changeset.transfer(sender, recipient, 10);
+
+        let error = state.apply_changeset(&changeset).unwrap_err();
+        assert!(error.to_string().contains("Insufficient native balance"));
+        assert_eq!(state.compute_state_root(), root_before);
+        assert!(state.get_account(&recipient).is_none());
+        assert_eq!(state.get_account(&sender).unwrap().native_balance(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_account_returns_none_for_missing_account() -> Result<()> {
+        let state = StateManager::new_in_memory();
+        let missing = AccountAddress::from_hex_literal("0x4242")?;
+
+        assert!(state.get_account(&missing).is_none());
+        assert!(state.get_account_by_hex("0x4242").is_none());
+
         Ok(())
     }
 }

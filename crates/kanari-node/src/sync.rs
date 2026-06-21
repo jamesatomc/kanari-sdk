@@ -637,7 +637,8 @@ impl SyncManager {
     }
 
     fn should_buffer_dag_vertex_error(error_text: &str) -> bool {
-        error_text.contains("Parent vertex not found")
+        error_text.contains("Missing parent")
+            || error_text.contains("Parent vertex not found")
             || error_text.contains("Not enough parents for quorum")
             || error_text.contains("DAG_WAITING")
             || error_text.contains("SYNC_WAITING")
@@ -1231,6 +1232,13 @@ mod tests {
             latest_state_root: state_root.to_string(),
             total_transactions: 0,
         }
+    }
+
+    #[test]
+    fn missing_parent_errors_are_buffered_for_retry() {
+        assert!(SyncManager::should_buffer_dag_vertex_error(
+            "Missing parent abc for DAG vertex def"
+        ));
     }
 
     fn test_dag_vertex(round: u64, author: &str) -> DagVertex {
