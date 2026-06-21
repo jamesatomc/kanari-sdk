@@ -1,66 +1,94 @@
 param(
-    [string[]]$RpcUrls = @(
-        "http://127.0.0.1:19001",
-        "http://127.0.0.1:19011",
-        "http://127.0.0.1:19021"
-    ),
+    [string]$CommitteeConfig = '',
+    [string[]]$RpcUrls = @(),
+    [string]$ExpectedNetwork = '',
     [switch]$RequireEqualHeight,
-    [switch]$RequireEqualSupply
+    [switch]$RequireEqualSupply,
+    [switch]$RequireEqualStateRoot
 )
 
 . (Join-Path $PSScriptRoot 'node-script-common.ps1')
 
-$failures = 0
-$heights = @()
-$supplies = @()
+try {
+    $targets = @()
+    $expectedAuthorityIds = @()
 
-for ($i = 0; $i -lt $RpcUrls.Count; $i++) {
-    $rpcUrl = $RpcUrls[$i]
-    $nodeId = $i + 1
-
-    try {
-        $health = Get-NodeHealthStatus -RpcUrl $rpcUrl
-        $stats = Get-NodeStats -RpcUrl $rpcUrl
-
-        if (-not $health -or -not $stats) {
-            throw "missing health or stats response"
+    if (-not [string]::IsNullOrWhiteSpace($CommitteeConfig)) {
+        $config = Read-ValidatorCommitteeConfig -Path $CommitteeConfig
+        if ([string]::IsNullOrWhiteSpace($ExpectedNetwork)) {
+            $ExpectedNetwork = [string]$config.network
         }
-
-        $heights += [long]$stats.height
-        $supplies += [long]$stats.total_supply
-
-        if ($health.status -ne "ok" -or -not $health.supply_invariants_ok) {
-            $failures++
-            Write-Host "Node $nodeId unhealthy | url=$rpcUrl | status=$($health.status) | error=$($health.supply_invariant_error)" -ForegroundColor Yellow
-            continue
+        $expectedAuthorityIds = Get-CommitteeAuthorityIds -Config $config
+        foreach ($entry in $config.authorities) {
+            $targets += [ordered]@{
+                AuthorityId = [string]$entry.authority_id
+                RpcUrl = [string]$entry.rpc_url
+            }
         }
-
-        Write-Host "Node $nodeId healthy | network=$($health.network) | height=$($stats.height) | supply=$($stats.total_supply) | url=$rpcUrl" -ForegroundColor Green
-    } catch {
-        $failures++
-        Write-Host "Node $nodeId check failed | url=$rpcUrl | error=$($_.Exception.Message)" -ForegroundColor Red
+        if ($config.rollout.require_equal_height) { $RequireEqualHeight = $true }
+        if ($config.rollout.require_equal_supply) { $RequireEqualSupply = $true }
+        if ($config.rollout.require_equal_state_root) { $RequireEqualStateRoot = $true }
+    } elseif ($RpcUrls.Count -gt 0) {
+        for ($i = 0; $i -lt $RpcUrls.Count; $i++) {
+            $targets += [ordered]@{ AuthorityId = ''; RpcUrl = $RpcUrls[$i] }
+        }
+    } else {
+        throw 'Pass -CommitteeConfig or at least one -RpcUrls value.'
     }
-}
 
-if ($RequireEqualHeight -and $heights.Count -gt 1) {
-    $uniqueHeights = $heights | Sort-Object -Unique
-    if ($uniqueHeights.Count -ne 1) {
-        $failures++
-        Write-Host "Height mismatch across cluster: $($uniqueHeights -join ', ')" -ForegroundColor Yellow
+    $failures = @()
+    $heights = @()
+    $supplies = @()
+    $roots = @()
+    $reportedAuthorities = @()
+
+    for ($i = 0; $i -lt $targets.Count; $i++) {
+        $target = $targets[$i]
+        $nodeId = $i + 1
+        try {
+            $result = Test-NodeHealth `
+                -RpcUrl $target.RpcUrl `
+                -NodeId $nodeId `
+                -ExpectedNetwork $ExpectedNetwork `
+                -ExpectedAuthorityId $target.AuthorityId
+
+            $heights += [long]$result.Stats.height
+            $supplies += [decimal]$result.Stats.total_supply
+            $roots += [string]$result.Stats.state_root
+            $reportedAuthorities += [string]$result.Network.local_authority_id
+        } catch {
+            $failures += "Node $nodeId ($($target.RpcUrl)): $($_.Exception.Message)"
+        }
     }
-}
 
-if ($RequireEqualSupply -and $supplies.Count -gt 1) {
-    $uniqueSupplies = $supplies | Sort-Object -Unique
-    if ($uniqueSupplies.Count -ne 1) {
-        $failures++
-        Write-Host "Supply mismatch across cluster: $($uniqueSupplies -join ', ')" -ForegroundColor Yellow
+    if ($RequireEqualHeight -and @($heights | Sort-Object -Unique).Count -ne 1) {
+        $failures += "Height mismatch: $(@($heights | Sort-Object -Unique) -join ', ')"
     }
-}
+    if ($RequireEqualSupply -and @($supplies | Sort-Object -Unique).Count -ne 1) {
+        $failures += "Supply mismatch: $(@($supplies | Sort-Object -Unique) -join ', ')"
+    }
+    if ($RequireEqualStateRoot -and @($roots | Sort-Object -Unique).Count -ne 1) {
+        $failures += "State-root mismatch: $(@($roots | Sort-Object -Unique) -join ', ')"
+    }
 
-if ($failures -gt 0) {
-    Write-Host "Cluster health check failed with $failures issue(s)." -ForegroundColor Red
+    if ($expectedAuthorityIds.Count -gt 0) {
+        $expected = @($expectedAuthorityIds | Sort-Object)
+        $reported = @($reportedAuthorities | Sort-Object)
+        if (($expected -join ',') -ne ($reported -join ',')) {
+            $failures += "Authority set mismatch: expected [$($expected -join ', ')], reported [$($reported -join ', ')]"
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        foreach ($failure in $failures) {
+            Write-Host $failure -ForegroundColor Red
+        }
+        throw "Cluster health check failed with $($failures.Count) issue(s)."
+    }
+
+    Write-Host "Cluster health check passed for $($targets.Count) validator(s)." -ForegroundColor Green
+    Write-Host 'Checkpoint certificates are validated during P2P checkpoint sync; certificate status is not currently exposed by JSON-RPC.' -ForegroundColor DarkGray
+} catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
     exit 1
 }
-
-Write-Host "Cluster health check passed." -ForegroundColor Green
