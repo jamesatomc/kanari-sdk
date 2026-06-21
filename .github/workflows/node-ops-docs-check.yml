@@ -1,0 +1,34 @@
+name: Node operations docs check
+
+on:
+  push:
+    branches: [docs/node-ops-v2]
+  pull_request:
+    branches: [remediation/all-20260620]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate committee JSON
+        run: python3 -m json.tool crates/kanari-node/validator-committee.example.json > /dev/null
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem crates/kanari-node -Filter *.ps1 | ForEach-Object {
+              $tokens = $null
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+              if ($errors.Count -gt 0) {
+                  $failed = $true
+                  Write-Host "Syntax errors in $($_.Name)"
+                  $errors | ForEach-Object { Write-Host $_.Message }
+              }
+          }
+          if ($failed) { exit 1 }
