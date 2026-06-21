@@ -234,7 +234,11 @@ mod tests {
     use super::*;
     use crate::consensus::Checkpoint;
     use kanari_crypto::keys::{CurveType, generate_keypair};
+    use kanari_move_runtime_v1::state::Account;
     use kanari_types::transaction::{SignedTransaction, Transaction};
+    use kanari_types::{
+        address::Address as KanariAddress, balance::BalanceRecord, kanari::KANARI_TOKEN_TYPE,
+    };
 
     fn signed_transfer(sequence_number: u64) -> SignedTransaction {
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
@@ -252,12 +256,25 @@ mod tests {
         signed_tx
     }
 
+    fn fund_sender(engine: &BlockchainEngine, address: &str, balance: u64) {
+        let addr = KanariAddress::parse_to_account_address(address).unwrap();
+        let mut account = Account::with_native_balance(addr, balance);
+        account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(balance));
+        engine
+            .state
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .save_account(&account)
+            .unwrap();
+    }
+
     #[test]
     fn restart_recovers_checkpoint_metadata_from_pending_journal() {
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap();
         let engine = BlockchainEngine::new_dir(data_dir).unwrap();
         let tx = signed_transfer(0);
+        fund_sender(&engine, tx.transaction.sender_address(), 1_000_000);
         let tx_hash = tx.transaction_hash().to_vec();
         let prev_hash = {
             let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
@@ -271,15 +288,10 @@ mod tests {
             42,
             prev_hash.clone(),
         );
-        let (computed_root, verified_state, _) = engine.prepare_checkpoint_state(&draft_checkpoint).unwrap();
-        let checkpoint = Checkpoint::new(
-            1,
-            vec![[1u8; 32]],
-            vec![tx],
-            computed_root,
-            42,
-            prev_hash,
-        );
+        let (computed_root, verified_state, _) =
+            engine.prepare_checkpoint_state(&draft_checkpoint).unwrap();
+        let checkpoint =
+            Checkpoint::new(1, vec![[1u8; 32]], vec![tx], computed_root, 42, prev_hash);
 
         let store = engine.persistent_store.as_ref().unwrap();
         BlockchainEngine::persist_pending_checkpoint_journal(store, &checkpoint).unwrap();
@@ -295,6 +307,10 @@ mod tests {
         let found = restarted.get_committed_transaction_from_history(&tx_hash);
         assert!(found.is_some());
         let store = restarted.persistent_store.as_ref().unwrap();
-        assert!(BlockchainEngine::load_pending_checkpoint_journal(store).unwrap().is_none());
+        assert!(
+            BlockchainEngine::load_pending_checkpoint_journal(store)
+                .unwrap()
+                .is_none()
+        );
     }
 }

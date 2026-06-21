@@ -3,7 +3,8 @@
 
 use crate::blockchain::Blockchain;
 use crate::consensus::{
-    Checkpoint, CheckpointCertificate, DagMetrics, DagProductionPolicy, DagVertex, PersistentDagState,
+    Checkpoint, CheckpointCertificate, DagMetrics, DagProductionPolicy, DagVertex,
+    PersistentDagState,
 };
 use ahash::AHashMap;
 use anyhow::{Context, Result};
@@ -1717,7 +1718,10 @@ mod tests {
             .submit_transactions_batch(vec![tx.clone(), tx])
             .unwrap_err();
 
-        assert!(err.to_string().contains("appears more than once in the batch"));
+        assert!(
+            err.to_string()
+                .contains("appears more than once in the batch")
+        );
     }
 
     #[test]

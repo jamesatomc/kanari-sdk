@@ -442,7 +442,7 @@ mod tests {
     fn consensus_key_file_accepts_owner_only_permissions() {
         use super::validate_start_authority_config;
         use std::os::unix::fs::PermissionsExt;
-        
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("consensus.hex");
         std::fs::write(&path, "11".repeat(32)).unwrap();

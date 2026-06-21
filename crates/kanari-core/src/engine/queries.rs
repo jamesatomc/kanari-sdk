@@ -189,7 +189,10 @@ impl BlockchainEngine {
         chain
             .get_checkpoint(sequence)
             .cloned()
-            .map(|checkpoint| CheckpointSyncData { checkpoint, certificate: None })
+            .map(|checkpoint| CheckpointSyncData {
+                checkpoint,
+                certificate: None,
+            })
     }
 
     pub fn block_from_full_data(full_block: &FullBlockData) -> kanari_types::block::Block {
@@ -284,26 +287,44 @@ impl BlockchainEngine {
             let public_key = self
                 .consensus_public_keys
                 .get(&signer.authority_id)
-                .ok_or_else(|| anyhow::anyhow!("Checkpoint certificate signer is not in the active committee"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Checkpoint certificate signer is not in the active committee")
+                })?;
             if signer.voting_power != 1 {
                 anyhow::bail!("Checkpoint certificate signer has invalid voting power");
             }
-            let public_key: [u8; 32] = public_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("Invalid consensus public key length for {}", signer.authority_id))?;
-            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)
-                .map_err(|e| anyhow::anyhow!("Invalid consensus public key for {}: {}", signer.authority_id, e))?;
-            let signature_bytes: [u8; 64] = signer
-                .signature
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("Invalid checkpoint certificate signature length for {}", signer.authority_id))?;
+            let public_key: [u8; 32] = public_key.as_slice().try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "Invalid consensus public key length for {}",
+                    signer.authority_id
+                )
+            })?;
+            let verifying_key =
+                ed25519_dalek::VerifyingKey::from_bytes(&public_key).map_err(|e| {
+                    anyhow::anyhow!(
+                        "Invalid consensus public key for {}: {}",
+                        signer.authority_id,
+                        e
+                    )
+                })?;
+            let signature_bytes: [u8; 64] =
+                signer.signature.as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Invalid checkpoint certificate signature length for {}",
+                        signer.authority_id
+                    )
+                })?;
             let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes);
             use ed25519_dalek::Verifier;
             verifying_key
                 .verify(&signing_bytes, &signature)
-                .map_err(|e| anyhow::anyhow!("Invalid checkpoint certificate signature for {}: {}", signer.authority_id, e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Invalid checkpoint certificate signature for {}: {}",
+                        signer.authority_id,
+                        e
+                    )
+                })?;
             voting_power = voting_power.saturating_add(signer.voting_power);
         }
 
@@ -346,13 +367,12 @@ impl BlockchainEngine {
             );
         }
 
-        let certificate = checkpoint_data
-            .certificate
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!(
+        let certificate = checkpoint_data.certificate.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
                 "Refusing to sync checkpoint #{} without a certificate",
                 checkpoint.sequence
-            ))?;
+            )
+        })?;
         self.validate_checkpoint_certificate(checkpoint, certificate)?;
 
         info!(
@@ -433,7 +453,11 @@ mod tests {
     };
     use ed25519_dalek::{Signer, SigningKey};
     use kanari_crypto::keys::{CurveType, generate_keypair};
+    use kanari_move_runtime_v1::state::Account;
     use kanari_types::transaction::{SignedTransaction, Transaction};
+    use kanari_types::{
+        address::Address as KanariAddress, balance::BalanceRecord, kanari::KANARI_TOKEN_TYPE,
+    };
     use std::collections::BTreeMap;
 
     fn signed_transfer(sequence_number: u64) -> SignedTransaction {
@@ -450,6 +474,18 @@ mod tests {
             .sign(&sender.private_key, sender.curve_type)
             .unwrap();
         signed_tx
+    }
+
+    fn fund_sender(engine: &BlockchainEngine, address: &str, balance: u64) {
+        let addr = KanariAddress::parse_to_account_address(address).unwrap();
+        let mut account = Account::with_native_balance(addr, balance);
+        account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(balance));
+        engine
+            .state
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .save_account(&account)
+            .unwrap();
     }
 
     fn authority_key(seed: u8) -> SigningKey {
@@ -471,9 +507,7 @@ mod tests {
         signing_keys.insert("0x4".to_string(), authority_key(4));
         let public_keys = signing_keys
             .iter()
-            .map(|(authority, key)| {
-                (authority.clone(), key.verifying_key().to_bytes().to_vec())
-            })
+            .map(|(authority, key)| (authority.clone(), key.verifying_key().to_bytes().to_vec()))
             .collect::<BTreeMap<_, _>>();
         engine.set_authorities("0x1".to_string(), authorities);
         engine
@@ -525,7 +559,14 @@ mod tests {
             let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
             chain.latest_checkpoint().hash().unwrap()
         };
-        let checkpoint = Checkpoint::new(1, vec![], vec![signed_transfer(0)], vec![9u8; 32], 42, prev_hash);
+        let checkpoint = Checkpoint::new(
+            1,
+            vec![],
+            vec![signed_transfer(0)],
+            vec![9u8; 32],
+            42,
+            prev_hash,
+        );
         let sync_data = CheckpointSyncData {
             checkpoint,
             certificate: None,
@@ -548,14 +589,19 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .compute_state_root();
         let checkpoint = Checkpoint::new(1, vec![], vec![], state_root, 42, prev_hash);
-        let certificate = build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x2", "0x3"]);
+        let certificate =
+            build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x2", "0x3"]);
         let sync_data = CheckpointSyncData {
             checkpoint,
             certificate: Some(certificate),
         };
 
         let error = engine.sync_checkpoint_from_data(&sync_data).unwrap_err();
-        assert!(error.to_string().contains("Refusing to sync empty checkpoint"));
+        assert!(
+            error
+                .to_string()
+                .contains("Refusing to sync empty checkpoint")
+        );
         assert_eq!(engine.get_stats().height, 0);
     }
 
@@ -567,8 +613,10 @@ mod tests {
             chain.latest_checkpoint().hash().unwrap()
         };
         let signed_tx = signed_transfer(0);
+        fund_sender(&engine, signed_tx.transaction.sender_address(), 1_000_000);
         let checkpoint = Checkpoint::new(1, vec![], vec![signed_tx], vec![9u8; 32], 42, prev_hash);
-        let certificate = build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x2", "0x3"]);
+        let certificate =
+            build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x2", "0x3"]);
         let sync_data = CheckpointSyncData {
             checkpoint,
             certificate: Some(certificate),
@@ -586,8 +634,16 @@ mod tests {
             let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
             chain.latest_checkpoint().hash().unwrap()
         };
-        let checkpoint = Checkpoint::new(1, vec![], vec![signed_transfer(0)], vec![9u8; 32], 42, prev_hash);
-        let mut certificate = build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x2", "0x3"]);
+        let checkpoint = Checkpoint::new(
+            1,
+            vec![],
+            vec![signed_transfer(0)],
+            vec![9u8; 32],
+            42,
+            prev_hash,
+        );
+        let mut certificate =
+            build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x2", "0x3"]);
         certificate.committee_digest = vec![7u8; 32];
         let sync_data = CheckpointSyncData {
             checkpoint,
@@ -605,7 +661,14 @@ mod tests {
             let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
             chain.latest_checkpoint().hash().unwrap()
         };
-        let checkpoint = Checkpoint::new(1, vec![], vec![signed_transfer(0)], vec![9u8; 32], 42, prev_hash);
+        let checkpoint = Checkpoint::new(
+            1,
+            vec![],
+            vec![signed_transfer(0)],
+            vec![9u8; 32],
+            42,
+            prev_hash,
+        );
         let certificate = build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x2"]);
         let sync_data = CheckpointSyncData {
             checkpoint,
@@ -623,8 +686,16 @@ mod tests {
             let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
             chain.latest_checkpoint().hash().unwrap()
         };
-        let checkpoint = Checkpoint::new(1, vec![], vec![signed_transfer(0)], vec![9u8; 32], 42, prev_hash);
-        let certificate = build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x1", "0x2"]);
+        let checkpoint = Checkpoint::new(
+            1,
+            vec![],
+            vec![signed_transfer(0)],
+            vec![9u8; 32],
+            42,
+            prev_hash,
+        );
+        let certificate =
+            build_certificate(&engine, &checkpoint, &signing_keys, &["0x1", "0x1", "0x2"]);
         let sync_data = CheckpointSyncData {
             checkpoint,
             certificate: Some(certificate),

@@ -448,6 +448,18 @@ impl DagEngine {
         if tx_count == 0 {
             anyhow::bail!("No new transactions to checkpoint");
         }
+        let max_gas_per_checkpoint = kanari_types::gas_v2::GasConfig::default().max_gas_per_block;
+        let batch_declared_gas = transactions.iter().try_fold(0u64, |acc, tx| {
+            acc.checked_add(tx.transaction.gas_limit())
+                .ok_or_else(|| anyhow::anyhow!("Pending checkpoint gas budget overflow"))
+        })?;
+        if batch_declared_gas > max_gas_per_checkpoint {
+            anyhow::bail!(
+                "Pending checkpoint declares {} gas, exceeding the per-checkpoint limit of {}",
+                batch_declared_gas,
+                max_gas_per_checkpoint
+            );
+        }
         let timestamp = {
             let chain = self
                 .engine
@@ -982,5 +994,42 @@ mod tests {
         let vertex = signed_network_vertex("auth2", &remote_key, 2, vec![[9u8; 32]]);
         let error = dag_engine.add_network_vertex(vertex).unwrap_err();
         assert!(error.to_string().contains("Missing parent"));
+    }
+
+    #[test]
+    fn test_produce_vertex_rejects_batch_over_checkpoint_gas_limit() {
+        let mut engine = BlockchainEngine::new_in_memory().unwrap();
+        let authorities = vec!["0x1".to_string(), "0x2".to_string(), "0x3".to_string()];
+        let local_key = authority_key(11);
+        let peer_key_2 = authority_key(22);
+        let peer_key_3 = authority_key(33);
+        let public_keys = BTreeMap::from([
+            (
+                "0x1".to_string(),
+                local_key.verifying_key().to_bytes().to_vec(),
+            ),
+            (
+                "0x2".to_string(),
+                peer_key_2.verifying_key().to_bytes().to_vec(),
+            ),
+            (
+                "0x3".to_string(),
+                peer_key_3.verifying_key().to_bytes().to_vec(),
+            ),
+        ]);
+        engine.set_authorities("0x1".to_string(), authorities);
+        engine
+            .set_consensus_signing_key(local_key, public_keys)
+            .unwrap();
+
+        let txs = (0..11).map(|_| signed_transfer(0)).collect::<Vec<_>>();
+        engine.submit_transactions_batch(txs).unwrap();
+
+        let error = engine.produce_checkpoint().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("exceeding the per-checkpoint limit")
+        );
     }
 }
