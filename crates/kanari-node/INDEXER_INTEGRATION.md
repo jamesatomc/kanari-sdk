@@ -1,223 +1,132 @@
-# Kanari Indexer Integration with Node
+# Kanari Node Indexer Integration
 
-This document describes how the blockchain indexer is integrated with the kanari-node.
+This document matches the current checkpoint-based sync path in `kanari-node`.
 
 ## Overview
 
-The kanari-indexer is automatically integrated into the kanari-node to provide real-time indexing of blockchain data as blocks are synced and committed.
+`kanari-node` creates an optional SQLite indexer at:
 
-## Architecture
-
-```
-kanari-node
-├── src/
-│   ├── main.rs          # Node entry point, initializes indexer
-│   ├── sync.rs          # Block synchronization, triggers indexing
-│   └── indexer.rs       # Indexer wrapper and initialization
+```text
+<data_dir>/indexer.db
 ```
 
-## How It Works
+The indexer is initialized in `src/app.rs`, not in `main.rs`. Failure to initialize the indexer is logged and the validator continues without indexing.
 
-### 1. Initialization
+## Runtime Wiring
 
-When the node starts, the indexer is automatically initialized in `main.rs`:
-
-```rust
-// Initialize blockchain indexer
-let indexer = match NodeIndexer::new(data_dir.clone()) {
-    Ok(idx) => {
-        tracing::info!("Blockchain indexer initialized");
-        Some(idx)
-    }
-    Err(e) => {
-        tracing::warn!("Failed to initialize indexer: {}", e);
-        None
-    }
-};
-```
-
-The indexer database is created at `<data_dir>/indexer.db`.
-
-### 2. Integration with SyncManager
-
-The indexer is passed to the `SyncManager` during initialization:
+The current constructor order is:
 
 ```rust
 let sync_manager = Arc::new(SyncManager::new(
     engine.clone(),
     network_tx.clone(),
-    indexer.clone(),  // Optional Arc<Mutex<Indexer>>
     peer_id.clone(),
+    node_indexer.as_ref().map(|idx| idx.indexer().clone()),
 ));
 ```
 
-### 3. Automatic Indexing
+The underlying `Indexer` is wrapped in `Arc<Mutex<Indexer>>` because its SQLite connection is not `Sync`.
 
-When a block is successfully synced from the network, it's automatically indexed:
+## Checkpoint Indexing Flow
 
-```rust
-// In sync.rs - handle_block_response
-match self.engine.sync_full_block_from_data(&block) {
-    Ok(_) => {
-        // Convert FullBlockData to Block
-        let kanari_block = kanari_types::block::Block::new(...);
-        
-        // Index the block
-        if let Some(ref indexer) = self.indexer {
-            indexer.lock().unwrap().index_block(&kanari_block)?;
-        }
-    }
-}
+The node syncs `CheckpointSyncData`, which contains:
+
+- the checkpoint;
+- an optional checkpoint certificate.
+
+For non-empty inbound checkpoints, the engine requires and verifies the certificate before applying state. Verification covers chain ID, epoch, protocol version, checkpoint/previous hash, state root, committee digest, unique committee signatures and quorum voting power.
+
+After a buffered checkpoint is successfully applied in sequence, `SyncManager` calls the indexer path:
+
+1. request the materialized checkpoint view with `engine.get_full_block(sequence)`;
+2. convert the checkpoint-backed view into the block representation expected by `kanari-indexer`;
+3. write it through the shared indexer mutex;
+4. log any indexing failure without rolling back the already committed checkpoint.
+
+The indexer therefore follows certified checkpoint commit order. It is not an authority for consensus or state-root validation.
+
+## Data Layout
+
+A validator data directory may contain:
+
+```text
+<data_dir>/
+  indexer.db
+  ... blockchain/state/checkpoint/object-store data ...
 ```
 
-## Thread Safety
+The exact storage subdirectories are internal implementation details. Back up the complete validator data directory while the node is stopped; do not copy only `indexer.db` as a complete validator backup.
 
-The `Indexer` uses `rusqlite::Connection` which contains `RefCell` and is not `Sync`. To safely share it across threads in the async runtime, we wrap it with `std::sync::Mutex`:
+## Querying
 
-```rust
-pub struct NodeIndexer {
-    indexer: Arc<Mutex<Indexer>>,
-}
-```
+Indexer queries are currently available through the Rust `kanari-indexer` API. Dedicated indexer JSON-RPC endpoints are not yet part of the node API.
 
-This follows Rust best practices for non-thread-safe resources in async contexts.
-
-## Database Location
-
-The indexer database is stored alongside the blockchain data:
-
-```
-~/.kanari/kanari-db/
-├── kanari_db/         # Blockchain state (RocksDB)
-└── indexer.db         # Indexer database (SQLite)
-```
-
-## Querying Indexed Data
-
-You can query the indexed data using the kanari-indexer API directly or through RPC endpoints (future enhancement).
-
-### Example Usage
+Example:
 
 ```rust
 use kanari_indexer::{Indexer, IndexerConfig};
+use std::path::PathBuf;
 
-let config = IndexerConfig {
-    db_path: PathBuf::from("~/.kanari/kanari-db/indexer.db"),
+let indexer = Indexer::new(IndexerConfig {
+    db_path: PathBuf::from("C:/kanari/devnet/node1/indexer.db"),
     in_memory: false,
     batch_size: 100,
-};
+})?;
 
-let indexer = Indexer::new(config)?;
-
-// Query transactions by sender
-let txs = indexer.db().get_transactions_by_sender(addr, 10)?;
-
-// Get account balances
-let balances = indexer.db().get_all_balances(addr)?;
-
-// Get statistics
 let stats = indexer.get_statistics()?;
+println!("{stats}");
 ```
 
-## Performance Considerations
-
-- **Synchronous Indexing**: Blocks are indexed synchronously during sync to ensure consistency
-- **Minimal Overhead**: SQLite operations are fast (~1-5ms per block)
-- **WAL Mode**: Enabled for better concurrent read performance
-- **Batch Operations**: Can be optimized further if needed
+Open the database only according to SQLite locking rules. Prefer querying a stopped node, a read-only replica, or a supported application API rather than attaching arbitrary writers to the live database.
 
 ## Error Handling
 
-If indexing fails, the error is logged but doesn't prevent block synchronization:
+Indexer initialization failure:
 
-```rust
-match indexer.lock().unwrap().index_block(&kanari_block) {
-    Ok(_) => info!("[INDEXER] Indexed block #{}", height),
-    Err(e) => error!("[INDEXER] Failed to index block #{}: {}", height, e),
-}
+```text
+Failed to initialize indexer: ... Indexing will be disabled.
 ```
 
-This ensures the node continues operating even if there are temporary indexing issues.
+Checkpoint indexing failure:
 
-## Future Enhancements
-
-1. **RPC Endpoints**: Expose indexer queries via RPC API
-2. **Async Indexing**: Move indexing to background task for better performance
-3. **Indexing Status**: Track and report indexing progress
-4. **Reindexing Command**: CLI command to reindex from scratch
-5. **Custom Event Handlers**: Plugin system for custom event processing
-
-## Troubleshooting
-
-### Indexer Not Initializing
-
-Check logs for:
-
-```
-Node indexer initialized at <path>
+```text
+[INDEXER] Failed to index checkpoint #<sequence>: ...
 ```
 
-If you see:
+These errors do not make an uncertified checkpoint valid and do not bypass consensus verification. They mean the index may lag the committed chain.
 
-```
-Failed to initialize indexer: <error>
-```
+## Recovery
 
-Common causes:
+There is currently no `kanari-node reindex` CLI command. Do not document or automate one until it exists.
 
-- Insufficient disk space
-- Permission issues on data directory
-- Corrupted database file
+For a corrupted indexer:
 
-### Indexing Errors
+1. stop the validator;
+2. take a verified full data-directory backup;
+3. preserve the corrupted `indexer.db` for diagnosis;
+4. restore a known-good full backup, or rebuild the index through a reviewed recovery tool;
+5. start the validator with the same committee manifest and key files;
+6. compare height, supply and state root with the committee.
 
-Look for:
+Deleting only `indexer.db` does not currently guarantee automatic reindexing from genesis.
 
-```
-[INDEXER] Failed to index block #<height>: <error>
-```
+## Monitoring
 
-The node will continue syncing blocks even if indexing fails.
+Use node JSON-RPC for canonical validator health:
 
-### Database Corruption
+- `kanari_health`
+- `kanari_getStats`
+- `kanari_getNetworkStatus`
 
-If the indexer database becomes corrupted:
-
-1. Stop the node
-2. Delete `indexer.db`
-3. Restart the node (it will reindex from genesis)
-
-Or use the reindexing command (when implemented):
-
-```bash
-kanari-node reindex --from-height 0
-```
+The current health response does not expose indexer progress. Add an explicit indexer status API before relying on the indexer for production readiness checks.
 
 ## Testing
 
-To test the indexer integration:
+1. Start a fresh multi-validator committee with `setup-multi-node.ps1`.
+2. Submit reviewed transactions.
+3. Wait for certified checkpoint convergence.
+4. Verify equal height, supply and state root with `monitor-cluster-health.ps1`.
+5. Inspect indexer statistics through the Rust API.
+6. Restart a follower and verify checkpoint catch-up plus indexer continuation.
 
-1. Start a node:
-
-```bash
-cargo run -p kanari-node -- start --data-dir ./test-data
-```
-
-1. Let it sync some blocks
-
-2. Query the indexer:
-
-```rust
-// In a separate program
-let indexer = Indexer::new(config)?;
-let stats = indexer.get_statistics()?;
-println!("{:?}", stats);
-```
-
-## Configuration
-
-Currently, the indexer is always enabled when the node starts. Future versions may add:
-
-- `--enable-indexer` flag (default: true)
-- `--indexer-db-path` option
-- `--indexer-batch-size` tuning parameter
+The checkpoint/state database is canonical. The indexer is a derived query layer.
