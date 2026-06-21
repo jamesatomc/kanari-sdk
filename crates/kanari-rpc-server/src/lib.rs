@@ -18,7 +18,8 @@ use kanari_rpc_api::*;
 use kanari_types::transaction::SignedTransaction;
 
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower::limit::ConcurrencyLimitLayer;
+use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 use tracing::info;
 
 use crate::{
@@ -146,16 +147,19 @@ fn respond_with_serialize<T: serde::Serialize>(id: u64, v: T) -> RpcResponse {
 
 /// Create RPC server router
 pub fn create_router(state: RpcServerState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    const MAX_RPC_BODY_BYTES: usize = 1_048_576;
+    const MAX_RPC_CONCURRENCY: usize = 128;
 
     Router::new()
         .route("/", post(handle_rpc))
         .route("/rpc", post(handle_rpc))
         .route("/metrics", get(handle_metrics))
-        .layer(cors)
+        .layer(RequestBodyLimitLayer::new(MAX_RPC_BODY_BYTES))
+        .layer(ConcurrencyLimitLayer::new(MAX_RPC_CONCURRENCY))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(15),
+        ))
         .with_state(state)
 }
 

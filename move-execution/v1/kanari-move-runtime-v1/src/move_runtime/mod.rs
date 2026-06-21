@@ -162,16 +162,17 @@ impl MoveRuntime {
             Some(store) if !cfg!(miri) => match ObjectStorage::boxed_with_store(store) {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] shared object store load failed: {}", e);
-                    Arc::from(ObjectStorage::boxed_inmemory())
+                    return Err(anyhow::anyhow!(
+                        "[RUNTIME] shared object store load failed: {}",
+                        e
+                    ));
                 }
             },
             _ if cfg!(miri) => Arc::from(ObjectStorage::boxed_inmemory()),
             _ => match ObjectStorage::boxed_with_persistence() {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] DB load failed. Fallback to in-memory: {}", e);
-                    Arc::from(ObjectStorage::boxed_inmemory())
+                    return Err(anyhow::anyhow!("[RUNTIME] object DB load failed: {}", e));
                 }
             },
         };
@@ -260,8 +261,10 @@ impl MoveRuntime {
             match ObjectStorage::boxed_with_store(self.state.store()) {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] isolated object store load failed: {}", e);
-                    Arc::from(ObjectStorage::boxed_inmemory())
+                    return Err(anyhow::anyhow!(
+                        "[RUNTIME] isolated object store load failed: {}",
+                        e
+                    ));
                 }
             };
 

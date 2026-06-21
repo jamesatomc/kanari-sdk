@@ -28,6 +28,8 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
 const LARGE_MESSAGE_COMPRESSION_THRESHOLD: usize = 100_000;
+const MAX_COMPRESSED_P2P_PAYLOAD: usize = 1_000_000;
+const MAX_DECOMPRESSED_P2P_PAYLOAD: usize = 8 * 1024 * 1024;
 
 /// P2P message types
 #[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
@@ -441,24 +443,41 @@ impl P2PNetwork {
     }
 }
 
-/// Decompress a compressed UTF-8 P2P payload.
+/// Decompress a compressed UTF-8 P2P payload with strict input/output bounds.
 pub fn decompress_payload(compressed_data: Vec<u8>) -> Result<String> {
-    let mut decoder = GzDecoder::new(&compressed_data[..]);
-    let mut decompressed = String::new();
-    decoder.read_to_string(&mut decompressed)?;
-    Ok(decompressed)
+    if compressed_data.len() > MAX_COMPRESSED_P2P_PAYLOAD {
+        anyhow::bail!(
+            "Compressed P2P payload exceeds {} bytes",
+            MAX_COMPRESSED_P2P_PAYLOAD
+        );
+    }
+
+    let decoder = GzDecoder::new(&compressed_data[..]);
+    let mut limited = decoder.take((MAX_DECOMPRESSED_P2P_PAYLOAD + 1) as u64);
+    let mut decompressed = Vec::new();
+    limited.read_to_end(&mut decompressed)?;
+
+    if decompressed.len() > MAX_DECOMPRESSED_P2P_PAYLOAD {
+        anyhow::bail!(
+            "Decompressed P2P payload exceeds {} bytes",
+            MAX_DECOMPRESSED_P2P_PAYLOAD
+        );
+    }
+
+    String::from_utf8(decompressed)
+        .map_err(|e| anyhow::anyhow!("Decompressed P2P payload is not valid UTF-8: {}", e))
 }
 
 pub struct P2PEventHandler {
     pub network: P2PNetwork,
-    pub message_tx: mpsc::UnboundedSender<P2PMessage>,
-    pub outgoing_rx: Option<mpsc::UnboundedReceiver<P2PMessage>>,
+    pub message_tx: mpsc::Sender<P2PMessage>,
+    pub outgoing_rx: Option<mpsc::Receiver<P2PMessage>>,
     pub peer_store: Option<std::sync::Arc<tokio::sync::Mutex<crate::peer_store::PeerStore>>>,
     message_forwarding_closed: bool,
 }
 
 impl P2PEventHandler {
-    pub fn new(network: P2PNetwork, message_tx: mpsc::UnboundedSender<P2PMessage>) -> Self {
+    pub fn new(network: P2PNetwork, message_tx: mpsc::Sender<P2PMessage>) -> Self {
         Self {
             network,
             message_tx,
@@ -468,7 +487,7 @@ impl P2PEventHandler {
         }
     }
 
-    pub fn with_outgoing(mut self, outgoing_rx: mpsc::UnboundedReceiver<P2PMessage>) -> Self {
+    pub fn with_outgoing(mut self, outgoing_rx: mpsc::Receiver<P2PMessage>) -> Self {
         self.outgoing_rx = Some(outgoing_rx);
         self
     }
@@ -516,7 +535,7 @@ impl P2PEventHandler {
             return false;
         }
 
-        match self.message_tx.send(msg) {
+        match self.message_tx.try_send(msg) {
             Ok(_) => true,
             Err(e) => {
                 warn!(
@@ -569,6 +588,19 @@ impl P2PEventHandler {
                 );
                 false
             }
+        }
+    }
+
+    fn claimed_source_peer_id(msg: &P2PMessage) -> Option<&str> {
+        match msg {
+            P2PMessage::PeerInfo(info) => Some(&info.peer_id),
+            P2PMessage::DagVertexRebroadcast(msg) => Some(&msg.sender_peer_id),
+            P2PMessage::DagVertexRequest(req) => Some(&req.requester_peer_id),
+            P2PMessage::DagVertexResponse(resp) => Some(&resp.responder_peer_id),
+            P2PMessage::TargetedCheckpointRequest(req) => Some(&req.requester_peer_id),
+            P2PMessage::TargetedCheckpointResponse(resp) => Some(&resp.responder_peer_id),
+            P2PMessage::CompressedTargetedCheckpointResponse(resp) => Some(&resp.responder_peer_id),
+            _ => None,
         }
     }
 
@@ -706,6 +738,16 @@ impl P2PEventHandler {
                 let config = bincode::config::standard();
                 match bincode::decode_from_slice::<P2PMessage, _>(&message.data, config) {
                     Ok((msg, _)) => {
+                        if let Some(claimed_peer_id) = Self::claimed_source_peer_id(&msg)
+                            && claimed_peer_id != propagation_source.to_string()
+                        {
+                            warn!(
+                                "[P2P] Dropping message with source identity mismatch: transport={}, claimed={}",
+                                propagation_source, claimed_peer_id
+                            );
+                            return;
+                        }
+
                         Self::log_received_message(&propagation_source, &msg);
 
                         match &msg {

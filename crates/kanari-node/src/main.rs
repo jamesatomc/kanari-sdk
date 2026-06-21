@@ -1,13 +1,22 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 // Main entry point for Kanari blockchain node
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use kanari_crypto::keys::{CurveType, KANARI_KEY_PREFIX, generate_keypair};
 use tracing::info;
+use zeroize::Zeroizing;
 
 mod app;
 mod indexer;
@@ -39,7 +48,7 @@ fn print_boot_banner(
     p2p_port: u16,
     rpc_port: u16,
     rpc_host: &str,
-    data_dir: &std::path::Path,
+    data_dir: &Path,
 ) {
     info!(
         node = node_label,
@@ -74,12 +83,12 @@ enum Commands {
         /// RPC listen port
         #[arg(long, default_value = "19001")]
         rpc_port: u16,
-        /// RPC listen host/IP (use 0.0.0.0 to bind all interfaces)
-        #[arg(long, default_value = "0.0.0.0")]
+        /// RPC listen host/IP. Explicitly pass 0.0.0.0 only behind a hardened gateway.
+        #[arg(long, default_value = "127.0.0.1")]
         rpc_host: String,
         /// Data directory for blockchain and state storage
         #[arg(long)]
-        data_dir: Option<std::path::PathBuf>,
+        data_dir: Option<PathBuf>,
         /// Run as relay server to help other nodes behind NAT
         #[arg(long, default_value = "false")]
         relay_server: bool,
@@ -89,12 +98,13 @@ enum Commands {
         /// List of authority IDs for DAG consensus (comma-separated)
         #[arg(long, value_delimiter = ',')]
         authorities: Option<Vec<String>>,
-        /// Local Ed25519 consensus private key seed as 32-byte hex
-        #[arg(long)]
-        consensus_private_key_hex: String,
+        /// File containing the local 32-byte Ed25519 consensus seed as hex.
+        /// On Unix the file must be a regular file with no group/world permissions.
+        #[arg(long, value_name = "PATH")]
+        consensus_private_key_file: PathBuf,
         /// JSON file mapping authority IDs to Ed25519 consensus public keys as hex
         #[arg(long)]
-        consensus_public_keys: std::path::PathBuf,
+        consensus_public_keys: PathBuf,
         /// Bootstrap peer multiaddr to connect to (can be specified multiple times)
         #[arg(long, value_name = "MULTIADDR")]
         bootstrap: Option<Vec<String>>,
@@ -108,7 +118,7 @@ enum Commands {
         node_count: usize,
         /// Output directory for node private seeds and public key map
         #[arg(long)]
-        output_dir: std::path::PathBuf,
+        output_dir: PathBuf,
         /// Overwrite existing key files
         #[arg(long, default_value = "false")]
         force: bool,
@@ -139,16 +149,106 @@ fn validate_start_authority_config(
     }
 }
 
-fn write_consensus_key_files(
-    node_count: usize,
-    output_dir: &std::path::Path,
-    force: bool,
-) -> Result<()> {
+fn validate_consensus_private_key_file(path: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to inspect consensus private key file {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+
+    // Reject symlinks, devices, directories, and other non-regular files.
+    if !metadata.file_type().is_file() {
+        anyhow::bail!(
+            "Consensus private key path {} must be a regular file",
+            path.display()
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            anyhow::bail!(
+                "Consensus private key file {} has insecure permissions {:o}; use mode 600 or stricter",
+                path.display(),
+                mode
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn read_consensus_private_key(path: &Path) -> Result<Zeroizing<String>> {
+    validate_consensus_private_key_file(path)?;
+    let mut content = std::fs::read_to_string(path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read consensus private key file {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+
+    let trimmed = content.trim().to_string();
+    zeroize::Zeroize::zeroize(&mut content);
+
+    let key = Zeroizing::new(trimmed);
+
+    if key.len() != 64 || !key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!(
+            "Consensus private key file {} must contain exactly 32 bytes of hexadecimal seed data",
+            path.display()
+        );
+    }
+
+    Ok(key)
+}
+
+fn write_private_key_file(path: &Path, seed: &[u8], force: bool) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true);
+    if force {
+        options.create(true).truncate(true);
+    } else {
+        options.create_new(true);
+    }
+
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let mut file = options.open(path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to create consensus private key file {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+
+    #[cfg(unix)]
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+
+    file.write_all(seed)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn write_consensus_key_files(node_count: usize, output_dir: &Path, force: bool) -> Result<()> {
     if node_count == 0 {
         anyhow::bail!("--node-count must be at least 1");
     }
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder.create(output_dir)?;
+    }
+    #[cfg(not(unix))]
     std::fs::create_dir_all(output_dir)?;
+
     let public_keys_path = output_dir.join("consensus-public-keys.json");
     if public_keys_path.exists() && !force {
         anyhow::bail!(
@@ -161,22 +261,18 @@ fn write_consensus_key_files(
     for node_id in 1..=node_count {
         let keypair = generate_keypair(CurveType::Ed25519)
             .map_err(|e| anyhow::anyhow!("Failed to generate consensus key: {}", e))?;
-        let private_seed = keypair
-            .private_key
-            .strip_prefix(KANARI_KEY_PREFIX)
-            .ok_or_else(|| anyhow::anyhow!("Generated private key has unexpected format"))?
-            .to_string();
+        let private_seed = Zeroizing::new(
+            keypair
+                .private_key
+                .strip_prefix(KANARI_KEY_PREFIX)
+                .ok_or_else(|| anyhow::anyhow!("Generated private key has unexpected format"))?
+                .to_string(),
+        );
         let authority = format!("0x{}", node_id);
         let private_key_path =
             output_dir.join(format!("node{}-consensus-private-key.hex", node_id));
-        if private_key_path.exists() && !force {
-            anyhow::bail!(
-                "{} already exists; pass --force to overwrite consensus keys",
-                private_key_path.display()
-            );
-        }
 
-        std::fs::write(private_key_path, private_seed)?;
+        write_private_key_file(&private_key_path, private_seed.as_bytes(), force)?;
         public_keys.insert(authority, keypair.public_key);
     }
 
@@ -219,11 +315,12 @@ fn main() -> Result<()> {
             relay_server,
             authority_id,
             authorities,
-            consensus_private_key_hex,
+            consensus_private_key_file,
             consensus_public_keys,
             bootstrap,
         } => {
             validate_start_authority_config(&authority_id, &authorities)?;
+            let consensus_private_key = read_consensus_private_key(&consensus_private_key_file)?;
             let data_dir_path = data_dir.clone().unwrap_or_else(default_data_dir);
             let node_label = authority_id
                 .as_deref()
@@ -240,8 +337,10 @@ fn main() -> Result<()> {
             let mut engine = create_engine(&data_dir, &network)?;
             info!("Engine initialized. Configuring authority and consensus keys");
 
-            let id = authority_id.expect("validated authority_id must exist");
-            let auths = authorities.expect("validated authorities must exist");
+            let id = authority_id
+                .ok_or_else(|| anyhow::anyhow!("validated authority ID unexpectedly missing"))?;
+            let auths = authorities
+                .ok_or_else(|| anyhow::anyhow!("validated authority list unexpectedly missing"))?;
             tracing::info!(
                 "Configuring Authority ID: {} with {} authorities",
                 id,
@@ -250,7 +349,7 @@ fn main() -> Result<()> {
             engine.set_authorities(id, auths);
             configure_consensus_signing_key(
                 &mut engine,
-                &consensus_private_key_hex,
+                consensus_private_key.as_str(),
                 &consensus_public_keys,
             )?;
             info!("Consensus keys configured. Entering node runtime");
@@ -268,7 +367,7 @@ fn main() -> Result<()> {
         }
         Commands::Local => {
             tracing::info!("Starting local node: RPC on 127.0.0.1:6767 (P2P disabled)");
-            let data_dir_path = std::path::PathBuf::from("./.kanari-local");
+            let data_dir_path = PathBuf::from("./.kanari-local");
             // Ensure data directory exists
             std::fs::create_dir_all(&data_dir_path)?;
             let data_dir = Some(data_dir_path.clone());
@@ -321,5 +420,33 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consensus_key_file_rejects_group_or_world_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("consensus.hex");
+        std::fs::write(&path, "11".repeat(32)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let error = read_consensus_private_key(&path).unwrap_err();
+        assert!(error.to_string().contains("insecure permissions"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn consensus_key_file_accepts_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("consensus.hex");
+        std::fs::write(&path, "11".repeat(32)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let key = read_consensus_private_key(&path).unwrap();
+        assert_eq!(key.as_str(), "11".repeat(32));
     }
 }

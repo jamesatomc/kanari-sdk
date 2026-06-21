@@ -1,0 +1,28 @@
+let immutable_owner =
+    kanari_system_natives::transfer_natives::immutable_owner_address();
+match param_type {
+    RuntimeType::Reference(_) => {
+        // Read-only references do not grant ownership or write capability.
+    }
+    RuntimeType::MutableReference(_) => {
+        let actor = sender.ok_or_else(|| {
+            anyhow::anyhow!("Mutable object access requires a sender")
+        })?;
+        if stored_obj.owner == immutable_owner {
+            return Err(anyhow::anyhow!("Immutable object cannot be mutated"));
+        }
+        if stored_obj.owner != actor && stored_obj.owner != AccountAddress::ZERO {
+            return Err(anyhow::anyhow!("Mutable object access denied"));
+        }
+    }
+    _ => {
+        let actor = sender.ok_or_else(|| {
+            anyhow::anyhow!("Moving an object requires a sender")
+        })?;
+        if stored_obj.owner != actor {
+            return Err(anyhow::anyhow!(
+                "Only an owned object may be moved by value"
+            ));
+        }
+    }
+}

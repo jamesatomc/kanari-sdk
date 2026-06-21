@@ -1,0 +1,87 @@
+name: Remediation CI
+
+on:
+  push:
+    branches:
+      - remediation/all-20260620
+  pull_request:
+    branches:
+      - kanari-sdk
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remediation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        id: formatting
+        run: |
+          cargo fmt --all
+          git diff --check
+          git diff --name-only -z | tar --null -T - -czf formatted-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formatted-source
+          path: formatted-source.tar.gz
+          retention-days: 1
+      - name: Require committed formatting
+        run: git diff --exit-code
+      - name: Compile affected crates
+        run: >-
+          cargo check
+          -p kanari-auth
+          -p kanari-node
+          -p kanari-core
+          -p kanari-rpc-server
+          -p kanari-move-runtime-v1
+          --all-targets
+      - name: Test auth
+        run: cargo test -p kanari-auth --lib
+      - name: Test node
+        run: cargo test -p kanari-node
+      - name: Test RPC
+        run: cargo test -p kanari-rpc-server --lib
+      - name: Test core
+        run: cargo test -p kanari-core --lib
+      - name: Test Move runtime
+        run: cargo test -p kanari-move-runtime-v1 --lib
+
+  dependency-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject unpinned Git dependencies
+        shell: bash
+        run: |
+          if grep -RIn --include='Cargo.toml' -E 'git[[:space:]]*=[[:space:]]*"[^"]+"' . \
+            | grep -vE '(rev|tag)[[:space:]]*='; then
+            echo 'Git dependencies must be pinned by rev or tag.' >&2
+            exit 1
+          fi
+
+  production-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify production safety gates
+        shell: bash
+        run: |
+          grep -q 'E_MUTABLE_OBJECT_BORROW_DISABLED' crates/kanari-frameworks/packages/kanari-system/sources/object.move
+          grep -q 'Move view execution is temporarily disabled' crates/kanari-core/src/engine/queries.rs
+          grep -q 'default_value = "127.0.0.1"' crates/kanari-node/src/main.rs
+          grep -q 'MAX_DECOMPRESSED_P2P_PAYLOAD' crates/kanari-node/src/p2p.rs
+          ! grep -RIn --include='*.rs' 'consensus_private_key_hex' crates/kanari-node

@@ -83,7 +83,7 @@ libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub",
 ## HTTP/Web APIs
 reqwest = { version = "0.13.4", features = ["json"] }
 axum = "0.8.9"
-tower-http = { version = "0.7.0", features = ["cors"] }
+tower-http = { version = "0.7.0", features = ["cors", "limit", "timeout"] }
 axum-client-ip = "1.3.1"                                                              # IP extraction for axum
 
 # ============================================================================
@@ -228,7 +228,7 @@ flutter_rust_bridge = "=2.12.0"  # Flutter ↔ Rust interop
 # ============================================================================
 # Memory Allocator (Performance Optimization)
 # ============================================================================
-tikv-jemallocator = { git = "https://github.com/jamesatomc/jemallocator.git", features = [
+tikv-jemallocator = { git = "https://github.com/jamesatomc/jemallocator.git", rev = "49db433eb9620bdad0bc88a35bf7af28c1cabcf4", features = [
     "unprefixed_malloc_on_supported_platforms",
     "profiling",
 ] }

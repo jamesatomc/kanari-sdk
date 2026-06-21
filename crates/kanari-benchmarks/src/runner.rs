@@ -119,15 +119,16 @@ pub fn ensure_targets(reports: &[HarnessReport]) -> Result<()> {
 
 pub fn ensure_target_tps(report: &HarnessReport) -> Result<()> {
     if let Some(target_tps) = report.target_tps
-        && report.tps < target_tps {
-            bail!(
-                "TPS target not reached: {:.2} < {:.2} (mode={}, txs={})",
-                report.tps,
-                target_tps,
-                report.mode.as_str(),
-                report.requested_txs
-            );
-        }
+        && report.tps < target_tps
+    {
+        bail!(
+            "TPS target not reached: {:.2} < {:.2} (mode={}, txs={})",
+            report.tps,
+            target_tps,
+            report.mode.as_str(),
+            report.requested_txs
+        );
+    }
 
     Ok(())
 }

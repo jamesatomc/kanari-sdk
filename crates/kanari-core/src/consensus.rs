@@ -36,6 +36,8 @@ pub struct DagVertex {
     pub metadata: VertexMetadata,
     #[serde(skip)]
     pub cached_serialized_data: Option<Vec<u8>>,
+    /// Retained for persisted-state compatibility only. Hash verification always
+    /// recomputes the digest from the current vertex body.
     #[serde(skip)]
     pub cached_hash: Option<Vec<u8>>,
 }
@@ -114,18 +116,22 @@ impl DagVertex {
     }
 
     pub fn compute_hash(&self) -> Result<VertexId> {
-        if let Some(hash) = &self.cached_hash {
-            return Ok(vertex_id_from_hash_bytes(hash));
-        }
+        // Never trust a hash supplied beside a deserialized or subsequently
+        // mutated body. Always derive identity from the current canonical fields.
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
         let bytes = bcs::to_bytes(&(
+            b"kanari:dag-vertex:v2".as_slice(),
             &self.chain_id,
             self.round,
             &self.author,
             &self.parents,
             tx_hashes,
             self.timestamp,
+            self.metadata.tx_count as u64,
+            self.metadata.total_gas_used,
             &self.metadata.state_root,
+            self.metadata.is_checkpoint,
+            self.metadata.checkpoint_seq,
         ))?;
         Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
     }
@@ -176,9 +182,12 @@ impl Checkpoint {
     pub fn hash(&self) -> Result<Vec<u8>> {
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
         let serialized = bcs::to_bytes(&(
+            b"kanari:checkpoint:v2".as_slice(),
             self.sequence,
+            &self.vertices,
             &tx_hashes,
             &self.state_root,
+            self.timestamp,
             &self.prev_checkpoint_hash,
         ))?;
         Ok(hash_data_blake3(&serialized))

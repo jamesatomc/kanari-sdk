@@ -295,16 +295,21 @@ impl BlockchainEngine {
         Ok(())
     }
 
+    /// Public view execution is disabled until the runtime provides both normal
+    /// Move visibility enforcement and bounded gas/memory/return-size accounting.
+    /// The previous path called `execute_function_bypass_visibility` with an
+    /// unmetered gas meter, which was not safe to expose through RPC.
     pub fn execute_view_function(
         &self,
-        package_addr: &str,
-        module_name: &str,
-        function_name: &str,
-        type_args: &[String],
-        args: &[Vec<u8>],
+        _package_addr: &str,
+        _module_name: &str,
+        _function_name: &str,
+        _type_args: &[String],
+        _args: &[Vec<u8>],
     ) -> Result<serde_json::Value> {
-        let runtime = &self.runtime_pool[0];
-        runtime.execute_view_function(package_addr, module_name, function_name, type_args, args)
+        anyhow::bail!(
+            "Move view execution is temporarily disabled pending metered, visibility-safe execution"
+        )
     }
 }
 
@@ -369,5 +374,14 @@ mod tests {
         let error = engine.sync_checkpoint_from_data(&sync_data).unwrap_err();
         assert!(error.to_string().contains("state root mismatch"));
         assert_eq!(engine.get_stats().height, 0);
+    }
+
+    #[test]
+    fn view_execution_fails_closed() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let error = engine
+            .execute_view_function("0x2", "coin", "value", &[], &[])
+            .unwrap_err();
+        assert!(error.to_string().contains("temporarily disabled"));
     }
 }

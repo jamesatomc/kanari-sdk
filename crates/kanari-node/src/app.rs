@@ -162,11 +162,11 @@ fn genesis_root_info(engine: &BlockchainEngine) -> (String, usize) {
 }
 
 fn queue_network_message(
-    network_tx: &tokio::sync::mpsc::UnboundedSender<P2PMessage>,
+    network_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
     msg: P2PMessage,
     failure_context: &str,
 ) -> bool {
-    match network_tx.send(msg) {
+    match network_tx.try_send(msg) {
         Ok(_) => true,
         Err(e) => {
             tracing::warn!("{}: {}", failure_context, e);
@@ -176,7 +176,7 @@ fn queue_network_message(
 }
 
 fn serialize_and_queue_message<T: Serialize>(
-    network_tx: &tokio::sync::mpsc::UnboundedSender<P2PMessage>,
+    network_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
     value: &T,
     wrap: impl FnOnce(String) -> P2PMessage,
     serialize_context: &str,
@@ -256,8 +256,10 @@ pub async fn run_node(
         "System addresses"
     );
 
-    let (p2p_msg_tx, mut p2p_msg_rx) = tokio::sync::mpsc::unbounded_channel::<P2PMessage>();
-    let (network_tx, network_rx) = tokio::sync::mpsc::unbounded_channel::<P2PMessage>();
+    const P2P_CHANNEL_CAPACITY: usize = 1024;
+    let (p2p_msg_tx, mut p2p_msg_rx) =
+        tokio::sync::mpsc::channel::<P2PMessage>(P2P_CHANNEL_CAPACITY);
+    let (network_tx, network_rx) = tokio::sync::mpsc::channel::<P2PMessage>(P2P_CHANNEL_CAPACITY);
 
     let keypair = Keypair::generate_ed25519();
     let peer_id = keypair.public().to_peer_id().to_string();
@@ -328,26 +330,7 @@ pub async fn run_node(
         let sync_for_messages = sync_manager.clone();
         tokio::spawn(async move {
             while let Some(msg) = p2p_msg_rx.recv().await {
-                let sync = sync_for_messages.clone();
-                match tokio::spawn(async move {
-                    sync.handle_message(msg).await;
-                })
-                .await
-                {
-                    Ok(()) => {}
-                    Err(e) if e.is_panic() => {
-                        tracing::error!(
-                            "[P2P] Sync message handler panicked; continuing to process incoming messages: {}",
-                            e
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "[P2P] Sync message handler task failed; continuing to process incoming messages: {}",
-                            e
-                        );
-                    }
-                }
+                sync_for_messages.handle_message(msg).await;
             }
             tracing::warn!(
                 "[P2P] Incoming P2P message receiver closed; network gossip will no longer reach sync manager"
@@ -385,7 +368,7 @@ pub async fn run_node(
             move |signed_tx| {
                 let payload = serde_json::to_string(&signed_tx)?;
                 network_tx_for_rpc
-                    .send(P2PMessage::NewTransaction(payload))
+                    .try_send(P2PMessage::NewTransaction(payload))
                     .map_err(|e| anyhow::anyhow!("failed to queue transaction broadcast: {}", e))?;
                 Ok(())
             },

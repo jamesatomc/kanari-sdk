@@ -1,0 +1,29 @@
+name: Safe view diagnostics
+
+on:
+  push:
+    branches: [remediation/all-20260620]
+    paths:
+      - move-execution/v1/kanari-move-runtime-v1/src/move_runtime/helpers.rs
+      - move-execution/v1/kanari-move-runtime-v1/src/move_runtime/object_ops.rs
+      - .github/workflows/safe-view-diagnostics.yml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Move runtime and show concise errors
+        shell: bash
+        run: |
+          set +e
+          cargo check -p kanari-move-runtime-v1 --all-targets > check.log 2>&1
+          status=$?
+          tail -n 200 check.log
+          exit $status

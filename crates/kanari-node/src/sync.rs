@@ -35,7 +35,7 @@ struct DivergentPeerInfo {
 
 pub struct SyncManager {
     engine: Arc<BlockchainEngine>,
-    network_tx: mpsc::UnboundedSender<P2PMessage>,
+    network_tx: mpsc::Sender<P2PMessage>,
     local_peer_id: String,
     /// Optional indexer for blockchain data indexing
     indexer: Option<Arc<Mutex<kanari_indexer::Indexer>>>,
@@ -115,7 +115,7 @@ impl SyncManager {
 
     pub fn new(
         engine: Arc<BlockchainEngine>,
-        network_tx: mpsc::UnboundedSender<P2PMessage>,
+        network_tx: mpsc::Sender<P2PMessage>,
         local_peer_id: String,
         indexer: Option<Arc<Mutex<kanari_indexer::Indexer>>>,
     ) -> Self {
@@ -277,7 +277,7 @@ impl SyncManager {
     }
 
     fn send_network_message(&self, msg: P2PMessage, context: &str) -> bool {
-        match self.network_tx.send(msg) {
+        match self.network_tx.try_send(msg) {
             Ok(_) => true,
             Err(e) => {
                 error!("{}: {}", context, e);
@@ -1218,7 +1218,7 @@ mod tests {
 
     fn new_sync_manager() -> SyncManager {
         let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
-        let (network_tx, _network_rx) = mpsc::unbounded_channel();
+        let (network_tx, _network_rx) = mpsc::channel(8);
         SyncManager::new(engine, network_tx, "local-peer".to_string(), None)
     }
 
@@ -1342,7 +1342,7 @@ mod tests {
         let checkpoint_two = source_engine.get_checkpoint_sync(2).unwrap();
 
         let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
-        let (network_tx, _network_rx) = mpsc::unbounded_channel();
+        let (network_tx, _network_rx) = mpsc::channel(8);
         let sync = SyncManager::new(engine.clone(), network_tx, "local-peer".to_string(), None);
 
         assert!(
@@ -1404,4 +1404,3 @@ mod tests {
         assert_eq!(pending_heights, BTreeSet::from([1, 2, 3]));
     }
 }
-

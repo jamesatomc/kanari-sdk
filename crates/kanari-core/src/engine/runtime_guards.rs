@@ -99,4 +99,41 @@ impl BlockchainEngine {
 
         Ok(())
     }
+
+    /// Execute a public, bounded and read-only Move function.
+    pub fn execute_runtime_view(
+        &self,
+        package_addr: &str,
+        module_name: &str,
+        function_name: &str,
+        type_args: &[String],
+        args: &[Vec<u8>],
+    ) -> Result<serde_json::Value> {
+        let runtime = self
+            .runtime_pool
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No Move runtime is available"))?;
+        runtime.execute_safe_view_function(
+            package_addr,
+            module_name,
+            function_name,
+            type_args,
+            args,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_view_rejects_oversized_input_before_loading_module() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let oversized = vec![vec![0u8; 64 * 1024 + 1]];
+        let error = engine
+            .execute_runtime_view("0x2", "coin", "value", &[], &oversized)
+            .unwrap_err();
+        assert!(error.to_string().contains("input"));
+    }
 }

@@ -744,6 +744,9 @@ impl StateManager {
             || key.starts_with(b"account:")
             || key.starts_with(b"owned_objects:")
             || key.starts_with(b"df:")
+            || key == b"module_index"
+            || key.starts_with(b"module:")
+            || key.starts_with(b"resource:")
             || key.starts_with(b"system:")
             || key.starts_with(b"supply:")
             || key.starts_with(b"treasury:")
@@ -1148,7 +1151,7 @@ impl StateManager {
         changeset: &ChangeSet,
         validate_supply: bool,
     ) -> Result<()> {
-        let mut supply_delta: i64 = 0;
+        let mut supply_delta: i128 = 0;
         let mut supplies_dirty = false;
         let mut account_index_additions = Vec::with_capacity(changeset.account_changes.len());
         let reconcile_object_locked = Self::needs_object_locked_reconciliation(changeset);
@@ -1176,24 +1179,47 @@ impl StateManager {
             let native_token = KANARI_TOKEN_TYPE.to_string();
 
             if change.balance_delta > 0 {
-                let amount = change.balance_delta as u64;
-                let next = account.native_balance().saturating_add(amount);
+                let amount = u64::try_from(change.balance_delta)
+                    .map_err(|_| anyhow::anyhow!("Native balance credit exceeds u64"))?;
+                let next = account
+                    .native_balance()
+                    .checked_add(amount)
+                    .ok_or_else(|| anyhow::anyhow!("Native balance overflow for {}", address))?;
                 account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
-                supply_delta += change.balance_delta;
+                supply_delta = supply_delta
+                    .checked_add(change.balance_delta)
+                    .ok_or_else(|| anyhow::anyhow!("Supply delta overflow"))?;
             } else if change.balance_delta < 0 {
-                let debit = (-change.balance_delta) as u64;
+                let debit = u64::try_from(
+                    change
+                        .balance_delta
+                        .checked_neg()
+                        .ok_or_else(|| anyhow::anyhow!("Native balance debit overflow"))?,
+                )
+                .map_err(|_| anyhow::anyhow!("Native balance debit exceeds u64"))?;
                 let current = account.native_balance();
-                if current >= debit {
-                    let next = current - debit;
-                    if next == 0 {
-                        account.token_balances.remove(KANARI_TOKEN_TYPE);
-                    } else {
-                        account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
-                    }
-                    supply_delta += change.balance_delta;
+                if current < debit {
+                    anyhow::bail!(
+                        "Insufficient native balance for {}: current={}, debit={}",
+                        address,
+                        current,
+                        debit
+                    );
                 }
+                let next = current - debit;
+                if next == 0 {
+                    account.token_balances.remove(KANARI_TOKEN_TYPE);
+                } else {
+                    account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
+                }
+                supply_delta = supply_delta
+                    .checked_add(change.balance_delta)
+                    .ok_or_else(|| anyhow::anyhow!("Supply delta overflow"))?;
             }
-            account.sequence_number += change.sequence_increment;
+            account.sequence_number = account
+                .sequence_number
+                .checked_add(change.sequence_increment)
+                .ok_or_else(|| anyhow::anyhow!("Sequence number overflow for {}", address))?;
             for module_name in &change.modules_added {
                 account.add_module(module_name.clone());
             }
@@ -1210,15 +1236,23 @@ impl StateManager {
         // Update total supply if there was mint/burn (supply_delta != 0)
         if supply_delta != 0 {
             if supply_delta > 0 {
+                let mint_amount = u64::try_from(supply_delta)
+                    .map_err(|_| anyhow::anyhow!("Supply increase exceeds u64"))?;
                 self.total_supply = self
                     .total_supply
-                    .checked_add(supply_delta as u64)
-                    .unwrap_or(self.total_supply);
+                    .checked_add(mint_amount)
+                    .ok_or_else(|| anyhow::anyhow!("Total supply overflow"))?;
             } else {
-                let burn_amount = (-supply_delta) as u64;
-                if self.total_supply >= burn_amount {
-                    self.total_supply -= burn_amount;
-                }
+                let burn_amount = u64::try_from(
+                    supply_delta
+                        .checked_neg()
+                        .ok_or_else(|| anyhow::anyhow!("Supply decrease overflow"))?,
+                )
+                .map_err(|_| anyhow::anyhow!("Supply decrease exceeds u64"))?;
+                self.total_supply = self
+                    .total_supply
+                    .checked_sub(burn_amount)
+                    .ok_or_else(|| anyhow::anyhow!("Total supply underflow"))?;
             }
             let supply = self.total_supply;
             self.save_internal(b"total_supply", &supply)?;
@@ -1257,7 +1291,13 @@ impl StateManager {
 
             let old_balances = account.token_balances.clone();
             let current = account.get_token_balance(&normalized_token_type);
-            let next = current.saturating_add(amount.value());
+            let next = current.checked_add(amount.value()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Token balance overflow for owner {} and token {}",
+                    owner,
+                    normalized_token_type
+                )
+            })?;
             account.set_token_balance(normalized_token_type, BalanceRecord::new(next));
             self.save_account(&account)?;
 
