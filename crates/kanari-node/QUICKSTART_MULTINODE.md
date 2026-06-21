@@ -1,123 +1,118 @@
-# Quick Start Guide - Multi-Node Setup
+# Quick Start — Certificate-Aware Multi-Node Cluster
 
-## Build
+## 1. Build
 
-```powershell
-cd C:\Users\Pukpuy\Desktop\kanari-sdk
-cargo build -p kanari-node
-```
-
-## Start A Local 3-Node Cluster
-
-`kanari-node` requires explicit DAG consensus keys. The setup script generates them and passes them to each node.
+From the repository root:
 
 ```powershell
-cd C:\Users\Pukpuy\Desktop\kanari-sdk\crates\kanari-node
-.\setup-multi-node.ps1 -NodeCount 3 -Network devnet -ResetSourceData -ResetReplicaData -ResetConsensusKeys
+cargo build -p kanari-node --release
+cd crates\kanari-node
 ```
 
-Generated keys are stored in:
+## 2. Create A Fresh Committee
+
+Use new directories; the setup script will not erase existing databases or keys.
+
+```powershell
+$dataRoot = "$env:USERPROFILE\.kanari\clusters\devnet-v2"
+$keyRoot = "$env:USERPROFILE\.kanari\consensus-keys\devnet-v2"
+
+.\setup-multi-node.ps1 `
+  -NodeCount 4 `
+  -Network devnet `
+  -DataRoot $dataRoot `
+  -ConsensusKeyDir $keyRoot
+```
+
+Generated files include:
 
 ```text
-%USERPROFILE%\.kanari\consensus-keys
+$dataRoot\validator-committee.local.json
+$keyRoot\consensus-public-keys.json
+$keyRoot\node1-consensus-private-key.hex
+$keyRoot\node2-consensus-private-key.hex
+...
 ```
 
-Files:
+The manifest records:
 
-- `consensus-public-keys.json`
-- `node1-consensus-private-key.hex`
-- `node2-consensus-private-key.hex`
-- `node3-consensus-private-key.hex`
+- `chain_id = kanari-v2-mysticeti`
+- `protocol_version = 1`
+- epoch and authority set
+- quorum `(2N/3)+1`
+- P2P/RPC ports and bootstrap addresses
+- per-validator data and private-key file paths
 
-## Start One Node Manually With Script
+## 3. Start The Committee
 
 ```powershell
-cd C:\Users\Pukpuy\Desktop\kanari-sdk\crates\kanari-node
-.\start-node.ps1 -NodeId 1 -Network devnet -Authorities "0x1,0x2,0x3"
+.\setup-multi-node.ps1 `
+  -NodeCount 4 `
+  -Network devnet `
+  -DataRoot $dataRoot `
+  -ConsensusKeyDir $keyRoot `
+  -StartNodes
 ```
 
-Node 2 and 3 can bootstrap from node 1:
+Or start one validator manually through the manifest:
 
 ```powershell
-.\start-node.ps1 -NodeId 2 -Network devnet -Authorities "0x1,0x2,0x3" -Bootstrap "/ip4/<node1-ip>/tcp/19000"
-.\start-node.ps1 -NodeId 3 -Network devnet -Authorities "0x1,0x2,0x3" -Bootstrap "/ip4/<node1-ip>/tcp/19000"
+.\start-node.ps1 `
+  -CommitteeConfig "$dataRoot\validator-committee.local.json" `
+  -AuthorityId 0x1
 ```
 
-## Manual Run Without Scripts
+The node receives `--consensus-private-key-file`; secret key material is not placed in the process command line.
 
-Generate consensus keys:
+## 4. Check The Cluster
 
 ```powershell
-cargo run --bin kanari-node -- consensus-keygen --node-count 3 --output-dir .\consensus-keys --force
+.\monitor-cluster-health.ps1 `
+  -CommitteeConfig "$dataRoot\validator-committee.local.json"
 ```
 
-Start node 1:
+This calls the real JSON-RPC methods `kanari_health`, `kanari_getStats`, and `kanari_getNetworkStatus` and compares height, supply and state root.
+
+Manual JSON-RPC example:
 
 ```powershell
-$node1Key = (Get-Content .\consensus-keys\node1-consensus-private-key.hex -Raw).Trim()
-cargo run --bin kanari-node -- start `
-  --network devnet `
-  --p2p-port 19000 `
-  --rpc-port 19001 `
-  --data-dir data\node1 `
-  --authority-id 0x1 `
-  --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node1Key `
-  --consensus-public-keys .\consensus-keys\consensus-public-keys.json
+$body = @{
+  jsonrpc = '2.0'
+  method = 'kanari_getStats'
+  params = @{}
+  id = 1
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri 'http://127.0.0.1:19001' `
+  -Method Post `
+  -ContentType 'application/json' `
+  -Body $body
 ```
 
-Start node 2:
+## 5. Test P2P Convergence
 
 ```powershell
-$node2Key = (Get-Content .\consensus-keys\node2-consensus-private-key.hex -Raw).Trim()
-cargo run --bin kanari-node -- start `
-  --network devnet `
-  --p2p-port 19010 `
-  --rpc-port 19011 `
-  --data-dir data\node2 `
-  --authority-id 0x2 `
-  --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node2Key `
-  --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
-  --bootstrap /ip4/<node1-ip>/tcp/19000
+.\test-p2p-broadcast.ps1 `
+  -CommitteeConfig "$dataRoot\validator-committee.local.json"
 ```
 
-Start node 3:
+For a real transaction test, pass your own submission action:
 
 ```powershell
-$node3Key = (Get-Content .\consensus-keys\node3-consensus-private-key.hex -Raw).Trim()
-cargo run --bin kanari-node -- start `
-  --network devnet `
-  --p2p-port 19020 `
-  --rpc-port 19021 `
-  --data-dir data\node3 `
-  --authority-id 0x3 `
-  --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node3Key `
-  --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
-  --bootstrap /ip4/<node1-ip>/tcp/19000
+.\test-p2p-broadcast.ps1 `
+  -CommitteeConfig "$dataRoot\validator-committee.local.json" `
+  -SubmitAction { .\submit-test-transaction.ps1 }
 ```
 
-## Check Status
+The test succeeds only when validators converge on the same checkpoint height, total supply and state root. Synced non-empty checkpoints are accepted only after checkpoint-certificate verification.
 
-```powershell
-kanari-node stats
-kanari-node account 0x1
-kanari-node block 0
-```
+## Important
 
-RPC defaults:
+- RPC binds to `127.0.0.1` by default.
+- Every validator needs a unique private key and data directory.
+- Every validator must use the same ordered authority set and public-key map.
+- An empty data directory initializes genesis on first start.
+- Distributed quorum-signature aggregation must be completed and adversarially tested before public mainnet use.
 
-- Node 1: `http://127.0.0.1:19001`
-- Node 2: `http://127.0.0.1:19011`
-- Node 3: `http://127.0.0.1:19021`
-
-## Notes
-
-- Each node must have a separate `--data-dir`.
-- Each node must have unique P2P/RPC ports.
-- Each node must have its own consensus private key.
-- All nodes must share the same `consensus-public-keys.json`.
-- Do not commit private key files.
-
-See the full guide: [MULTI_NODE_GUIDE.md](MULTI_NODE_GUIDE.md)
+See [MULTI_NODE_GUIDE.md](MULTI_NODE_GUIDE.md) and [MAINNET_OPERATIONS.md](MAINNET_OPERATIONS.md).
