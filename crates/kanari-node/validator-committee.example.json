@@ -1,39 +1,92 @@
 {
+  "schema_version": 2,
   "network": "mainnet",
+  "chain_id": "kanari-v2-mysticeti",
+  "epoch": 0,
+  "protocol_version": 1,
+  "committee": {
+    "authority_ids": [
+      "0x1",
+      "0x2",
+      "0x3",
+      "0x4"
+    ],
+    "quorum_model": "2f+1-authority-count",
+    "minimum_signatures": 3,
+    "consensus_public_keys_file": "C:\\kanari\\mainnet\\consensus-keys\\consensus-public-keys.json"
+  },
+  "checkpoint_certificates": {
+    "domain": "kanari:checkpoint-certificate:v1",
+    "required_for_synced_checkpoints": true,
+    "fields": [
+      "epoch",
+      "chain_id",
+      "protocol_version",
+      "sequence",
+      "checkpoint_hash",
+      "prev_checkpoint_hash",
+      "state_root",
+      "certified_vertex",
+      "committee_digest",
+      "signatures",
+      "total_voting_power"
+    ]
+  },
   "authorities": [
     {
       "authority_id": "0x1",
       "name": "validator-1",
-      "p2p_multiaddr": "/ip4/10.0.0.11/tcp/19000",
-      "rpc_url": "http://10.0.0.11:19001",
-      "data_dir": "C:\\kanari\\mainnet\\validator1"
+      "p2p_host": "10.0.0.11",
+      "p2p_port": 19000,
+      "rpc_bind_host": "127.0.0.1",
+      "rpc_port": 19001,
+      "rpc_url": "http://127.0.0.1:19001",
+      "bootstrap_multiaddr": null,
+      "data_dir": "C:\\kanari\\mainnet\\validator1",
+      "consensus_private_key_file": "C:\\kanari\\mainnet\\consensus-keys\\node1-consensus-private-key.hex"
     },
     {
       "authority_id": "0x2",
       "name": "validator-2",
-      "p2p_multiaddr": "/ip4/10.0.0.12/tcp/19000",
-      "rpc_url": "http://10.0.0.12:19001",
-      "data_dir": "C:\\kanari\\mainnet\\validator2"
+      "p2p_host": "10.0.0.12",
+      "p2p_port": 19000,
+      "rpc_bind_host": "127.0.0.1",
+      "rpc_port": 19001,
+      "rpc_url": "http://127.0.0.1:19001",
+      "bootstrap_multiaddr": "/ip4/10.0.0.11/tcp/19000",
+      "data_dir": "C:\\kanari\\mainnet\\validator2",
+      "consensus_private_key_file": "C:\\kanari\\mainnet\\consensus-keys\\node2-consensus-private-key.hex"
     },
     {
       "authority_id": "0x3",
       "name": "validator-3",
-      "p2p_multiaddr": "/ip4/10.0.0.13/tcp/19000",
-      "rpc_url": "http://10.0.0.13:19001",
-      "data_dir": "C:\\kanari\\mainnet\\validator3"
+      "p2p_host": "10.0.0.13",
+      "p2p_port": 19000,
+      "rpc_bind_host": "127.0.0.1",
+      "rpc_port": 19001,
+      "rpc_url": "http://127.0.0.1:19001",
+      "bootstrap_multiaddr": "/ip4/10.0.0.11/tcp/19000",
+      "data_dir": "C:\\kanari\\mainnet\\validator3",
+      "consensus_private_key_file": "C:\\kanari\\mainnet\\consensus-keys\\node3-consensus-private-key.hex"
     },
     {
       "authority_id": "0x4",
       "name": "validator-4",
-      "p2p_multiaddr": "/ip4/10.0.0.14/tcp/19000",
-      "rpc_url": "http://10.0.0.14:19001",
-      "data_dir": "C:\\kanari\\mainnet\\validator4"
+      "p2p_host": "10.0.0.14",
+      "p2p_port": 19000,
+      "rpc_bind_host": "127.0.0.1",
+      "rpc_port": 19001,
+      "rpc_url": "http://127.0.0.1:19001",
+      "bootstrap_multiaddr": "/ip4/10.0.0.11/tcp/19000",
+      "data_dir": "C:\\kanari\\mainnet\\validator4",
+      "consensus_private_key_file": "C:\\kanari\\mainnet\\consensus-keys\\node4-consensus-private-key.hex"
     }
   ],
   "rollout": {
     "source_validator": "0x1",
     "minimum_cluster_size": 4,
     "require_equal_supply": true,
-    "require_equal_height": true
+    "require_equal_height": true,
+    "require_equal_state_root": true
   }
 }
