@@ -1,204 +1,188 @@
 # Kanari Multi-Node Setup Guide
 
-Guide for running multiple `kanari-node` validators with libp2p networking and explicit consensus signing keys.
+This guide matches the current `kanari-node` CLI, Mysticeti-backed DAG runtime, and checkpoint-certificate format.
+
+## Current Model
+
+A validator starts with three coordinated inputs:
+
+1. an authority ID and the ordered committee authority list;
+2. one local Ed25519 private-key **file** plus the shared public-key map;
+3. an operator committee manifest describing network, chain, epoch, protocol version, ports and data directories.
+
+`validator-committee.example.json` is an operator manifest consumed by the PowerShell scripts. The Rust binary does not accept that JSON directly; `start-node.ps1` translates it into the supported CLI flags.
+
+The active DAG chain ID is `kanari-v2-mysticeti`. Checkpoint certificates use protocol version `1` and signing domain `kanari:checkpoint-certificate:v1`.
 
 ## Build
-
-```powershell
-cargo build -p kanari-node
-```
-
-For release binaries:
 
 ```powershell
 cargo build -p kanari-node --release
 ```
 
-## Consensus Keys
+## Generate A Fresh Local Committee
 
-DAG consensus no longer falls back to deterministic demo keys. Every validator must start with:
-
-- one unique private consensus signing key
-- one shared `consensus-public-keys.json` file containing the public keys for the whole authority set
-
-Generate local keys for a 3-node test cluster:
+Choose new directories. The setup script refuses to overwrite node data or an incomplete key directory.
 
 ```powershell
-cargo run --bin kanari-node -- consensus-keygen --node-count 3 --output-dir .\consensus-keys --force
+cd crates\kanari-node
+
+.\setup-multi-node.ps1 `
+  -NodeCount 4 `
+  -Network devnet `
+  -DataRoot "$env:USERPROFILE\.kanari\clusters\devnet-v2" `
+  -ConsensusKeyDir "$env:USERPROFILE\.kanari\consensus-keys\devnet-v2"
 ```
 
 This creates:
 
 ```text
-consensus-keys/
+<ConsensusKeyDir>/
   consensus-public-keys.json
   node1-consensus-private-key.hex
   node2-consensus-private-key.hex
-  node3-consensus-private-key.hex
+  ...
+
+<DataRoot>/
+  validator-committee.local.json
 ```
 
-Keep private key files out of git and do not reuse one private key across validators.
+Private-key files contain a 32-byte Ed25519 seed encoded as 64 hexadecimal characters. On Unix, `kanari-node` rejects symlinks, non-regular files, and files with group/world permissions.
 
-## Fast Local Setup
-
-The PowerShell setup script generates consensus keys automatically when they are missing.
+Start the generated committee:
 
 ```powershell
-.\setup-multi-node.ps1 -NodeCount 4 -Network devnet -ResetSourceData -ResetReplicaData -ResetConsensusKeys
+.\setup-multi-node.ps1 `
+  -NodeCount 4 `
+  -Network devnet `
+  -DataRoot "$env:USERPROFILE\.kanari\clusters\devnet-v2" `
+  -ConsensusKeyDir "$env:USERPROFILE\.kanari\consensus-keys\devnet-v2" `
+  -StartNodes
 ```
 
-By default it stores keys under:
-
-```text
-%USERPROFILE%\.kanari\consensus-keys
-```
-
-Start nodes in separate terminals:
+## Start One Validator
 
 ```powershell
-.\start-node.ps1 -NodeId 1 -Network devnet -Authorities "0x1,0x2,0x3"
+.\start-node.ps1 `
+  -CommitteeConfig "$env:USERPROFILE\.kanari\clusters\devnet-v2\validator-committee.local.json" `
+  -AuthorityId 0x2
 ```
 
-```powershell
-.\start-node.ps1 -NodeId 2 -Network devnet -Authorities "0x1,0x2,0x3" -Bootstrap "/ip4/<node1-ip>/tcp/19000"
-```
+The script validates that:
+
+- the manifest is schema version 2 or newer;
+- authority IDs are unique and match the authority entries;
+- `chain_id` is `kanari-v2-mysticeti`;
+- `protocol_version` is `1`;
+- the private-key file contains exactly 64 hex characters;
+- the public-key map contains exactly the configured authority set;
+- the binary receives `--consensus-private-key-file`, never secret key material on the command line.
+
+Equivalent manual command:
 
 ```powershell
-.\start-node.ps1 -NodeId 3 -Network devnet -Authorities "0x1,0x2,0x3" -Bootstrap "/ip4/<node1-ip>/tcp/19000"
-```
-
-`start-node.ps1` reads the matching `node<N>-consensus-private-key.hex` file and the shared `consensus-public-keys.json` from the consensus key directory.
-
-## Manual Start
-
-Manual start commands must pass the consensus private key and public-key map explicitly.
-
-### Node 1
-
-```powershell
-$node1Key = (Get-Content .\consensus-keys\node1-consensus-private-key.hex -Raw).Trim()
-
-cargo run --bin kanari-node -- start `
+cargo run -p kanari-node -- start `
   --network devnet `
-  --p2p-port 19000 `
-  --rpc-port 19001 `
-  --data-dir data/node1 `
-  --authority-id 0x1 `
-  --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node1Key `
-  --consensus-public-keys .\consensus-keys\consensus-public-keys.json
-```
-
-### Node 2
-
-```powershell
-$node2Key = (Get-Content .\consensus-keys\node2-consensus-private-key.hex -Raw).Trim()
-
-cargo run --bin kanari-node -- start `
-  --network devnet `
-  --p2p-port 19010 `
-  --rpc-port 19011 `
-  --data-dir data/node2 `
   --authority-id 0x2 `
-  --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node2Key `
-  --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
-  --bootstrap "/ip4/<node1-ip>/tcp/19000"
+  --authorities 0x1,0x2,0x3,0x4 `
+  --data-dir "$env:USERPROFILE\.kanari\clusters\devnet-v2\node2" `
+  --p2p-port 19010 `
+  --rpc-host 127.0.0.1 `
+  --rpc-port 19011 `
+  --consensus-private-key-file "$env:USERPROFILE\.kanari\consensus-keys\devnet-v2\node2-consensus-private-key.hex" `
+  --consensus-public-keys "$env:USERPROFILE\.kanari\consensus-keys\devnet-v2\consensus-public-keys.json" `
+  --bootstrap /ip4/127.0.0.1/tcp/19000
 ```
 
-### Node 3
+## Checkpoint Certificates
+
+Each non-empty synced checkpoint must carry a certificate. The engine verifies:
+
+- chain ID, epoch and protocol version;
+- checkpoint sequence, hash, previous hash and state root;
+- certified DAG vertex and committee digest;
+- unique committee signers;
+- Ed25519 signatures over canonical certificate signing bytes;
+- voting power of `1` per configured authority;
+- quorum `(2 * committee_size) / 3 + 1`.
+
+Certificates are created, verified and persisted internally. Operators do not pass certificates through the CLI.
+
+### Readiness limitation
+
+The certificate structures and sync verification are present, but distributed quorum-signature aggregation must be completed and adversarially tested before a public multi-validator mainnet. The node intentionally refuses uncertified synced checkpoints rather than silently accepting them.
+
+## RPC And Monitoring
+
+RPC defaults to `127.0.0.1`. Bind `0.0.0.0` only behind firewall and authenticated gateway controls.
 
 ```powershell
-$node3Key = (Get-Content .\consensus-keys\node3-consensus-private-key.hex -Raw).Trim()
-
-cargo run --bin kanari-node -- start `
-  --network devnet `
-  --p2p-port 19020 `
-  --rpc-port 19021 `
-  --data-dir data/node3 `
-  --authority-id 0x3 `
-  --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node3Key `
-  --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
-  --bootstrap "/ip4/<node1-ip>/tcp/19000"
+.\monitor-cluster-health.ps1 `
+  -CommitteeConfig "$env:USERPROFILE\.kanari\clusters\devnet-v2\validator-committee.local.json"
 ```
 
-## Important Start Options
+The monitor uses actual JSON-RPC methods:
 
-- `--network <NETWORK>`: selects `devnet`, `testnet`, or `mainnet`
-- `--authority-id <ID>`: validator authority ID, for example `0x1`
-- `--authorities <IDS>`: comma-separated committee, for example `0x1,0x2,0x3`
-- `--consensus-private-key-hex <HEX>`: 32-byte Ed25519 seed hex for this validator
-- `--consensus-public-keys <PATH>`: JSON map of authority ID to public key hex
-- `--p2p-port <PORT>`: P2P networking port
-- `--rpc-port <PORT>`: RPC server port
-- `--rpc-host <HOST>`: RPC bind address
-- `--data-dir <PATH>`: blockchain and state data directory
-- `--bootstrap <MULTIADDR>`: bootstrap peer, can be specified multiple times
-- `--relay-server`: enable circuit relay server mode
+- `kanari_health`
+- `kanari_getStats`
+- `kanari_getNetworkStatus`
 
-## Relay Server Mode
+It checks network, authority identity, health, supply invariants, height, total supply and state root. Certificate status is not currently exposed as a JSON-RPC field; certificate verification happens during checkpoint sync.
 
-Relay mode also needs consensus keys when the node participates as a validator.
+## P2P Convergence Test
+
+Without a transaction submission action, the script checks current convergence:
 
 ```powershell
-$node1Key = (Get-Content .\consensus-keys\node1-consensus-private-key.hex -Raw).Trim()
-
-kanari-node start `
-  --network devnet `
-  --p2p-port 19000 `
-  --rpc-port 19001 `
-  --authority-id 0x1 `
-  --authorities 0x1,0x2,0x3 `
-  --consensus-private-key-hex $node1Key `
-  --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
-  --relay-server
+.\test-p2p-broadcast.ps1 `
+  -CommitteeConfig "$env:USERPROFILE\.kanari\clusters\devnet-v2\validator-committee.local.json"
 ```
 
-## Data Directories
-
-Each node must have a separate data directory.
-
-Windows:
+To test a real submitted transaction, provide a script block that invokes your wallet or JSON-RPC submission code:
 
 ```powershell
---data-dir C:\Users\<Username>\.kanari\kanari-db\node1
---data-dir C:\Users\<Username>\.kanari\kanari-db\node2
---data-dir C:\Users\<Username>\.kanari\kanari-db\node3
+.\test-p2p-broadcast.ps1 `
+  -CommitteeConfig "$env:USERPROFILE\.kanari\clusters\devnet-v2\validator-committee.local.json" `
+  -SubmitAction { .\submit-test-transaction.ps1 }
 ```
 
-Linux/macOS:
+Success means the source checkpoint advances and every validator converges on equal height, supply and state root.
 
-```bash
---data-dir ~/.kanari/kanari-db/node1
---data-dir ~/.kanari/kanari-db/node2
---data-dir ~/.kanari/kanari-db/node3
+## Data And Recovery
+
+Every validator requires a unique data directory. An empty directory creates local genesis on first start. Never copy a live RocksDB/SQLite directory as a valid backup.
+
+```powershell
+.\backup-node-data.ps1 `
+  -SourceDataDir "$env:USERPROFILE\.kanari\clusters\devnet-v2\node1" `
+  -BackupRoot "$env:USERPROFILE\.kanari\backups" `
+  -Label node1-preupgrade
 ```
 
-## RPC Endpoints
+Restore into a fresh directory:
 
-Local endpoints:
+```powershell
+.\restore-node-data.ps1 `
+  -BackupDir "$env:USERPROFILE\.kanari\backups\node1-preupgrade-YYYYMMDD-HHMMSS" `
+  -TargetDataDir "$env:USERPROFILE\.kanari\restore-test\node1"
+```
 
-- Node 1: `http://127.0.0.1:19001`
-- Node 2: `http://127.0.0.1:19011`
-- Node 3: `http://127.0.0.1:19021`
-
-To expose RPC to the LAN, bind with `--rpc-host 0.0.0.0` or a specific machine IP. Only do this on a trusted network or behind firewall rules.
+The backup/restore scripts verify SHA-256 hashes. The data directory contains state, checkpoint metadata/journal/certificates, object storage, peer data and indexer data when present.
 
 ## Troubleshooting
 
-### Node Fails With Missing Consensus Key
+### Missing key file
 
-Run `consensus-keygen`, then pass `--consensus-private-key-hex` and `--consensus-public-keys`, or use `start-node.ps1` with the correct `-ConsensusKeyDir`.
+Run `consensus-keygen` into a new empty directory or correct `consensus_private_key_file` in the manifest. Do not paste a private key into the command line.
 
-### Node Fails With Consensus Public Key Mismatch
+### Public-key mismatch
 
-The private key for this node does not match the public key listed for its `--authority-id`. Regenerate the key set or use the correct private key file for that node.
+The local private key must derive the public key assigned to the same authority ID in `consensus-public-keys.json`.
 
-### Nodes Cannot Find Each Other
+### Certificate rejection
 
-Check unique P2P ports, firewall rules, and `--bootstrap` multiaddrs. On the same LAN, mDNS can discover peers automatically.
+Check that every validator uses the same authority list and public-key map. A different map produces a different committee digest. Also verify chain ID, epoch, protocol version, checkpoint sequence and previous hash.
 
-### Block Sync Not Working
+### Nodes do not converge
 
-Check logs, verify every node uses the same `--authorities` list and `consensus-public-keys.json`, then restart one follower after the source node is healthy.
+Check unique ports, reachable bootstrap multiaddrs, firewall rules, authority IDs and logs for certificate, state-root or transaction-signature failures.
