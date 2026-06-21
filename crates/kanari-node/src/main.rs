@@ -25,6 +25,8 @@ mod peer_store;
 mod sync;
 use app::{configure_consensus_signing_key, create_engine, default_data_dir, run_node};
 
+const UNSAFE_LOCAL_KEYS_MARKER: &str = ".unsafe-local-deterministic";
+
 #[derive(Clone, Debug, ValueEnum)]
 pub(crate) enum NetworkMode {
     Mainnet,
@@ -122,6 +124,10 @@ enum Commands {
         /// Overwrite existing key files
         #[arg(long, default_value = "false")]
         force: bool,
+        /// Generate predictable local-only committee keys so one process can
+        /// reconstruct the test committee certificate. Never use on mainnet.
+        #[arg(long, default_value = "false")]
+        unsafe_local_deterministic: bool,
     },
 }
 
@@ -147,6 +153,25 @@ fn validate_start_authority_config(
             "kanari-node start requires both --authority-id and --authorities together"
         ),
     }
+}
+
+fn validate_consensus_key_mode(
+    network: &NetworkMode,
+    consensus_public_keys: &Path,
+) -> Result<()> {
+    let marker = consensus_public_keys
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(UNSAFE_LOCAL_KEYS_MARKER);
+
+    if matches!(network, NetworkMode::Mainnet) && marker.exists() {
+        anyhow::bail!(
+            "Refusing to start mainnet with unsafe deterministic local committee keys from {}",
+            marker.display()
+        );
+    }
+
+    Ok(())
 }
 
 fn validate_consensus_private_key_file(path: &Path) -> Result<()> {
@@ -234,9 +259,35 @@ fn write_private_key_file(path: &Path, seed: &[u8], force: bool) -> Result<()> {
     Ok(())
 }
 
-fn write_consensus_key_files(node_count: usize, output_dir: &Path, force: bool) -> Result<()> {
+fn deterministic_local_key(node_id: usize) -> Result<(Zeroizing<String>, String)> {
+    let seed_byte = node_id
+        .checked_add(10)
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unsafe deterministic local key generation supports at most 245 authorities"
+            )
+        })?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[seed_byte; 32]);
+    Ok((
+        Zeroizing::new(hex::encode(signing_key.to_bytes())),
+        hex::encode(signing_key.verifying_key().to_bytes()),
+    ))
+}
+
+fn write_consensus_key_files(
+    node_count: usize,
+    output_dir: &Path,
+    force: bool,
+    unsafe_local_deterministic: bool,
+) -> Result<()> {
     if node_count == 0 {
         anyhow::bail!("--node-count must be at least 1");
+    }
+    if unsafe_local_deterministic && node_count > 245 {
+        anyhow::bail!(
+            "--unsafe-local-deterministic supports at most 245 authorities"
+        );
     }
 
     #[cfg(unix)]
@@ -259,27 +310,45 @@ fn write_consensus_key_files(node_count: usize, output_dir: &Path, force: bool) 
 
     let mut public_keys = BTreeMap::new();
     for node_id in 1..=node_count {
-        let keypair = generate_keypair(CurveType::Ed25519)
-            .map_err(|e| anyhow::anyhow!("Failed to generate consensus key: {}", e))?;
-        let private_seed = Zeroizing::new(
-            keypair
-                .private_key
-                .strip_prefix(KANARI_KEY_PREFIX)
-                .ok_or_else(|| anyhow::anyhow!("Generated private key has unexpected format"))?
-                .to_string(),
-        );
+        let (private_seed, public_key) = if unsafe_local_deterministic {
+            deterministic_local_key(node_id)?
+        } else {
+            let keypair = generate_keypair(CurveType::Ed25519)
+                .map_err(|e| anyhow::anyhow!("Failed to generate consensus key: {}", e))?;
+            let private_seed = Zeroizing::new(
+                keypair
+                    .private_key
+                    .strip_prefix(KANARI_KEY_PREFIX)
+                    .ok_or_else(|| anyhow::anyhow!("Generated private key has unexpected format"))?
+                    .to_string(),
+            );
+            (private_seed, keypair.public_key)
+        };
         let authority = format!("0x{}", node_id);
         let private_key_path =
             output_dir.join(format!("node{}-consensus-private-key.hex", node_id));
 
         write_private_key_file(&private_key_path, private_seed.as_bytes(), force)?;
-        public_keys.insert(authority, keypair.public_key);
+        public_keys.insert(authority, public_key);
     }
 
     std::fs::write(
         public_keys_path,
         serde_json::to_string_pretty(&public_keys)?,
     )?;
+
+    let marker_path = output_dir.join(UNSAFE_LOCAL_KEYS_MARKER);
+    if unsafe_local_deterministic {
+        std::fs::write(
+            &marker_path,
+            "UNSAFE LOCAL TEST KEYS. DO NOT USE ON MAINNET.\n",
+        )?;
+        tracing::warn!(
+            "Generated deterministic local-only committee keys. These keys are public and unsafe outside an isolated test cluster."
+        );
+    } else if marker_path.exists() {
+        std::fs::remove_file(&marker_path)?;
+    }
 
     tracing::info!(
         "Generated {} consensus key(s) in {}",
@@ -305,7 +374,13 @@ fn main() -> Result<()> {
             node_count,
             output_dir,
             force,
-        } => write_consensus_key_files(node_count, &output_dir, force),
+            unsafe_local_deterministic,
+        } => write_consensus_key_files(
+            node_count,
+            &output_dir,
+            force,
+            unsafe_local_deterministic,
+        ),
         Commands::Start {
             network,
             p2p_port,
@@ -320,6 +395,7 @@ fn main() -> Result<()> {
             bootstrap,
         } => {
             validate_start_authority_config(&authority_id, &authorities)?;
+            validate_consensus_key_mode(&network, &consensus_public_keys)?;
             let consensus_private_key = read_consensus_private_key(&consensus_private_key_file)?;
             let data_dir_path = data_dir.clone().unwrap_or_else(default_data_dir);
             let node_label = authority_id
@@ -422,10 +498,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn deterministic_local_keys_match_core_test_committee_scheme() {
+        for node_id in 1..=4 {
+            let (seed_hex, public_key_hex) = super::deterministic_local_key(node_id).unwrap();
+            let expected = ed25519_dalek::SigningKey::from_bytes(&[(node_id as u8) + 10; 32]);
+            assert_eq!(seed_hex.as_str(), hex::encode(expected.to_bytes()));
+            assert_eq!(
+                public_key_hex,
+                hex::encode(expected.verifying_key().to_bytes())
+            );
+        }
+    }
+
+    #[test]
+    fn mainnet_rejects_marked_unsafe_local_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let public_keys = dir.path().join("consensus-public-keys.json");
+        std::fs::write(&public_keys, "{}").unwrap();
+        std::fs::write(
+            dir.path().join(super::UNSAFE_LOCAL_KEYS_MARKER),
+            "unsafe",
+        )
+        .unwrap();
+
+        let error = super::validate_consensus_key_mode(&super::NetworkMode::Mainnet, &public_keys)
+            .unwrap_err();
+        assert!(error.to_string().contains("Refusing to start mainnet"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn consensus_key_file_rejects_group_or_world_permissions() {
-        use super::validate_start_authority_config;
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
@@ -440,7 +544,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn consensus_key_file_accepts_owner_only_permissions() {
-        use super::validate_start_authority_config;
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
