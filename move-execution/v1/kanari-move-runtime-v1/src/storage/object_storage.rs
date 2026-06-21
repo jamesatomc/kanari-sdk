@@ -116,7 +116,7 @@ pub struct ObjectStorage {
 impl ObjectStorage {
     const OBJECT_INDEX_KEY: &'static str = "object_index";
 
-    // 🚨 Helper to create Key for fetching Owner Index directly from RocksDB database
+    // Helper to create Key for fetching Owner Index directly from RocksDB database
     fn owner_key(owner: &AccountAddress) -> Vec<u8> {
         let mut key = b"owner_index:".to_vec();
         key.extend_from_slice(owner.as_ref());
@@ -238,24 +238,11 @@ impl ObjectStorage {
         })
     }
 
-    /// Create a new ObjectStorage backed by RocksDB persistence (uses `PersistentStore::open_default`).
-    fn new_with_persistence() -> Result<Self> {
-        let store = Arc::new(PersistentStore::open_default()?);
-        Self::new_with_store(store)
-    }
-
     pub(crate) fn boxed_with_store(store: Arc<PersistentStore>) -> Result<Box<dyn ObjectStore>> {
         if cfg!(miri) {
             return Ok(Self::boxed_inmemory());
         }
         Ok(Box::new(Self::new_with_store(store)?))
-    }
-
-    pub(crate) fn boxed_with_persistence() -> Result<Box<dyn ObjectStore>> {
-        if cfg!(miri) {
-            return Ok(Self::boxed_inmemory());
-        }
-        Ok(Box::new(Self::new_with_persistence()?))
     }
 
     fn store_object(&self, obj: StoredObject) -> Result<(), ObjectStorageError> {

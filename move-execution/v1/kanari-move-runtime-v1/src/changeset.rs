@@ -29,7 +29,7 @@ pub struct CreatedObject {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountChange {
     pub address: AccountAddress,
-    pub balance_delta: i64, // Positive = credit, Negative = debit
+    pub balance_delta: i128, // Positive = credit, Negative = debit
     pub sequence_increment: u64,
     pub modules_added: BTreeSet<String>,
 }
@@ -45,11 +45,11 @@ impl AccountChange {
     }
 
     pub fn debit(&mut self, amount: u64) {
-        self.balance_delta -= amount as i64;
+        self.balance_delta -= i128::from(amount);
     }
 
     pub fn credit(&mut self, amount: u64) {
-        self.balance_delta += amount as i64;
+        self.balance_delta += i128::from(amount);
     }
 
     pub fn increment_sequence(&mut self) {
@@ -75,7 +75,7 @@ pub struct ChangeSet {
         String,
         kanari_types::collection::NftCapRecord,
     )>,
-    /// Per-account token balances (absolute set): (owner, token_type, BalanceRecord)
+    /// Per-account token balance additions: (owner, token_type, BalanceRecord)
     pub token_balance_sets: Vec<(AccountAddress, String, BalanceRecord)>,
     /// Objects created during execution. Each entry is (object_id, CreatedObject)
     pub created_objects: Vec<(String, CreatedObject)>,

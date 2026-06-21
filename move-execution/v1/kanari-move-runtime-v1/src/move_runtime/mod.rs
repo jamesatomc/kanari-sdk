@@ -162,16 +162,17 @@ impl MoveRuntime {
             Some(store) if !cfg!(miri) => match ObjectStorage::boxed_with_store(store) {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] shared object store load failed: {}", e);
-                    Arc::from(ObjectStorage::boxed_inmemory())
+                    return Err(anyhow::anyhow!(
+                        "[RUNTIME] shared object store load failed: {}",
+                        e
+                    ));
                 }
             },
             _ if cfg!(miri) => Arc::from(ObjectStorage::boxed_inmemory()),
-            _ => match ObjectStorage::boxed_with_persistence() {
+            _ => match ObjectStorage::boxed_with_store(state.store()) {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] DB load failed. Fallback to in-memory: {}", e);
-                    Arc::from(ObjectStorage::boxed_inmemory())
+                    return Err(anyhow::anyhow!("[RUNTIME] object store load failed: {}", e));
                 }
             },
         };
@@ -260,8 +261,10 @@ impl MoveRuntime {
             match ObjectStorage::boxed_with_store(self.state.store()) {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] isolated object store load failed: {}", e);
-                    Arc::from(ObjectStorage::boxed_inmemory())
+                    return Err(anyhow::anyhow!(
+                        "[RUNTIME] isolated object store load failed: {}",
+                        e
+                    ));
                 }
             };
 
@@ -432,7 +435,7 @@ impl MoveRuntime {
         self.verify_module_publish_safety(sender, &module_id, &compiled, &module_bytes)?;
 
         let (move_changeset, events) = {
-            // 🟢 Separate Lock into a variable first to prevent it from being dropped immediately
+            // Separate lock into a variable first to prevent it from being dropped immediately
             let vm_guard = self.read_vm();
             let mut session = self.create_session_with_storage_ext(&vm_guard);
 
@@ -449,7 +452,7 @@ impl MoveRuntime {
         if persist_runtime_state {
             self.apply_move_changeset(move_changeset.clone())?;
 
-            // 🟢 Perform Hot-Reload to clear Cache immediately after Publish is done!
+            // Perform hot-reload to clear cache immediately after publish is done.
             self.reload_vm_cache()?;
         }
 

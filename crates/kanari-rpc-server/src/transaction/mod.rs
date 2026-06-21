@@ -579,11 +579,24 @@ pub async fn handle_get_all_transactions(
     state: &RpcServerState,
     request: &RpcRequest,
 ) -> RpcResponse {
-    let limit = request
+    const DEFAULT_LIMIT: u64 = 50;
+    const MAX_LIMIT: u64 = 200;
+
+    let requested_limit = request
         .params
         .get("limit")
         .and_then(|v| v.as_u64())
-        .unwrap_or(50) as usize;
+        .unwrap_or(DEFAULT_LIMIT);
+    if requested_limit == 0 || requested_limit > MAX_LIMIT {
+        return invalid_params_response(
+            request.id,
+            format!("limit must be between 1 and {}", MAX_LIMIT),
+        );
+    }
+    let limit = match usize::try_from(requested_limit) {
+        Ok(limit) => limit,
+        Err(_) => return invalid_params_response(request.id, "limit is too large"),
+    };
 
     let account_norm = request
         .params

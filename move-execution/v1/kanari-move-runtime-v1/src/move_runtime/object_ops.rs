@@ -11,6 +11,11 @@ use move_core_types::language_storage::StructTag;
 use std::str::FromStr;
 
 impl super::MoveRuntime {
+    /// Reserved owner marker for immutable objects. Shared objects use address zero.
+    pub(crate) fn immutable_object_owner() -> AccountAddress {
+        AccountAddress::new([u8::MAX; AccountAddress::LENGTH])
+    }
+
     fn canonical_object_id_str(object_id: &str) -> Option<String> {
         let trimmed = object_id.trim();
         let normalized = if trimmed.starts_with("0x") {
@@ -39,7 +44,11 @@ impl super::MoveRuntime {
             // take ownership of fields to avoid unnecessary clones where possible
             let id = obj.object_id;
             let obj_type = obj.object_type;
-            let owner = obj.recipient;
+            let owner = if obj.is_frozen {
+                Self::immutable_object_owner()
+            } else {
+                obj.recipient
+            };
             let data = obj.data;
             let should_persist = obj.should_persist;
 
@@ -191,5 +200,26 @@ mod tests {
         assert_eq!(runtime.object_storage.count(), 1);
         let canonical_id = MoveRuntime::canonical_object_id_str(&object_id).unwrap();
         assert!(runtime.object_storage.get_object(&canonical_id).is_some());
+    }
+
+    #[test]
+    fn frozen_objects_use_distinct_immutable_owner_marker() {
+        let runtime = MoveRuntime::new_with_natives_in_memory(vec![]).unwrap();
+        let object = TransferredObject {
+            object_id: "0xf00d".to_string(),
+            object_type: "0x2::test::Frozen".to_string(),
+            recipient: AccountAddress::ZERO,
+            data: vec![1],
+            should_persist: true,
+            is_frozen: true,
+        };
+        let mut changeset = ChangeSet::new();
+        runtime.add_transferred_objects_to_changeset(&mut changeset, vec![object], false);
+        assert_eq!(changeset.created_objects.len(), 1);
+        assert_eq!(
+            changeset.created_objects[0].1.owner,
+            MoveRuntime::immutable_object_owner()
+        );
+        assert_ne!(MoveRuntime::immutable_object_owner(), AccountAddress::ZERO);
     }
 }
