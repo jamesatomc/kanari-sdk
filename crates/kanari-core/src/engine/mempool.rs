@@ -119,7 +119,6 @@ impl BlockchainEngine {
 
         let mut batch_hashes = AHashSet::with_capacity(batch_size);
         let mut accepted_hashes = Vec::with_capacity(batch_size);
-        let mut accepted_counts_by_sender: ahash::AHashMap<String, u64> = ahash::AHashMap::new();
         let mut sequence_groups: ahash::AHashMap<String, Vec<u64>> = ahash::AHashMap::new();
 
         for (tx_hash, sender, tx_seq) in &batch_metadata {
@@ -134,7 +133,6 @@ impl BlockchainEngine {
             }
 
             accepted_hashes.push(tx_hash.clone());
-            *accepted_counts_by_sender.entry(sender.clone()).or_insert(0) += 1;
             sequence_groups
                 .entry(sender.clone())
                 .or_default()
@@ -169,6 +167,10 @@ impl BlockchainEngine {
             }
         }
 
+        // Compute every sender counter update before mutating any mempool
+        // collection. This preserves all-or-nothing admission if a counter would
+        // overflow.
+        let mut next_sender_counts = Vec::with_capacity(sequence_groups.len());
         for (sender, base_sequence, tx_sequences) in &sequence_groups {
             let pending_count = mempool
                 .pending_sender_counts
@@ -202,6 +204,13 @@ impl BlockchainEngine {
                     );
                 }
             }
+
+            let batch_count = u64::try_from(tx_sequences.len())
+                .map_err(|_| anyhow::anyhow!("Pending transaction count overflow"))?;
+            let next_count = pending_count.checked_add(batch_count).ok_or_else(|| {
+                anyhow::anyhow!("Pending transaction count overflow for sender {}", sender)
+            })?;
+            next_sender_counts.push((sender.clone(), next_count));
         }
 
         mempool.pending_txs.extend(
@@ -212,11 +221,8 @@ impl BlockchainEngine {
         mempool
             .pending_tx_hashes
             .extend(accepted_hashes.iter().cloned());
-        for (sender, count) in &accepted_counts_by_sender {
-            *mempool
-                .pending_sender_counts
-                .entry(sender.clone())
-                .or_insert(0) += *count;
+        for (sender, count) in next_sender_counts {
+            mempool.pending_sender_counts.insert(sender, count);
         }
 
         Ok(accepted_hashes)
@@ -292,5 +298,58 @@ impl BlockchainEngine {
         KanariAddress::from_str(addr)
             .map(|a| a.to_hex())
             .unwrap_or_else(|_| addr.trim_start_matches("0x").to_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kanari_crypto::keys::{CurveType, generate_keypair};
+    use kanari_types::transaction::{SignedTransaction, Transaction};
+
+    fn signed_transfer_from(
+        sender: &kanari_crypto::keys::KeyPair,
+        sequence_number: u64,
+    ) -> SignedTransaction {
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        let tx = Transaction::new_transfer(
+            sender.tagged_address(),
+            recipient.address,
+            1,
+            sequence_number,
+        );
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+        signed_tx
+    }
+
+    #[test]
+    fn sender_count_overflow_rejects_without_partial_insertion() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let tx = signed_transfer_from(&sender, u64::MAX);
+        let normalized_sender = BlockchainEngine::normalize_addr(tx.transaction.sender_address());
+
+        engine
+            .mempool_write()
+            .pending_sender_counts
+            .insert(normalized_sender.clone(), u64::MAX);
+
+        let error = engine.submit_transactions_batch(vec![tx]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Pending transaction count overflow")
+        );
+
+        let mempool = engine.mempool_read();
+        assert!(mempool.pending_txs.is_empty());
+        assert!(mempool.pending_tx_hashes.is_empty());
+        assert_eq!(
+            mempool.pending_sender_counts.get(&normalized_sender),
+            Some(&u64::MAX)
+        );
     }
 }
