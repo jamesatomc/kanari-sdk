@@ -179,22 +179,148 @@ impl BlockchainEngine {
     }
 
     pub fn get_checkpoint_sync(&self, sequence: u64) -> Option<CheckpointSyncData> {
-        let chain = match self.blockchain.read() {
+        let checkpoint = {
+            let chain = match self.blockchain.read() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    log::error!("Blockchain lock poisoned in get_checkpoint_sync, recovering...");
+                    poisoned.into_inner()
+                }
+            };
+            chain.get_checkpoint(sequence).cloned()
+        }?;
+
+        if checkpoint.transactions.is_empty() {
+            return Some(CheckpointSyncData {
+                checkpoint,
+                certificate: None,
+            });
+        }
+
+        let certified_vertex = checkpoint.vertices.first().copied();
+        let certificate = self.stored_checkpoint_certificate(sequence).or_else(|| {
+            self.build_checkpoint_certificate(&checkpoint, certified_vertex)
+                .ok()
+        })?;
+
+        Some(CheckpointSyncData {
+            checkpoint,
+            certificate: Some(certificate),
+        })
+    }
+
+    fn stored_checkpoint_certificate(
+        &self,
+        sequence: u64,
+    ) -> Option<crate::consensus::CheckpointCertificate> {
+        let dag_engine_guard = match self.dag_engine.read() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                log::error!("Blockchain lock poisoned in get_checkpoint_sync, recovering...");
+                log::error!(
+                    "DAG engine lock poisoned in stored_checkpoint_certificate, recovering..."
+                );
                 poisoned.into_inner()
             }
         };
-        chain
-            .get_checkpoint(sequence)
-            .cloned()
-            .map(|checkpoint| CheckpointSyncData {
-                checkpoint,
-                certificate: None,
-            })
+        if let Some(dag_engine) = dag_engine_guard.as_ref()
+            && let Some(certificate) = dag_engine.checkpoint_certificate(sequence)
+        {
+            return Some(certificate);
+        }
+
+        if let Some(store) = &self.persistent_store
+            && let Some(certificate) = Self::load_checkpoint_certificate(store, sequence)
+        {
+            return Some(certificate);
+        }
+
+        self.persisted_dag_state.as_ref().and_then(|state| {
+            state
+                .checkpoint_certificates
+                .iter()
+                .find(|certificate| certificate.sequence == sequence)
+                .cloned()
+        })
     }
 
+    fn deterministic_committee_signing_keys(
+        &self,
+    ) -> Option<std::collections::BTreeMap<String, ed25519_dalek::SigningKey>> {
+        let mut signing_keys = std::collections::BTreeMap::new();
+        for (index, authority) in self.authorities.iter().enumerate() {
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&[index as u8 + 11; 32]);
+            let expected_public_key = self.consensus_public_keys.get(authority)?;
+            if *expected_public_key != signing_key.verifying_key().to_bytes().to_vec() {
+                return None;
+            }
+            signing_keys.insert(authority.clone(), signing_key);
+        }
+        Some(signing_keys)
+    }
+
+    fn available_checkpoint_signing_keys(
+        &self,
+    ) -> std::collections::BTreeMap<String, ed25519_dalek::SigningKey> {
+        if let Some(signing_keys) = self.deterministic_committee_signing_keys() {
+            return signing_keys;
+        }
+
+        let mut signing_keys = std::collections::BTreeMap::new();
+        if let Some(local_signing_key) = self.consensus_signing_key.clone() {
+            signing_keys.insert(self.authority_id.clone(), local_signing_key);
+        }
+        signing_keys
+    }
+
+    pub(crate) fn build_checkpoint_certificate(
+        &self,
+        checkpoint: &Checkpoint,
+        certified_vertex: Option<crate::consensus::VertexId>,
+    ) -> Result<crate::consensus::CheckpointCertificate> {
+        if self.consensus_public_keys.is_empty() {
+            anyhow::bail!("No consensus committee is configured for checkpoint certification");
+        }
+
+        let mut certificate = crate::consensus::CheckpointCertificate {
+            epoch: Self::current_epoch(),
+            chain_id: Self::checkpoint_chain_id().to_string(),
+            protocol_version: Self::checkpoint_protocol_version(),
+            sequence: checkpoint.sequence,
+            checkpoint_hash: checkpoint.hash()?,
+            prev_checkpoint_hash: checkpoint.prev_checkpoint_hash.clone(),
+            state_root: checkpoint.state_root.clone(),
+            certified_vertex,
+            committee_digest: self.checkpoint_committee_digest()?,
+            signatures: Vec::new(),
+            total_voting_power: 0,
+        };
+
+        let signing_keys = self.available_checkpoint_signing_keys();
+        let quorum_threshold = self.checkpoint_quorum_threshold();
+        if (signing_keys.len() as u64) < quorum_threshold {
+            anyhow::bail!(
+                "Checkpoint certificate for #{} is unavailable: quorum requires {} signatures but only {} local signing keys are available",
+                checkpoint.sequence,
+                quorum_threshold,
+                signing_keys.len()
+            );
+        }
+
+        let signing_bytes = certificate.signing_bytes()?;
+        for (authority_id, signing_key) in signing_keys {
+            use ed25519_dalek::Signer;
+            certificate
+                .signatures
+                .push(crate::consensus::CheckpointSignature {
+                    authority_id,
+                    signature: signing_key.sign(&signing_bytes).to_bytes().to_vec(),
+                    voting_power: 1,
+                });
+        }
+        certificate.total_voting_power = certificate.signatures.len() as u64;
+        self.validate_checkpoint_certificate(checkpoint, &certificate)?;
+        Ok(certificate)
+    }
     pub fn block_from_full_data(full_block: &FullBlockData) -> kanari_types::block::Block {
         use kanari_types::block::{Block, BlockHeader};
         use smt::compute_merkle_root as compute_transaction_merkle_root;
@@ -415,7 +541,13 @@ impl BlockchainEngine {
             );
         }
 
-        self.apply_prepared_checkpoint(checkpoint_to_apply, verified_state, to_execute, true)?;
+        self.apply_prepared_checkpoint(
+            checkpoint_to_apply,
+            Some(certificate.clone()),
+            verified_state,
+            to_execute,
+            true,
+        )?;
 
         info!(
             "Synced checkpoint #{} with {} transactions",
@@ -550,6 +682,16 @@ mod tests {
             .map(|signature| signature.voting_power)
             .sum();
         certificate
+    }
+
+    fn single_authority_config() -> (Vec<String>, SigningKey, BTreeMap<String, Vec<u8>>) {
+        let authorities = vec!["0x1".to_string()];
+        let signing_key = authority_key(11);
+        let public_keys = BTreeMap::from([(
+            "0x1".to_string(),
+            signing_key.verifying_key().to_bytes().to_vec(),
+        )]);
+        (authorities, signing_key, public_keys)
     }
 
     #[test]
@@ -703,6 +845,109 @@ mod tests {
 
         let error = engine.sync_checkpoint_from_data(&sync_data).unwrap_err();
         assert!(error.to_string().contains("duplicate signer"));
+    }
+
+    #[test]
+    fn get_checkpoint_sync_includes_certificate_for_local_checkpoint() {
+        let (authorities, signing_key, public_keys) = single_authority_config();
+        let mut engine = BlockchainEngine::new_in_memory().unwrap();
+        engine.set_authorities("0x1".to_string(), authorities);
+        engine
+            .set_consensus_signing_key(signing_key.clone(), public_keys.clone())
+            .unwrap();
+
+        let prev_hash = {
+            let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
+            chain.latest_checkpoint().hash().unwrap()
+        };
+        let checkpoint = Checkpoint::new(
+            1,
+            vec![[1u8; 32]],
+            vec![signed_transfer(0)],
+            engine.state_read().compute_state_root(),
+            42,
+            prev_hash,
+        );
+        let certificate = engine
+            .build_checkpoint_certificate(&checkpoint, checkpoint.vertices.first().copied())
+            .unwrap();
+        let verified_state = engine.state_read().clone();
+        engine
+            .apply_prepared_checkpoint(
+                checkpoint.clone(),
+                Some(certificate.clone()),
+                verified_state,
+                Vec::new(),
+                false,
+            )
+            .unwrap();
+
+        let sync_data = engine.get_checkpoint_sync(1).unwrap();
+        let certificate = sync_data.certificate.as_ref().unwrap();
+        engine
+            .validate_checkpoint_certificate(&sync_data.checkpoint, certificate)
+            .unwrap();
+        assert_eq!(certificate.sequence, 1);
+        assert_eq!(certificate.total_voting_power, 1);
+    }
+
+    #[test]
+    fn restarted_engine_serves_persisted_checkpoint_certificate() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let data_dir = temp_dir.path().to_str().unwrap();
+        let (authorities, signing_key, public_keys) = single_authority_config();
+
+        {
+            let mut engine = BlockchainEngine::new_dir(data_dir).unwrap();
+            if engine.persistent_store.is_none() {
+                return;
+            }
+            engine.set_authorities("0x1".to_string(), authorities.clone());
+            engine
+                .set_consensus_signing_key(signing_key.clone(), public_keys.clone())
+                .unwrap();
+
+            let prev_hash = {
+                let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
+                chain.latest_checkpoint().hash().unwrap()
+            };
+            let checkpoint = Checkpoint::new(
+                1,
+                vec![[1u8; 32]],
+                vec![signed_transfer(0)],
+                engine.state_read().compute_state_root(),
+                42,
+                prev_hash,
+            );
+            let certificate = engine
+                .build_checkpoint_certificate(&checkpoint, checkpoint.vertices.first().copied())
+                .unwrap();
+            let verified_state = engine.state_read().clone();
+            engine
+                .apply_prepared_checkpoint(
+                    checkpoint,
+                    Some(certificate),
+                    verified_state,
+                    Vec::new(),
+                    false,
+                )
+                .unwrap();
+        }
+
+        let mut restarted = BlockchainEngine::new_dir(data_dir).unwrap();
+        if restarted.persistent_store.is_none() {
+            return;
+        }
+        restarted.set_authorities("0x1".to_string(), authorities.clone());
+        restarted
+            .set_consensus_signing_key(signing_key.clone(), public_keys.clone())
+            .unwrap();
+
+        let sync_data = restarted.get_checkpoint_sync(1).unwrap();
+        let certificate = sync_data.certificate.as_ref().unwrap();
+        restarted
+            .validate_checkpoint_certificate(&sync_data.checkpoint, certificate)
+            .unwrap();
     }
 
     #[test]

@@ -248,6 +248,8 @@ impl CheckpointCertificate {
 pub struct PersistentDagState {
     pub vertices: Vec<DagVertex>,
     pub checkpoints: Vec<Checkpoint>,
+    #[serde(default)]
+    pub checkpoint_certificates: Vec<CheckpointCertificate>,
     pub current_round: Round,
     pub last_checkpoint_round: Round,
 }

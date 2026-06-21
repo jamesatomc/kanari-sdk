@@ -28,8 +28,8 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
 use crate::consensus::{
-    Checkpoint, ConsensusRuntimeProtocol, DagMetrics, DagProductionPolicy, DagVertex,
-    PersistentDagState, VertexId,
+    Checkpoint, CheckpointCertificate, ConsensusRuntimeProtocol, DagMetrics, DagProductionPolicy,
+    DagVertex, PersistentDagState, VertexId,
 };
 
 use super::*;
@@ -55,6 +55,7 @@ pub struct CheckpointInfo {
 
 struct StagedCheckpoint {
     checkpoint: Checkpoint,
+    certificate: Option<CheckpointCertificate>,
     verified_state: StateManager,
     to_execute: Vec<SignedTransaction>,
     validate_supply: bool,
@@ -193,6 +194,7 @@ pub struct CoreDagConsensus {
     authorities: Vec<String>,
     vertices: Vec<DagVertex>,
     checkpoints: Vec<Checkpoint>,
+    checkpoint_certificates: BTreeMap<u64, CheckpointCertificate>,
     current_round: u64,
     last_checkpoint_round: u64,
     metrics: DagMetrics,
@@ -206,6 +208,7 @@ impl CoreDagConsensus {
         state: Option<PersistentDagState>,
     ) -> Result<Self> {
         let mut checkpoints = vec![Checkpoint::genesis()];
+        let mut checkpoint_certificates = BTreeMap::new();
         let mut vertices = Vec::new();
         let mut current_round = 0;
         let mut last_checkpoint_round = 0;
@@ -214,6 +217,11 @@ impl CoreDagConsensus {
             if !state.checkpoints.is_empty() {
                 checkpoints = state.checkpoints;
             }
+            checkpoint_certificates = state
+                .checkpoint_certificates
+                .into_iter()
+                .map(|certificate| (certificate.sequence, certificate))
+                .collect();
             vertices = state.vertices;
             current_round = state.current_round;
             last_checkpoint_round = state.last_checkpoint_round;
@@ -226,6 +234,7 @@ impl CoreDagConsensus {
             authorities,
             vertices,
             checkpoints,
+            checkpoint_certificates,
             current_round,
             last_checkpoint_round,
             metrics: DagMetrics::default(),
@@ -284,6 +293,7 @@ impl CoreDagConsensus {
         PersistentDagState {
             vertices: self.vertices.clone(),
             checkpoints: self.checkpoints.clone(),
+            checkpoint_certificates: self.checkpoint_certificates.values().cloned().collect(),
             current_round: self.current_round,
             last_checkpoint_round: self.last_checkpoint_round,
         }
@@ -316,9 +326,17 @@ impl CoreDagConsensus {
         Ok(true)
     }
 
-    fn record_checkpoint(&mut self, checkpoint: Checkpoint) {
+    fn record_checkpoint(
+        &mut self,
+        checkpoint: Checkpoint,
+        certificate: Option<CheckpointCertificate>,
+    ) {
         self.last_checkpoint_round = self.current_round;
         self.metrics.checkpoints_created = self.metrics.checkpoints_created.saturating_add(1);
+        if let Some(certificate) = certificate {
+            self.checkpoint_certificates
+                .insert(checkpoint.sequence, certificate);
+        }
         self.checkpoints.push(checkpoint);
         self.mysticeti.try_advance();
     }
@@ -410,6 +428,11 @@ impl DagEngine {
                     .map(|state| state.vertices.clone())
                     .unwrap_or_default(),
                 checkpoints: blockchain_checkpoints,
+                checkpoint_certificates: engine
+                    .persisted_dag_state
+                    .as_ref()
+                    .map(|state| state.checkpoint_certificates.clone())
+                    .unwrap_or_default(),
                 current_round: 0,
                 last_checkpoint_round: 0,
             });
@@ -600,6 +623,10 @@ impl DagEngine {
             vertex.id,
             StagedCheckpoint {
                 checkpoint: checkpoint.clone(),
+                certificate: Some(
+                    self.engine
+                        .build_checkpoint_certificate(&checkpoint, Some(vertex.id))?,
+                ),
                 verified_state,
                 to_execute,
                 validate_supply,
@@ -623,6 +650,7 @@ impl DagEngine {
 
         self.engine.apply_prepared_checkpoint(
             staged.checkpoint.clone(),
+            staged.certificate.clone(),
             staged.verified_state,
             staged.to_execute,
             staged.validate_supply,
@@ -630,7 +658,7 @@ impl DagEngine {
 
         {
             let mut consensus = self.consensus.write().unwrap_or_else(|e| e.into_inner());
-            consensus.record_checkpoint(staged.checkpoint.clone());
+            consensus.record_checkpoint(staged.checkpoint.clone(), staged.certificate.clone());
         }
         self.persist_consensus_state()?;
         Ok(staged.checkpoint)
@@ -643,6 +671,11 @@ impl DagEngine {
     pub fn latest_own_vertices(&self, limit: usize) -> Vec<DagVertex> {
         let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
         consensus.latest_vertices_by_authority(&self.authority_id, limit)
+    }
+
+    pub fn checkpoint_certificate(&self, sequence: u64) -> Option<CheckpointCertificate> {
+        let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
+        consensus.checkpoint_certificates.get(&sequence).cloned()
     }
 
     fn validate_network_vertex(

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::BlockchainEngine;
-use crate::consensus::Checkpoint;
+use crate::consensus::{Checkpoint, CheckpointCertificate};
 use anyhow::{Context, Result, bail};
 use kanari_move_runtime_v1::state::StateManager;
 use kanari_types::transaction::SignedTransaction;
@@ -103,6 +103,7 @@ impl BlockchainEngine {
     fn finalize_checkpoint(
         &self,
         checkpoint: Checkpoint,
+        certificate: Option<CheckpointCertificate>,
         new_state: StateManager,
         validate_supply: bool,
     ) -> Result<()> {
@@ -113,7 +114,7 @@ impl BlockchainEngine {
         }
 
         if let Some(store) = &self.persistent_store {
-            Self::persist_pending_checkpoint_journal(store, &checkpoint)?;
+            Self::persist_pending_checkpoint_journal(store, &checkpoint, certificate.as_ref())?;
         }
 
         {
@@ -128,7 +129,7 @@ impl BlockchainEngine {
             runtime.clear_object_cache()?;
         }
 
-        self.finalize_checkpoint_metadata(checkpoint.clone())?;
+        self.finalize_checkpoint_metadata(checkpoint.clone(), certificate)?;
 
         if let Some(store) = &self.persistent_store {
             Self::clear_pending_checkpoint_journal(store)?;
@@ -137,11 +138,19 @@ impl BlockchainEngine {
         Ok(())
     }
 
-    fn finalize_checkpoint_metadata(&self, checkpoint: Checkpoint) -> Result<()> {
+    fn finalize_checkpoint_metadata(
+        &self,
+        checkpoint: Checkpoint,
+        certificate: Option<CheckpointCertificate>,
+    ) -> Result<()> {
         // 1. Update blockchain metadata in-memory.
         {
             let mut chain = self.blockchain.write().unwrap_or_else(|e| e.into_inner());
             chain.add_checkpoint_with_validation(checkpoint.clone(), true)?;
+        }
+
+        if let (Some(store), Some(certificate)) = (&self.persistent_store, &certificate) {
+            Self::persist_checkpoint_certificate(store, certificate)?;
         }
 
         // 2. Persist blockchain state before draining the live mempool view.
@@ -196,6 +205,7 @@ impl BlockchainEngine {
     pub(crate) fn apply_prepared_checkpoint(
         &self,
         checkpoint: Checkpoint,
+        certificate: Option<CheckpointCertificate>,
         verified_state: StateManager,
         to_execute: Vec<SignedTransaction>,
         validate_supply: bool,
@@ -211,7 +221,7 @@ impl BlockchainEngine {
             )?;
         }
 
-        self.finalize_checkpoint(checkpoint, verified_state, validate_supply)
+        self.finalize_checkpoint(checkpoint, certificate, verified_state, validate_supply)
     }
 
     pub fn apply_checkpoint(&self, checkpoint: Checkpoint) -> Result<()> {
@@ -225,7 +235,7 @@ impl BlockchainEngine {
             self.prepare_checkpoint_state(&checkpoint)?;
         self.ensure_checkpoint_root_matches(&checkpoint, &computed_root)?;
 
-        self.apply_prepared_checkpoint(checkpoint, verified_state, to_execute, true)
+        self.apply_prepared_checkpoint(checkpoint, None, verified_state, to_execute, true)
     }
 }
 
@@ -294,7 +304,7 @@ mod tests {
             Checkpoint::new(1, vec![[1u8; 32]], vec![tx], computed_root, 42, prev_hash);
 
         let store = engine.persistent_store.as_ref().unwrap();
-        BlockchainEngine::persist_pending_checkpoint_journal(store, &checkpoint).unwrap();
+        BlockchainEngine::persist_pending_checkpoint_journal(store, &checkpoint, None).unwrap();
         {
             let mut state = engine.state_write();
             *state = verified_state;

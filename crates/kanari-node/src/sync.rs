@@ -1212,7 +1212,6 @@ impl SyncManager {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-
     use super::*;
     use kanari_core::Checkpoint;
 

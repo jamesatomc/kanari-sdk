@@ -19,6 +19,7 @@ kanari-types = { workspace = true }
 kanari-crypto = { workspace = true }
 kanari-indexer = { path = "../kanari-indexer" }
 move-core-types = { workspace = true }
+kanari-move-runtime-v1 = { path = "../../move-execution/v1/kanari-move-runtime-v1" }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

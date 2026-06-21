@@ -60,6 +60,7 @@ struct PersistedTransactionLocation {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct PendingCheckpointJournal {
     checkpoint: Checkpoint,
+    certificate: Option<CheckpointCertificate>,
 }
 
 #[derive(Debug, Default)]
@@ -208,15 +209,21 @@ impl BlockchainEngine {
         b"checkpoint_journal/pending"
     }
 
+    fn checkpoint_certificate_key(sequence: u64) -> Vec<u8> {
+        format!("checkpoint_certificate/{}", sequence).into_bytes()
+    }
+
     fn persist_pending_checkpoint_journal(
         store: &PersistentStore,
         checkpoint: &Checkpoint,
+        certificate: Option<&CheckpointCertificate>,
     ) -> Result<()> {
         store
             .save(
                 Self::pending_checkpoint_journal_key(),
                 &PendingCheckpointJournal {
                     checkpoint: checkpoint.clone(),
+                    certificate: certificate.cloned(),
                 },
             )
             .context("Failed to persist pending checkpoint journal")
@@ -235,6 +242,37 @@ impl BlockchainEngine {
             .delete(Self::pending_checkpoint_journal_key())
             .context("Failed to clear pending checkpoint journal")
     }
+
+    fn persist_checkpoint_certificate(
+        store: &PersistentStore,
+        certificate: &CheckpointCertificate,
+    ) -> Result<()> {
+        store
+            .save(
+                &Self::checkpoint_certificate_key(certificate.sequence),
+                certificate,
+            )
+            .context("Failed to persist checkpoint certificate")
+    }
+
+    fn load_checkpoint_certificate(
+        store: &PersistentStore,
+        sequence: u64,
+    ) -> Option<CheckpointCertificate> {
+        store
+            .load(&Self::checkpoint_certificate_key(sequence))
+            .map_err(|e| {
+                tracing::warn!(
+                    checkpoint = sequence,
+                    "Failed to load checkpoint certificate: {}",
+                    e
+                );
+                e
+            })
+            .ok()
+            .flatten()
+    }
+
     fn vertex_transactions_key(vertex_id: &[u8; 32]) -> Vec<u8> {
         let mut key = b"dag_vertex_txs/".to_vec();
         key.extend_from_slice(hex::encode(vertex_id).as_bytes());
@@ -445,6 +483,7 @@ impl BlockchainEngine {
                 .iter()
                 .map(Self::checkpoint_without_transactions)
                 .collect(),
+            checkpoint_certificates: state.checkpoint_certificates.clone(),
             current_round: state.current_round,
             last_checkpoint_round: state.last_checkpoint_round,
         }
@@ -1603,6 +1642,7 @@ mod tests {
             Some(&PersistentDagState {
                 vertices: Vec::new(),
                 checkpoints: vec![genesis, good_checkpoint],
+                checkpoint_certificates: Vec::new(),
                 current_round: 1,
                 last_checkpoint_round: 1,
             }),
