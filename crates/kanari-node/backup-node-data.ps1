@@ -3,7 +3,10 @@ param(
     [string]$SourceDataDir,
     [string]$BackupRoot = "$env:USERPROFILE\.kanari\backups",
     [string]$Label = 'node-backup',
-    [string]$RpcUrl = ''
+    [Nullable[long]]$CheckpointHeight = $null,
+    [string]$CheckpointStateRoot = '',
+    [string]$Network = '',
+    [string]$AuthorityId = ''
 )
 
 Set-StrictMode -Version Latest
@@ -40,25 +43,16 @@ try {
         source_data_dir = $source
         host = $env:COMPUTERNAME
         file_count = $manifest.Count
-        checkpoint_height = $null
-        checkpoint_state_root = $null
-        network = $null
-        authority_id = $null
+        checkpoint_height = $CheckpointHeight
+        checkpoint_state_root = if ([string]::IsNullOrWhiteSpace($CheckpointStateRoot)) { $null } else { $CheckpointStateRoot }
+        network = if ([string]::IsNullOrWhiteSpace($Network)) { $null } else { $Network }
+        authority_id = if ([string]::IsNullOrWhiteSpace($AuthorityId)) { $null } else { $AuthorityId }
+        node_was_stopped = $true
     }
-
-    if (-not [string]::IsNullOrWhiteSpace($RpcUrl)) {
-        . (Join-Path $PSScriptRoot 'node-script-common.ps1')
-        $health = Get-NodeHealthStatus -RpcUrl $RpcUrl
-        $stats = Get-NodeStats -RpcUrl $RpcUrl
-        $networkStatus = Get-NodeNetworkStatus -RpcUrl $RpcUrl
-        $metadata.checkpoint_height = $stats.height
-        $metadata.checkpoint_state_root = $stats.state_root
-        $metadata.network = $health.network
-        $metadata.authority_id = $networkStatus.local_authority_id
-    }
-
     $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $backupDir 'backup-metadata.json') -Encoding UTF8
+
     Write-Host "Backup completed: $backupDir" -ForegroundColor Green
+    Write-Host "Files: $($manifest.Count) | height=$CheckpointHeight | root=$CheckpointStateRoot" -ForegroundColor Cyan
 } catch {
     Write-Host "Backup failed: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
