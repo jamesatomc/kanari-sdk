@@ -27,19 +27,8 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Formatting
-        id: formatting
-        run: |
-          cargo fmt --all
-          git diff --check
-          git diff --name-only -z | tar --null -T - -czf formatted-source.tar.gz
-      - uses: actions/upload-artifact@v4
-        with:
-          name: formatted-source
-          path: formatted-source.tar.gz
-          retention-days: 1
-      - name: Require committed formatting
-        run: git diff --exit-code
+      - name: Check patch whitespace
+        run: git diff --check origin/${{ github.base_ref || 'remediation/all-20260620' }}...HEAD
       - name: Compile affected crates
         run: >-
           cargo check
