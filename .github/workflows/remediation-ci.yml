@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - remediation/all-20260620
+      - security/hardening-p0-remediation-20260623
   pull_request:
     branches:
       - kanari-sdk
