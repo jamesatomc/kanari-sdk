@@ -34,4 +34,4 @@ flate2 = { workspace = true }
 
 [features]
 default = []
-zero-gas = ["kanari-types/zero-gas"]
+zero-gas = ["kanari-types/zero-gas", "kanari-core/zero-gas"]

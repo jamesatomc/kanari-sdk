@@ -23,7 +23,9 @@ pub mod block;
 pub mod event;
 pub mod transaction;
 
-pub mod gas_v1;
-pub mod gas_v2;
 pub mod gas;
+#[cfg(not(feature = "zero-gas"))]
+mod gas_v1;
+#[cfg(feature = "zero-gas")]
+mod gas_v2;
 pub use gas::{GasConfig, GasError, GasEstimate, GasMeter, GasOperation, TransactionGas};

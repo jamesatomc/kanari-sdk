@@ -46,12 +46,12 @@ impl GasConfig {
 impl Default for GasConfig {
     fn default() -> Self {
         Self {
-            base_price: ZERO_GAS_PRICE,   // Zero-fee mode
-            max_gas_per_tx: 100_000,      // 100K gas per transaction
-            max_gas_per_block: 1_000_000, // 1M gas per block
+            base_price: ZERO_GAS_PRICE,    // Zero-fee mode
+            max_gas_per_tx: 100_000,       // 100K gas per transaction
+            max_gas_per_block: 1_000_000,  // 1M gas per block
             min_gas_price: ZERO_GAS_PRICE, // Allow zero gas price
-            storage_price_per_byte: 0,    // No storage fee
-            storage_rebate_rate: 0,       // No rebate is needed when storage is free
+            storage_price_per_byte: 0,     // No storage fee
+            storage_rebate_rate: 0,        // No rebate is needed when storage is free
         }
     }
 }

@@ -1,8 +1,9 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use kanari_rpc_api::{AccountInfo, BlockData, BlockchainStats, FullBlockData};
+use kanari_rpc_api::{AccountInfo, BlockData, BlockchainStats, FullBlockData, ObjectInfo};
 use kanari_types::address::Address as KanariAddress;
+use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use log::{info, warn};
 
 use super::*;
@@ -45,11 +46,39 @@ impl BlockchainEngine {
         }
     }
 
+    fn normalize_native_coin_objects(objects: &mut [ObjectInfo], native_balance: u64) {
+        let mut wrote_native_balance = false;
+
+        for obj in objects {
+            if !obj.type_.contains("::coin::Coin<") || obj.data.len() < 40 {
+                continue;
+            }
+
+            let Some(start) = obj.type_.find('<') else {
+                continue;
+            };
+            let Some(end) = obj.type_.rfind('>') else {
+                continue;
+            };
+            if &obj.type_[start + 1..end] != KANARI_TOKEN_TYPE {
+                continue;
+            }
+
+            let display_balance = if wrote_native_balance {
+                0
+            } else {
+                wrote_native_balance = true;
+                native_balance
+            };
+            obj.data[32..40].copy_from_slice(&display_balance.to_le_bytes());
+        }
+    }
     pub fn get_account_info(&self, address: &str) -> Option<AccountInfo> {
         let state = self.state_read();
 
         state.get_account_by_hex(address).map(|acc| {
-            let final_owned_objects = self.resolve_account_objects(&state, &acc.address);
+            let mut final_owned_objects = self.resolve_account_objects(&state, &acc.address);
+            Self::normalize_native_coin_objects(&mut final_owned_objects, acc.native_balance());
             let sequence_number = self.get_expected_sequence(address);
             let mut actual_token_balances = std::collections::BTreeMap::new();
 
@@ -79,6 +108,7 @@ impl BlockchainEngine {
                     .entry(token_type.clone())
                     .or_insert_with(|| balance.value());
             }
+            actual_token_balances.insert(KANARI_TOKEN_TYPE.to_string(), acc.native_balance());
 
             AccountInfo {
                 address: format!("{:#x}", acc.address),
@@ -319,7 +349,9 @@ mod tests {
     use super::*;
     use crate::{CheckpointSyncData, consensus::Checkpoint};
     use kanari_crypto::keys::{CurveType, generate_keypair};
+    use kanari_move_runtime_v1::changeset::{ChangeSet, CreatedObject};
     use kanari_types::transaction::{SignedTransaction, Transaction};
+    use move_core_types::account_address::AccountAddress;
 
     fn signed_transfer(sequence_number: u64) -> SignedTransaction {
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
@@ -335,6 +367,62 @@ mod tests {
             .sign(&sender.private_key, sender.curve_type)
             .unwrap();
         signed_tx
+    }
+
+    #[test]
+    fn account_info_reports_native_balance_after_gas_debit() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = AccountAddress::from_hex_literal("0x1111").unwrap();
+        let dao =
+            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+
+        let mut coin_data = vec![0u8; 40];
+        coin_data[32..40].copy_from_slice(&1_000u64.to_le_bytes());
+
+        {
+            let mut state = engine.state.write().unwrap_or_else(|e| e.into_inner());
+            let mut create = ChangeSet::new();
+            create.created_objects.push((
+                "0xaaaa".to_string(),
+                CreatedObject {
+                    owner: sender,
+                    uid: None,
+                    id: None,
+                    type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+                    data: coin_data.clone(),
+                    version: 1,
+                },
+            ));
+            state
+                .apply_changeset_without_supply_validation(&create)
+                .unwrap();
+
+            let mut gas_debit = ChangeSet::new();
+            gas_debit.created_objects.push((
+                "0xaaaa".to_string(),
+                CreatedObject {
+                    owner: sender,
+                    uid: None,
+                    id: None,
+                    type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+                    data: coin_data,
+                    version: 2,
+                },
+            ));
+            gas_debit.get_or_create_change(sender).debit(100);
+            gas_debit.collect_gas(dao, 100);
+            state
+                .apply_changeset_without_supply_validation(&gas_debit)
+                .unwrap();
+        }
+
+        let info = engine.get_account_info("0x1111").unwrap();
+        assert_eq!(info.token_balances.get(KANARI_TOKEN_TYPE), Some(&900));
+        let object_balance = info.owned_objects.unwrap()[0].data[32..40]
+            .try_into()
+            .map(u64::from_le_bytes)
+            .unwrap();
+        assert_eq!(object_balance, 900);
     }
 
     #[test]

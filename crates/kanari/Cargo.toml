@@ -59,6 +59,7 @@ rpassword = { workspace = true }
 
 [features]
 default = []
+zero-gas = ["kanari-types/zero-gas", "kanari-faucet/zero-gas"]
 
 [[bin]]
 name = "kanari"
