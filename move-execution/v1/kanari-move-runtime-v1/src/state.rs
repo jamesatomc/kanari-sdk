@@ -17,7 +17,7 @@ use move_core_types::language_storage::{StructTag, TypeTag};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use smt;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -109,6 +109,8 @@ pub struct ObjectLockedCoinRecord {
 /// This is a pure data layer that applies ChangeSet from Move VM execution
 ///
 /// Refactored to use RocksDB via PersistentStore for unlimited capacity.
+const IN_MEMORY_SMT_INCREMENTAL_THRESHOLD: usize = 2_048;
+
 #[derive(Debug, Clone)]
 pub struct StateManager {
     pub store: Arc<PersistentStore>,
@@ -123,8 +125,15 @@ pub struct StateManager {
     /// In-memory cache for tracking total token supplies in real-time
     pub global_token_supplies: BTreeMap<String, u64>,
 
-    // SMT for state root calculation (Optional: requires DB backend)
+    canonical_root_entries: HashMap<Vec<u8>, Vec<u8>>,
+    persisted_canonical_root_entries: HashMap<Vec<u8>, Vec<u8>>,
+    canonical_owned_object_keys: HashSet<Vec<u8>>,
+    pending_smt_changes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+
+    // SMT for state root calculation. Uses RocksDB when available and falls
+    // back to the in-memory backend for speculative benchmark/test states.
     pub smt: Option<Arc<smt::SparseMerkleTree>>,
+    smt_dirty: bool,
     pub events: Vec<Event>,
 }
 
@@ -567,12 +576,25 @@ impl StateManager {
         Self::try_new_in_memory().expect("Failed to create in-memory state manager")
     }
 
+    /// Create a new in-memory state manager with the in-memory SMT backend enabled.
+    pub fn new_in_memory_with_smt() -> Self {
+        Self::try_new_in_memory_with_smt().expect("Failed to create in-memory state manager")
+    }
+
     /// Create a new in-memory state manager and surface initialization errors.
     pub fn try_new_in_memory() -> Result<Self> {
         let store = Arc::new(
             PersistentStore::open_in_memory().context("Failed to create in-memory store")?,
         );
-        Self::try_new(store)
+        Self::try_new_internal(store, false)
+    }
+
+    /// Create a new in-memory state manager with the in-memory SMT backend enabled.
+    pub fn try_new_in_memory_with_smt() -> Result<Self> {
+        let store = Arc::new(
+            PersistentStore::open_in_memory().context("Failed to create in-memory store")?,
+        );
+        Self::try_new_internal(store, true)
     }
 
     /// Create new state with genesis allocation
@@ -584,6 +606,14 @@ impl StateManager {
 
     /// Create new state with genesis allocation and return initialization errors.
     pub fn try_new(store: Arc<PersistentStore>) -> Result<Self> {
+        Self::try_new_internal(store, false)
+    }
+
+    pub fn try_new_with_in_memory_smt(store: Arc<PersistentStore>) -> Result<Self> {
+        Self::try_new_internal(store, true)
+    }
+
+    fn try_new_internal(store: Arc<PersistentStore>, enable_in_memory_smt: bool) -> Result<Self> {
         // Try to load total supply from DB
         let persisted_total_supply = store
             .load::<u64>(b"total_supply")
@@ -606,19 +636,38 @@ impl StateManager {
             persisted_total_supply
         };
 
-        // Initialize SMT if store is backed by RocksDB
+        // RocksDB-backed states always enable SMT. In-memory SMT stays opt-in
+        // because large speculative batches benchmark better with materialized
+        // roots than with incremental node updates.
         let smt = store
             .get_db()
-            .map(|db| Arc::new(smt::SparseMerkleTree::new(db)));
+            .map(|db| Arc::new(smt::SparseMerkleTree::new(db)))
+            .or_else(|| {
+                enable_in_memory_smt.then(|| {
+                    store
+                        .get_memory_store()
+                        .map(|memory| Arc::new(smt::SparseMerkleTree::new_in_memory(memory)))
+                        .expect("in-memory store must exist")
+                })
+            });
 
         let mut state = Self {
             store,
             overlay: BTreeMap::new(),
             total_supply: recovered_total_supply,
             global_token_supplies,
+            canonical_root_entries: HashMap::new(),
+            persisted_canonical_root_entries: HashMap::new(),
+            canonical_owned_object_keys: HashSet::new(),
+            pending_smt_changes: BTreeMap::new(),
             smt,
+            smt_dirty: false,
             events: Vec::new(),
         };
+
+        state
+            .rebuild_canonical_root_cache()
+            .context("Failed to initialize canonical root cache")?;
 
         state
             .ensure_smt_initialized()
@@ -675,6 +724,203 @@ impl StateManager {
         Ok(())
     }
 
+    fn parse_owned_object_ids(raw: &[u8]) -> Vec<String> {
+        bcs::from_bytes::<Vec<String>>(raw).unwrap_or_else(|_| {
+            log::warn!(
+                "[StateManager] Skipping malformed owned object index while computing state root"
+            );
+            Vec::new()
+        })
+    }
+
+    fn load_raw_bytes_from_store(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        if key == ACCOUNT_INDEX_KEY
+            || key == OBJECT_LOCKED_COIN_RECORDS_KEY
+            || key == b"total_supply"
+            || key == b"global_token_supplies"
+            || key == b"treasury_index"
+            || key == b"nft_collection_index"
+            || key == b"module_index"
+        {
+            return self.store.load::<Vec<u8>>(key).map_err(Into::into);
+        }
+
+        if key.starts_with(b"account:") {
+            return self
+                .store
+                .load::<Account>(key)?
+                .map(|value| bcs::to_bytes(&value))
+                .transpose()
+                .map_err(Into::into);
+        }
+        if key.starts_with(b"owned_objects:")
+            || key.starts_with(b"module:")
+            || key.starts_with(b"resource:")
+            || key.starts_with(b"system:")
+            || key.starts_with(b"treasury:")
+            || key.starts_with(b"nft:")
+            || key.starts_with(b"collection_members:")
+            || key.starts_with(b"metadata_decimals:")
+            || key.starts_with(b"metadata_name:")
+            || key.starts_with(b"metadata_symbol:")
+            || key.starts_with(b"metadata_description:")
+            || key.starts_with(b"metadata_icon_url:")
+            || key.starts_with(b"df:")
+        {
+            return self.store.load::<Vec<u8>>(key).map_err(Into::into);
+        }
+        if key.starts_with(b"supply:") {
+            if let Some(cap) = self.store.load::<TreasuryCap>(key)? {
+                return bcs::to_bytes(&cap).map(Some).map_err(Into::into);
+            }
+            return self
+                .store
+                .load::<u64>(key)?
+                .map(|value| bcs::to_bytes(&value))
+                .transpose()
+                .map_err(Into::into);
+        }
+        if key.starts_with(b"object:") {
+            return self
+                .store
+                .load::<StoredObject>(key)?
+                .map(|value| bcs::to_bytes(&value))
+                .transpose()
+                .map_err(Into::into);
+        }
+
+        self.store.load::<Vec<u8>>(key).map_err(Into::into)
+    }
+
+    fn current_raw_value(&self, key: &[u8]) -> Option<Vec<u8>> {
+        if let Some(value_opt) = self.overlay.get(key) {
+            return value_opt.clone();
+        }
+
+        self.load_raw_bytes_from_store(key).ok().flatten()
+    }
+
+    fn sync_owned_object_key_membership(
+        &mut self,
+        key: &[u8],
+        old_raw: Option<&[u8]>,
+        new_raw: Option<&[u8]>,
+    ) {
+        let old_ids = old_raw
+            .map(Self::parse_owned_object_ids)
+            .unwrap_or_default();
+        let new_ids = new_raw
+            .map(Self::parse_owned_object_ids)
+            .unwrap_or_default();
+
+        let mut touched_keys = Vec::with_capacity(old_ids.len().saturating_add(new_ids.len()) + 1);
+
+        for object_id in old_ids {
+            let object_key = Self::object_key(&object_id);
+            self.canonical_owned_object_keys.remove(&object_key);
+            self.canonical_root_entries.remove(&object_key);
+            touched_keys.push(object_key);
+        }
+
+        for object_id in new_ids {
+            let object_key = Self::object_key(&object_id);
+            self.canonical_owned_object_keys.insert(object_key.clone());
+            if let Some(value) = self.current_raw_value(&object_key) {
+                self.canonical_root_entries
+                    .insert(object_key.clone(), value);
+            } else {
+                self.canonical_root_entries.remove(&object_key);
+            }
+            touched_keys.push(object_key);
+        }
+
+        if let Some(raw) = new_raw {
+            self.canonical_root_entries
+                .insert(key.to_vec(), raw.to_vec());
+        } else {
+            self.canonical_root_entries.remove(key);
+        }
+        touched_keys.push(key.to_vec());
+
+        for touched_key in touched_keys {
+            self.refresh_pending_smt_change(&touched_key);
+        }
+    }
+
+    fn update_canonical_root_cache(&mut self, key: &[u8], value: Option<&[u8]>) {
+        let old_raw = self.canonical_root_entries.get(key).cloned();
+
+        if key.starts_with(b"owned_objects:") {
+            self.sync_owned_object_key_membership(key, old_raw.as_deref(), value);
+            return;
+        }
+
+        if Self::is_canonical_state_root_key(key) {
+            if let Some(raw) = value {
+                self.canonical_root_entries
+                    .insert(key.to_vec(), raw.to_vec());
+            } else {
+                self.canonical_root_entries.remove(key);
+            }
+            self.refresh_pending_smt_change(key);
+            return;
+        }
+
+        if key.starts_with(b"object:") {
+            if self.canonical_owned_object_keys.contains(key) {
+                if let Some(raw) = value {
+                    self.canonical_root_entries
+                        .insert(key.to_vec(), raw.to_vec());
+                } else {
+                    self.canonical_root_entries.remove(key);
+                }
+            } else if value.is_none() {
+                self.canonical_root_entries.remove(key);
+            }
+            self.refresh_pending_smt_change(key);
+        }
+    }
+
+    fn refresh_pending_smt_change(&mut self, key: &[u8]) {
+        let current = self.canonical_root_entries.get(key);
+        let persisted = self.persisted_canonical_root_entries.get(key);
+
+        match (current, persisted) {
+            (Some(current_raw), Some(persisted_raw)) if current_raw == persisted_raw => {
+                self.pending_smt_changes.remove(key);
+            }
+            (Some(current_raw), _) => {
+                self.pending_smt_changes
+                    .insert(key.to_vec(), Some(current_raw.clone()));
+            }
+            (None, Some(_)) => {
+                self.pending_smt_changes.insert(key.to_vec(), None);
+            }
+            (None, None) => {
+                self.pending_smt_changes.remove(key);
+            }
+        }
+    }
+
+    fn rebuild_canonical_root_cache(&mut self) -> Result<()> {
+        let mut entries: BTreeMap<Vec<u8>, Vec<u8>> = self
+            .store
+            .logical_entries()
+            .context("Failed to read state entries for canonical root cache")?
+            .into_iter()
+            .collect();
+        Self::retain_canonical_state_root_entries(&mut entries);
+        self.canonical_owned_object_keys = entries
+            .keys()
+            .filter(|key| key.starts_with(b"object:"))
+            .cloned()
+            .collect();
+        self.canonical_root_entries = entries.into_iter().collect();
+        self.persisted_canonical_root_entries = self.canonical_root_entries.clone();
+        self.pending_smt_changes.clear();
+        Ok(())
+    }
+
     /// Commit pending overlay changes to the persistent store and update SMT
     pub fn commit(&mut self) -> Result<()> {
         let mut updates = Vec::new();
@@ -690,17 +936,28 @@ impl StateManager {
 
         self.store.apply_raw_changes(&updates, &deletes)?;
 
-        // Update SMT if available
+        // Update SMT if available. For large in-memory batches, the incremental
+        // path is slower than a full recompute, so mark it dirty and let
+        // `compute_state_root` fall back to materialization.
         if let Some(smt) = &self.smt {
-            let (smt_updates, smt_deletes) = self.smt_changes_from_overlay();
-            if !smt_updates.is_empty() {
-                smt.insert(&smt_updates)?;
-            }
-            if !smt_deletes.is_empty() {
-                smt.delete(&smt_deletes)?;
+            let (smt_updates, smt_deletes) = self.smt_changes_from_pending_delta();
+            let is_in_memory = self.store.get_db().is_none();
+            let change_count = smt_updates.len().saturating_add(smt_deletes.len());
+            if is_in_memory && change_count > IN_MEMORY_SMT_INCREMENTAL_THRESHOLD {
+                self.smt_dirty = true;
+            } else {
+                if !smt_updates.is_empty() {
+                    smt.insert(&smt_updates)?;
+                }
+                if !smt_deletes.is_empty() {
+                    smt.delete(&smt_deletes)?;
+                }
+                self.smt_dirty = false;
             }
         }
 
+        self.persisted_canonical_root_entries = self.canonical_root_entries.clone();
+        self.pending_smt_changes.clear();
         self.overlay.clear();
         Ok(())
     }
@@ -713,7 +970,15 @@ impl StateManager {
     ) -> Result<()> {
         let bytes = bcs::to_bytes(value)?;
         self.overlay.insert(key.to_vec(), Some(bytes));
+        if let Some(Some(raw)) = self.overlay.get(key).cloned() {
+            self.update_canonical_root_cache(key, Some(&raw));
+        }
         Ok(())
+    }
+
+    pub(crate) fn delete_internal(&mut self, key: &[u8]) {
+        self.overlay.insert(key.to_vec(), None);
+        self.update_canonical_root_cache(key, None);
     }
 
     // Helper to read from overlay then store
@@ -847,46 +1112,25 @@ impl StateManager {
         });
     }
 
-    fn object_key_id(key: &[u8]) -> Option<&str> {
-        key.strip_prefix(b"object:")
-            .and_then(|id| std::str::from_utf8(id).ok())
+    fn compute_in_memory_state_root_fast(&self) -> Vec<u8> {
+        smt::compute_sparse_root(
+            &self
+                .canonical_root_entries
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>(),
+        )
+        .to_vec()
     }
 
-    fn object_is_owned_in_overlay_root(&self, object_id: &str, stored: &StoredObject) -> bool {
-        let owner_key = Self::owned_objects_key(&stored.owner);
-        self.load_internal::<Vec<String>>(&owner_key)
-            .ok()
-            .flatten()
-            .map(|owned| owned.iter().any(|id| id == object_id))
-            .unwrap_or(false)
-    }
-
-    fn is_canonical_smt_update(&self, key: &[u8], value: &[u8]) -> bool {
-        if Self::is_canonical_state_root_key(key) {
-            return true;
-        }
-
-        let Some(object_id) = Self::object_key_id(key) else {
-            return false;
-        };
-        bcs::from_bytes::<StoredObject>(value)
-            .map(|stored| self.object_is_owned_in_overlay_root(object_id, &stored))
-            .unwrap_or(false)
-    }
-
-    fn smt_changes_from_overlay(&self) -> OverlaySmtChanges {
-        let mut updates = Vec::new();
+    fn smt_changes_from_pending_delta(&self) -> OverlaySmtChanges {
+        let mut updates = Vec::with_capacity(self.pending_smt_changes.len());
         let mut deletes = Vec::new();
 
-        for (key, value_opt) in &self.overlay {
+        for (key, value_opt) in &self.pending_smt_changes {
             match value_opt {
-                Some(value) if self.is_canonical_smt_update(key, value) => {
-                    updates.push((key.clone(), value.clone()));
-                }
-                None if Self::is_canonical_state_root_key(key) || key.starts_with(b"object:") => {
-                    deletes.push(key.clone());
-                }
-                _ => {}
+                Some(value) => updates.push((key.clone(), value.clone())),
+                None => deletes.push(key.clone()),
             }
         }
 
@@ -1347,10 +1591,10 @@ impl StateManager {
                 owners_to_recompute.insert(existing.owner);
                 let owner_key = Self::owned_objects_key(&existing.owner);
                 self.remove_from_index_list(&owner_key, &stored_id)?;
-                self.overlay.insert(obj_key, None);
+                self.delete_internal(&obj_key);
             } else {
                 let obj_key = Self::object_key(obj_id);
-                self.overlay.insert(obj_key, None);
+                self.delete_internal(&obj_key);
             }
         }
 
@@ -1408,7 +1652,7 @@ impl StateManager {
                     self.remove_from_index_list(&old_owner_key, &stored_id)?;
                 }
                 if stored_id != *obj_id {
-                    self.overlay.insert(Self::object_key(&stored_id), None);
+                    self.delete_internal(&Self::object_key(&stored_id));
                 }
             } else {
                 // For new objects, use version from ChangeSet or default to 1
@@ -1471,7 +1715,7 @@ impl StateManager {
         for (object_id, name_bytes) in &changeset.removed_dynamic_fields {
             let df_key = Self::dynamic_field_key(object_id, name_bytes);
             // Record as None so commit() will delete it from RocksDB
-            self.overlay.insert(df_key, None);
+            self.delete_internal(&df_key);
         }
 
         if validate_supply && let Err(e) = self.validate_supply_invariants() {
@@ -1516,13 +1760,26 @@ impl StateManager {
 
     pub fn compute_state_root(&self) -> Vec<u8> {
         if let Some(smt) = &self.smt {
-            let (updates, deletes) = self.smt_changes_from_overlay();
-            match smt.root_hash_with_changes(&updates, &deletes) {
-                Ok(root) => return root.to_vec(),
-                Err(e) => {
-                    log::error!("Failed to compute SMT state root, falling back: {}", e);
+            let (updates, deletes) = self.smt_changes_from_pending_delta();
+            let use_incremental_smt = if self.store.get_db().is_some() {
+                true
+            } else {
+                !self.smt_dirty
+                    && updates.len().saturating_add(deletes.len())
+                        <= IN_MEMORY_SMT_INCREMENTAL_THRESHOLD
+            };
+            if use_incremental_smt {
+                match smt.root_hash_with_changes(&updates, &deletes) {
+                    Ok(root) => return root.to_vec(),
+                    Err(e) => {
+                        log::error!("Failed to compute SMT state root, falling back: {}", e);
+                    }
                 }
             }
+        }
+
+        if self.store.get_db().is_none() {
+            return self.compute_in_memory_state_root_fast();
         }
 
         let mut entries: BTreeMap<Vec<u8>, Vec<u8>> = match self.store.logical_entries() {
@@ -1645,6 +1902,12 @@ mod tests {
             &TreasuryCap { total_supply },
         )?;
         Ok(())
+    }
+
+    #[test]
+    fn in_memory_state_initializes_smt_backend() {
+        let state = StateManager::new_in_memory_with_smt();
+        assert!(state.smt.is_some());
     }
 
     #[test]

@@ -429,8 +429,6 @@ impl DagEngine {
     }
 
     pub fn produce_vertex(&self) -> Result<CheckpointProductionInfo> {
-        let trace_bench = std::env::var_os("KANARI_BENCH_TRACE").is_some();
-        let trace_start = std::time::Instant::now();
         let policy = {
             let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
             consensus.production_policy()
@@ -448,12 +446,6 @@ impl DagEngine {
                 .then_with(|| a.transaction_hash().cmp(b.transaction_hash()))
         });
         let tx_count = transactions.len();
-        if trace_bench {
-            eprintln!(
-                "trace produce: snapshot+sort {:.6}s",
-                trace_start.elapsed().as_secs_f64()
-            );
-        }
         if tx_count == 0 {
             anyhow::bail!("No new transactions to checkpoint");
         }
@@ -469,28 +461,12 @@ impl DagEngine {
                 .saturating_add(1)
                 .max(chain.height().saturating_add(1))
         };
-        let phase_start = std::time::Instant::now();
         let (state_root, executed, failed, verified_state, to_execute, receipts, validate_supply) = {
-            let inner_start = std::time::Instant::now();
             let state_snapshot = self.engine.state_read().clone();
-            if trace_bench {
-                eprintln!(
-                    "trace produce: state clone {:.6}s",
-                    inner_start.elapsed().as_secs_f64()
-                );
-            }
             let state_arc = Arc::new(RwLock::new(state_snapshot));
-            let inner_start = std::time::Instant::now();
             self.engine
                 .execute_system_prologue_to_state_for_dag_v2(&state_arc, timestamp)?;
-            if trace_bench {
-                eprintln!(
-                    "trace produce: prologue {:.6}s",
-                    inner_start.elapsed().as_secs_f64()
-                );
-            }
             let mut validate_supply = true;
-            let inner_start = std::time::Instant::now();
             let execution = match self
                 .engine
                 .apply_zero_effect_native_batch(&transactions, &state_arc)?
@@ -512,28 +488,8 @@ impl DagEngine {
                         false,
                     )?,
             };
-            if trace_bench {
-                eprintln!(
-                    "trace produce: tx apply {:.6}s",
-                    inner_start.elapsed().as_secs_f64()
-                );
-            }
-            let inner_start = std::time::Instant::now();
             let verified_state = state_arc.read().unwrap_or_else(|e| e.into_inner()).clone();
-            if trace_bench {
-                eprintln!(
-                    "trace produce: verified clone {:.6}s",
-                    inner_start.elapsed().as_secs_f64()
-                );
-            }
-            let inner_start = std::time::Instant::now();
             let state_root = verified_state.compute_state_root();
-            if trace_bench {
-                eprintln!(
-                    "trace produce: state root {:.6}s",
-                    inner_start.elapsed().as_secs_f64()
-                );
-            }
             (
                 state_root,
                 execution.executed,
@@ -548,14 +504,7 @@ impl DagEngine {
                 validate_supply,
             )
         };
-        if trace_bench {
-            eprintln!(
-                "trace produce: execute+root {:.6}s",
-                phase_start.elapsed().as_secs_f64()
-            );
-        }
 
-        let phase_start = std::time::Instant::now();
         let mysticeti_block = {
             let mut consensus = self.consensus.write().unwrap_or_else(|e| e.into_inner());
             consensus
@@ -569,14 +518,7 @@ impl DagEngine {
                 policy.target_round,
                 policy.parent_ids,
             ));
-        if trace_bench {
-            eprintln!(
-                "trace produce: mysticeti {:.6}s",
-                phase_start.elapsed().as_secs_f64()
-            );
-        }
 
-        let phase_start = std::time::Instant::now();
         let mut vertex = DagVertex::new(
             round,
             self.authority_id.clone(),
@@ -587,17 +529,15 @@ impl DagEngine {
             timestamp,
         );
         vertex.id = vertex_id;
-        vertex.cached_hash = Some(vertex_id.to_vec());
+        let signing_digest = vertex.signing_digest()?;
+        vertex.cached_signing_digest = Some(signing_digest.to_vec());
         use ed25519_dalek::Signer;
-        vertex.signature = self.local_signing_key.sign(&vertex.id).to_bytes().to_vec();
-        if trace_bench {
-            eprintln!(
-                "trace produce: vertex+sign {:.6}s",
-                phase_start.elapsed().as_secs_f64()
-            );
-        }
+        vertex.signature = self
+            .local_signing_key
+            .sign(&signing_digest)
+            .to_bytes()
+            .to_vec();
 
-        let phase_start = std::time::Instant::now();
         self.stage_locally_produced_vertex(
             &vertex,
             verified_state,
@@ -605,20 +545,7 @@ impl DagEngine {
             receipts,
             validate_supply,
         )?;
-        if trace_bench {
-            eprintln!(
-                "trace produce: stage {:.6}s",
-                phase_start.elapsed().as_secs_f64()
-            );
-        }
-        let phase_start = std::time::Instant::now();
         let checkpoint = self.finalize_staged_checkpoint(vertex.id)?;
-        if trace_bench {
-            eprintln!(
-                "trace produce: finalize {:.6}s",
-                phase_start.elapsed().as_secs_f64()
-            );
-        }
         let checkpoint_info = Some(CheckpointInfo {
             sequence: checkpoint.sequence,
             vertex_count: checkpoint.vertices.len(),
@@ -642,7 +569,6 @@ impl DagEngine {
             vertex: Some(vertex),
         })
     }
-
     fn stage_locally_produced_vertex(
         &self,
         vertex: &DagVertex,

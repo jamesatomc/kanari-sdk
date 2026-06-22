@@ -9,16 +9,20 @@ impl BlockchainEngine {
             || PersistentStore::open_with_path(Some(std::path::PathBuf::from(dir))),
             &format!("at '{}'", dir),
         )?;
-        Self::init(persistent_store)
+        Self::init_with_options(persistent_store, false)
     }
 
     pub fn new() -> Result<Self> {
         let persistent_store = Self::try_open_store(PersistentStore::open_default, "default")?;
-        Self::init(persistent_store)
+        Self::init_with_options(persistent_store, false)
     }
 
     pub fn new_in_memory() -> Result<Self> {
-        Self::init(None)
+        Self::init_with_options(None, false)
+    }
+
+    pub fn new_in_memory_with_smt() -> Result<Self> {
+        Self::init_with_options(None, true)
     }
 
     fn try_open_store<F>(opener: F, context: &str) -> Result<Option<Arc<PersistentStore>>>
@@ -50,7 +54,10 @@ impl BlockchainEngine {
         }
     }
 
-    fn init(persistent_store: Option<Arc<PersistentStore>>) -> Result<Self> {
+    fn init_with_options(
+        persistent_store: Option<Arc<PersistentStore>>,
+        enable_in_memory_smt: bool,
+    ) -> Result<Self> {
         tracing::info!("Loading blockchain checkpoints");
         let mut blockchain = Self::load_blockchain(&persistent_store);
         tracing::info!("Loading Mysticeti DAG state");
@@ -65,7 +72,7 @@ impl BlockchainEngine {
             }
         }
         tracing::info!("Opening state database");
-        let state = Self::load_state(&persistent_store)?;
+        let state = Self::load_state(&persistent_store, enable_in_memory_smt)?;
 
         let workers = Self::runtime_worker_count();
         let mut runtime_pool = Vec::new();
@@ -237,13 +244,21 @@ impl BlockchainEngine {
         }
     }
 
-    fn load_state(store: &Option<Arc<PersistentStore>>) -> Result<Arc<RwLock<StateManager>>> {
+    fn load_state(
+        store: &Option<Arc<PersistentStore>>,
+        enable_in_memory_smt: bool,
+    ) -> Result<Arc<RwLock<StateManager>>> {
         let store = match store.clone() {
             Some(store) => store,
             None => Arc::new(PersistentStore::open_in_memory()?),
         };
         info!("Initializing StateManager with persistent store support (RocksDB)");
-        Ok(Arc::new(RwLock::new(StateManager::try_new(store)?)))
+        let state = if enable_in_memory_smt && store.get_db().is_none() {
+            StateManager::try_new_with_in_memory_smt(store)?
+        } else {
+            StateManager::try_new(store)?
+        };
+        Ok(Arc::new(RwLock::new(state)))
     }
 
     fn load_dag_state(store: &Option<Arc<PersistentStore>>) -> Option<PersistentDagState> {

@@ -177,12 +177,6 @@ impl BlockchainEngine {
                     .iter()
                     .map(|tx| tx.transaction_hash().to_vec())
                     .collect();
-                let removed_transactions = mempool
-                    .pending_txs
-                    .iter()
-                    .filter(|tx| committed_hashes.contains(tx.transaction_hash()))
-                    .cloned()
-                    .collect::<Vec<_>>();
                 mempool
                     .pending_txs
                     .retain(|tx| !committed_hashes.contains(tx.transaction_hash()));
@@ -191,7 +185,7 @@ impl BlockchainEngine {
                     .retain(|hash| !committed_hashes.contains(hash));
                 Self::remove_pending_sender_counts(
                     &mut mempool.pending_sender_counts,
-                    &removed_transactions,
+                    checkpoint.transactions.as_ref(),
                 );
             }
         }

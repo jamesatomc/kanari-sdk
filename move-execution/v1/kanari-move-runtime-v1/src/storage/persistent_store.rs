@@ -227,6 +227,11 @@ impl PersistentStore {
         self.db.clone()
     }
 
+    /// Expose the in-memory backend for components that can operate without RocksDB.
+    pub fn get_memory_store(&self) -> Option<MemoryStore> {
+        self.memory_store.clone()
+    }
+
     /// Apply a write batch atomically.
     pub fn apply_batch(
         &self,

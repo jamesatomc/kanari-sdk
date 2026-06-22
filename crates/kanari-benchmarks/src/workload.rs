@@ -9,7 +9,14 @@ use kanari_types::{
 };
 
 pub fn prepare_engine() -> Result<BlockchainEngine> {
-    let mut engine = BlockchainEngine::new_in_memory()?;
+    let use_in_memory_smt = std::env::var("KANARI_BENCH_IN_MEMORY_SMT")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    let mut engine = if use_in_memory_smt {
+        BlockchainEngine::new_in_memory_with_smt()?
+    } else {
+        BlockchainEngine::new_in_memory()?
+    };
 
     let keypair = kanari_crypto::keys::generate_keypair(CurveType::Ed25519)?;
     let hex_part = keypair.private_key.as_str().trim_start_matches("kanari");
