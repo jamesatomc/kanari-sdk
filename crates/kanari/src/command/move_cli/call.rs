@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::command::common::{
-    build_blocking_client, get_account_sequence, get_rpc_endpoint, get_sender_for_tx,
-    load_wallet_for, normalize_addr, resolve_sender,
+    build_blocking_client, ensure_can_pay_gas, get_account_info, get_rpc_endpoint,
+    get_sender_for_tx, load_wallet_for, normalize_addr, resolve_sender,
 };
 use anyhow::{Context, Result};
 use clap::*;
 use kanari_rpc_api::{CallFunctionRequest, RpcRequest, RpcResponse, methods};
 use kanari_types::GasConfig;
-use kanari_types::gas_v2::{GasEstimate, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
+use kanari_types::{GasEstimate, GasOperation};
 use log::error;
 use move_core_types::{account_address::AccountAddress, parser, runtime_value::MoveValue};
 
@@ -143,7 +143,14 @@ impl Call {
 
         // Query account sequence number so signature and RPC include it (fail-fast)
         let client = build_blocking_client(30)?;
-        let seq_num: u64 = get_account_sequence(&client, &rpc, &sender_for_tx)?;
+        let account = get_account_info(&client, &rpc, &sender_for_tx)?;
+        ensure_can_pay_gas(
+            &account,
+            &sender_normalized,
+            estimate.total_cost_mist,
+            "function call",
+        )?;
+        let seq_num = account.sequence_number;
 
         // Sign transaction using the loaded wallet via SignedTransaction
         let signed_tx = {

@@ -11,7 +11,7 @@ pub use consensus::{
 };
 pub use engine::{
     BlockData, BlockchainEngine, BlockchainStats, CheckpointProductionInfo, CheckpointSyncData,
-    FullBlockData,
+    FullBlockData, TransactionExecutionReceipt,
 };
 
 pub use kanari_move_runtime_v1;

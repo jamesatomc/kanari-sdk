@@ -9,9 +9,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_api::CallFunctionRequest;
 use kanari_rpc_client::RpcClient;
-use kanari_types::GasConfig;
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use kanari_types::transaction::Transaction;
+use kanari_types::{GasConfig, GasOperation};
 
 fn read_coin_balance(data: &[u8]) -> Option<u64> {
     if data.len() < 40 {
@@ -108,16 +108,25 @@ impl Transfer {
             )
         })?;
 
-        if total_coin_balance < amount_mist {
+        let gas_fee = GasOperation::ExecuteFunction { complexity: 1 }
+            .gas_units()
+            .saturating_mul(gas_price);
+        let total_required = amount_mist
+            .checked_add(gas_fee)
+            .context("Transfer amount plus gas fee exceeds u64")?;
+
+        if total_coin_balance < total_required {
             anyhow::bail!(
-                "Insufficient Coin<{}> balance for {}.\n  - requested: {} Mist\n  - spendable in coin objects: {} Mist",
+                "Insufficient Coin<{}> balance for {}.\n  - requested transfer: {} Mist\n  - estimated gas fee: {} Mist\n  - required total: {} Mist\n  - spendable in coin objects: {} Mist\n\nIf you want to empty the wallet, send at most {} Mist so gas can still be paid.",
                 KANARI_TOKEN_TYPE,
                 from_addr,
                 amount_mist,
-                total_coin_balance
+                gas_fee,
+                total_required,
+                total_coin_balance,
+                total_coin_balance.saturating_sub(gas_fee)
             );
         }
-
         eprintln!("  Using coin object: {}", coin_object_id);
         eprintln!("  Selected Coin Balance (Mist): {}", selected_coin_balance);
         eprintln!(

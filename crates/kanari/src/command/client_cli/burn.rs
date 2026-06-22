@@ -3,12 +3,13 @@
 
 use crate::command::common::{
     check_node_connection, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, resolve_sender,
-    sign_and_submit_transaction,
+    sign_and_submit_transaction, spendable_kanari_balance,
 };
 use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_client::RpcClient;
 use kanari_types::transaction::Transaction;
+use kanari_types::{GasConfig, GasOperation};
 
 #[derive(Parser, Debug)]
 pub struct Burn {
@@ -53,6 +54,26 @@ impl Burn {
             .context("Failed to get sender account")?;
 
         let sender_for_tx = get_sender_for_tx(&wallet, &from_addr)?;
+        let gas = GasConfig::default();
+        let gas_fee = GasOperation::Transfer
+            .gas_units()
+            .saturating_mul(gas.default_transaction_gas_price());
+        let total_required = amount_mist
+            .checked_add(gas_fee)
+            .context("Burn amount plus gas fee exceeds u64")?;
+        let spendable_balance = spendable_kanari_balance(&account);
+
+        if spendable_balance < total_required {
+            anyhow::bail!(
+                "Insufficient KANARI balance for burn.\n  - burn amount: {} Mist\n  - estimated gas fee: {} Mist\n  - required total: {} Mist\n  - spendable balance: {} Mist",
+                amount_mist,
+                gas_fee,
+                total_required,
+                spendable_balance
+            );
+        }
+
+        eprintln!("  Estimated Gas Fee: {} Mist", gas_fee);
 
         // Create burn transaction
         let tx = Transaction::new_burn(sender_for_tx.clone(), amount_mist, account.sequence_number);

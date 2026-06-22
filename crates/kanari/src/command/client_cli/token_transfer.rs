@@ -3,13 +3,14 @@
 
 use crate::command::common::{
     check_node_connection, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, normalize_addr,
-    resolve_sender,
+    resolve_sender, spendable_kanari_balance,
 };
 use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_api::CallFunctionRequest;
 use kanari_rpc_client::RpcClient;
-use kanari_types::GasConfig;
+use kanari_types::kanari::KANARI_TOKEN_TYPE;
+use kanari_types::{GasConfig, GasOperation};
 use move_core_types::language_storage::TypeTag;
 use std::str::FromStr;
 
@@ -173,6 +174,36 @@ impl TokenTransfer {
         let gas = GasConfig::default();
         let gas_limit = gas.default_transaction_gas_limit();
         let gas_price = gas.default_transaction_gas_price();
+        let gas_fee = GasOperation::ExecuteFunction { complexity: 1 }
+            .gas_units()
+            .saturating_mul(gas_price);
+        let native_spendable_balance = spendable_kanari_balance(&account);
+
+        if wanted_token == normalize_token_type(KANARI_TOKEN_TYPE) {
+            let total_required = self
+                .amount
+                .checked_add(gas_fee)
+                .context("Token transfer amount plus gas fee exceeds u64")?;
+            if total_coin_balance < total_required {
+                anyhow::bail!(
+                    "Insufficient Coin<{}> balance for address {}.\n  - requested transfer: {}\n  - estimated gas fee: {} Mist\n  - required total: {}\n  - spendable in coin objects: {}",
+                    wanted_token,
+                    from_addr,
+                    self.amount,
+                    gas_fee,
+                    total_required,
+                    total_coin_balance
+                );
+            }
+        } else if native_spendable_balance < gas_fee {
+            anyhow::bail!(
+                "Insufficient KANARI balance for token transfer gas.\n  - estimated gas fee: {} Mist\n  - spendable KANARI balance: {} Mist",
+                gas_fee,
+                native_spendable_balance
+            );
+        }
+
+        eprintln!("  Estimated Gas Fee: {} Mist", gas_fee);
 
         // Parse token format: address::module::struct
         let module_parts: Vec<&str> = self.token.split("::").collect();

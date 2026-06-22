@@ -175,6 +175,14 @@ impl StateManager {
             .or_else(|| store.load::<u64>(&key).ok().flatten())
     }
 
+    fn load_supply_from_current_state(&self, token_type: &str) -> Result<Option<u64>> {
+        let key = Self::supply_key(token_type);
+        Ok(self
+            .load_internal::<TreasuryCap>(&key)?
+            .map(|cap| cap.total_supply)
+            .or(self.load_internal::<u64>(&key)?))
+    }
+
     fn issued_supply_for_token(&self, token_type: &str) -> u64 {
         if token_type == KANARI_TOKEN_TYPE {
             return self.total_supply;
@@ -464,7 +472,11 @@ impl StateManager {
         changed
     }
 
-    fn recompute_token_balances_for_owner(&mut self, owner: AccountAddress) -> Result<bool> {
+    fn recompute_token_balances_for_owner(
+        &mut self,
+        owner: AccountAddress,
+        native_balance_delta: i128,
+    ) -> Result<bool> {
         let mut account = self.load_account_or_default(owner)?;
         let old_balances = account.token_balances.clone();
         let mut aggregated: BTreeMap<String, u64> = BTreeMap::new();
@@ -500,6 +512,40 @@ impl StateManager {
             .into_iter()
             .map(|(token_type, amount)| (token_type, BalanceRecord::new(amount)))
             .collect();
+
+        // Object writebacks are canonical for wallet coins, while gas and native account
+        // operations live in AccountChange. Reapply the delta so writeback cannot erase gas.
+        if native_balance_delta > 0 {
+            let credit = u64::try_from(native_balance_delta)
+                .map_err(|_| anyhow::anyhow!("Native balance credit exceeds u64"))?;
+            let next = account
+                .native_balance()
+                .checked_add(credit)
+                .ok_or_else(|| anyhow::anyhow!("Native balance overflow for {}", owner))?;
+            account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(next));
+        } else if native_balance_delta < 0 {
+            let debit = u64::try_from(
+                native_balance_delta
+                    .checked_neg()
+                    .ok_or_else(|| anyhow::anyhow!("Native balance debit overflow"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("Native balance debit exceeds u64"))?;
+            let current = account.native_balance();
+            if current < debit {
+                anyhow::bail!(
+                    "Insufficient native object balance for {}: current={}, debit={}",
+                    owner,
+                    current,
+                    debit
+                );
+            }
+            let next = current - debit;
+            if next == 0 {
+                account.token_balances.remove(KANARI_TOKEN_TYPE);
+            } else {
+                account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(next));
+            }
+        }
         self.save_account(&account)?;
 
         Ok(self.adjust_global_supplies_for_account_delta(&old_balances, &account.token_balances))
@@ -1417,7 +1463,12 @@ impl StateManager {
         }
 
         for owner in owners_to_recompute {
-            if self.recompute_token_balances_for_owner(owner)? {
+            let native_balance_delta = changeset
+                .account_changes
+                .get(&owner)
+                .map(|change| change.balance_delta)
+                .unwrap_or(0);
+            if self.recompute_token_balances_for_owner(owner, native_balance_delta)? {
                 supplies_dirty = true;
             }
         }
@@ -1566,8 +1617,7 @@ impl StateManager {
     }
 
     pub fn validate_supply_invariants(&self) -> Result<()> {
-        let persisted_native_supply =
-            Self::load_persisted_supply_from_store(self.store.as_ref(), KANARI_TOKEN_TYPE);
+        let persisted_native_supply = self.load_supply_from_current_state(KANARI_TOKEN_TYPE)?;
         if let Some(persisted) = persisted_native_supply
             && persisted != self.total_supply
         {
@@ -1629,6 +1679,71 @@ mod tests {
         state.apply_changeset(&cs)?;
 
         assert_eq!(state.total_supply, 777);
+        Ok(())
+    }
+
+    #[test]
+    fn object_writeback_does_not_restore_native_gas_debit() -> Result<()> {
+        let sender = AccountAddress::from_hex_literal("0x1111")?;
+        let dao = AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS)?;
+        let mut state = StateManager::new_in_memory();
+        let base = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+        let dao_balance_before = state
+            .get_account(&dao)
+            .map(|account| account.native_balance())
+            .unwrap_or(0);
+
+        set_native_supply_for_test(&mut state, base.total_supply + 1_000)?;
+        let mut coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+        coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+
+        let mut create = ChangeSet::new();
+        create.created_objects.push((
+            "0xaaaa".to_string(),
+            CreatedObject {
+                owner: sender,
+                uid: None,
+                id: None,
+                type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+                data: coin_data.clone(),
+                version: 1,
+            },
+        ));
+        state.apply_changeset(&create)?;
+        assert_eq!(state.get_account(&sender).unwrap().native_balance(), 1_000);
+
+        let mut charge_gas_with_writeback = ChangeSet::new();
+        charge_gas_with_writeback.created_objects.push((
+            "0xaaaa".to_string(),
+            CreatedObject {
+                owner: sender,
+                uid: None,
+                id: None,
+                type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+                data: coin_data,
+                version: 2,
+            },
+        ));
+        charge_gas_with_writeback
+            .get_or_create_change(sender)
+            .debit(100);
+        charge_gas_with_writeback.collect_gas(dao, 100);
+
+        state.apply_changeset(&charge_gas_with_writeback)?;
+
+        assert_eq!(state.get_account(&sender).unwrap().native_balance(), 900);
+        assert_eq!(
+            state.get_account(&dao).unwrap().native_balance(),
+            dao_balance_before + 100
+        );
+        assert_eq!(
+            state
+                .token_supply_summary(KANARI_TOKEN_TYPE)?
+                .wallet_visible_supply,
+            base.wallet_visible_supply + 1_000
+        );
+        state.validate_supply_invariants()?;
+
         Ok(())
     }
 
@@ -1857,8 +1972,7 @@ mod tests {
 
         state
             .store
-            .save(b"module_index", &vec!["local".to_string()])?;
-        state.store.save(b"module:0x1:Local", &vec![1u8, 2, 3])?;
+            .save(b"tx_receipt/local", &"node-local-receipt")?;
         state
             .store
             .save(b"framework_hash:stdlib", &"node-local-hash")?;
@@ -1879,7 +1993,7 @@ mod tests {
         assert_eq!(
             root_before,
             state.compute_state_root(),
-            "runtime metadata and orphan object-storage keys must not affect canonical state root"
+            "node-local metadata and orphan object-storage keys must not affect canonical state root"
         );
 
         Ok(())

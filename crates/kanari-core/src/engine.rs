@@ -14,8 +14,8 @@ use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
 pub use kanari_rpc_api::{AccountInfo, BlockData, BlockchainStats, FullBlockData, ObjectInfo};
 use kanari_types::address::Address as KanariAddress;
 use kanari_types::event::Event;
-use kanari_types::gas_v2::{GasConfig, GasMeter, GasOperation};
 use kanari_types::transaction::{NativeCall, SignedTransaction, Transaction};
+use kanari_types::{GasConfig, GasMeter, GasOperation};
 use log::{error, info};
 use lru::LruCache;
 use move_core_types::{
@@ -53,6 +53,47 @@ const MAX_PERSISTED_RECENT_TX_HASHES: usize = 100_000;
 struct PersistedTransactionLocation {
     checkpoint_sequence: u64,
     state_root: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TransactionExecutionReceipt {
+    pub transaction_hash: Vec<u8>,
+    pub success: bool,
+    pub gas_used: u64,
+    pub error_message: Option<String>,
+}
+
+impl TransactionExecutionReceipt {
+    fn from_changeset(transaction: &SignedTransaction, changeset: &ChangeSet) -> Self {
+        Self {
+            transaction_hash: transaction.transaction_hash().to_vec(),
+            success: changeset.success,
+            gas_used: changeset.gas_used,
+            error_message: changeset.error_message.clone(),
+        }
+    }
+
+    fn success(transaction: &SignedTransaction) -> Self {
+        Self {
+            transaction_hash: transaction.transaction_hash().to_vec(),
+            success: true,
+            gas_used: 0,
+            error_message: None,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct TransactionBatchExecution {
+    pub executed: usize,
+    pub failed: usize,
+    pub receipts: Vec<TransactionExecutionReceipt>,
+}
+
+impl TransactionBatchExecution {
+    fn counts(&self) -> (usize, usize) {
+        (self.executed, self.failed)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -193,6 +234,12 @@ impl BlockchainEngine {
         key
     }
 
+    fn transaction_receipt_key(tx_hash: &[u8]) -> Vec<u8> {
+        let mut key = b"tx_receipt/".to_vec();
+        key.extend_from_slice(hex::encode(tx_hash).as_bytes());
+        key
+    }
+
     fn recent_transaction_hashes_key() -> &'static [u8] {
         b"tx_recent"
     }
@@ -306,6 +353,43 @@ impl BlockchainEngine {
                     e
                 );
                 e
+            })
+            .ok()
+            .flatten()
+    }
+
+    fn persist_transaction_receipts(&self, receipts: &[TransactionExecutionReceipt]) -> Result<()> {
+        let store = self.state_read().store.clone();
+        for receipt in receipts {
+            store
+                .save(
+                    &Self::transaction_receipt_key(&receipt.transaction_hash),
+                    receipt,
+                )
+                .with_context(|| {
+                    format!(
+                        "Failed to persist execution receipt for transaction {}",
+                        hex::encode(&receipt.transaction_hash)
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    pub fn get_transaction_execution_receipt(
+        &self,
+        tx_hash: &[u8],
+    ) -> Option<TransactionExecutionReceipt> {
+        let store = self.state_read().store.clone();
+        store
+            .load::<TransactionExecutionReceipt>(&Self::transaction_receipt_key(tx_hash))
+            .map_err(|error| {
+                tracing::warn!(
+                    tx_hash = %hex::encode(tx_hash),
+                    "Failed to load transaction execution receipt: {}",
+                    error
+                );
+                error
             })
             .ok()
             .flatten()
@@ -649,16 +733,19 @@ impl BlockchainEngine {
         persist_objects: bool,
         strict_mode: bool,
     ) -> Result<(usize, usize)> {
-        self.execute_tx_waves_parallel_inner(
-            transactions,
-            state_arc,
-            timestamp,
-            persist_objects,
-            strict_mode,
-            strict_mode,
-        )
+        Ok(self
+            .execute_tx_waves_parallel_inner(
+                transactions,
+                state_arc,
+                timestamp,
+                persist_objects,
+                strict_mode,
+                strict_mode,
+            )?
+            .counts())
     }
 
+    #[cfg(test)]
     pub(crate) fn execute_tx_waves_deterministic_parallel(
         &self,
         transactions: Vec<SignedTransaction>,
@@ -666,6 +753,40 @@ impl BlockchainEngine {
         timestamp: Option<u64>,
         persist_objects: bool,
     ) -> Result<(usize, usize)> {
+        Ok(self
+            .execute_tx_waves_deterministic_parallel_with_receipts(
+                transactions,
+                state_arc,
+                timestamp,
+                persist_objects,
+            )?
+            .counts())
+    }
+
+    pub(crate) fn execute_tx_waves_strict_serial(
+        &self,
+        transactions: Vec<SignedTransaction>,
+        state_arc: &Arc<RwLock<StateManager>>,
+        timestamp: Option<u64>,
+        persist_objects: bool,
+    ) -> Result<(usize, usize)> {
+        Ok(self
+            .execute_tx_waves_strict_serial_with_receipts(
+                transactions,
+                state_arc,
+                timestamp,
+                persist_objects,
+            )?
+            .counts())
+    }
+
+    pub(crate) fn execute_tx_waves_deterministic_parallel_with_receipts(
+        &self,
+        transactions: Vec<SignedTransaction>,
+        state_arc: &Arc<RwLock<StateManager>>,
+        timestamp: Option<u64>,
+        persist_objects: bool,
+    ) -> Result<TransactionBatchExecution> {
         self.execute_tx_waves_parallel_inner(
             transactions,
             state_arc,
@@ -676,13 +797,13 @@ impl BlockchainEngine {
         )
     }
 
-    pub(crate) fn execute_tx_waves_strict_serial(
+    pub(crate) fn execute_tx_waves_strict_serial_with_receipts(
         &self,
         transactions: Vec<SignedTransaction>,
         state_arc: &Arc<RwLock<StateManager>>,
         timestamp: Option<u64>,
         persist_objects: bool,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<TransactionBatchExecution> {
         self.execute_tx_waves_parallel_inner(
             transactions,
             state_arc,
@@ -751,9 +872,8 @@ impl BlockchainEngine {
         persist_objects: bool,
         serial_execution: bool,
         fail_hard: bool,
-    ) -> Result<(usize, usize)> {
-        let mut executed_count = 0;
-        let mut failed_count = 0;
+    ) -> Result<TransactionBatchExecution> {
+        let mut batch = TransactionBatchExecution::default();
         let has_module_publish = transactions
             .iter()
             .any(|tx| matches!(tx.transaction, Transaction::PublishModule { .. }));
@@ -763,8 +883,6 @@ impl BlockchainEngine {
                 self.runtime_pool[0].reload_vm_cache()?;
             }
 
-            let mut executed_count = 0;
-            let failed_count = 0;
             for signed_tx in transactions {
                 let changeset = self.execute_transaction_with_runtime_internal(
                     &signed_tx.transaction,
@@ -792,10 +910,19 @@ impl BlockchainEngine {
                 state_write
                     .apply_changeset(&changeset)
                     .map_err(|e| anyhow::anyhow!("Failed to apply changeset: {}", e))?;
-                executed_count += 1;
+                if changeset.success {
+                    batch.executed += 1;
+                } else {
+                    batch.failed += 1;
+                }
+                batch
+                    .receipts
+                    .push(TransactionExecutionReceipt::from_changeset(
+                        &signed_tx, &changeset,
+                    ));
             }
 
-            return Ok((executed_count, failed_count));
+            return Ok(batch);
         }
 
         let waves = kanari_move_runtime_v1::TransactionScheduler::schedule(transactions);
@@ -843,7 +970,7 @@ impl BlockchainEngine {
                 let mut wave_changeset = ChangeSet::new();
                 let mut wave_executed = 0usize;
 
-                for res in results {
+                for (signed_tx, res) in wave.iter().zip(results) {
                     let cs = res.map_err(|e| anyhow::anyhow!("Execution failed: {}", e))?;
 
                     if persist_objects {
@@ -852,6 +979,14 @@ impl BlockchainEngine {
                         runtime.persist_deleted_objects(&cs);
                     }
 
+                    if cs.success {
+                        batch.executed += 1;
+                    } else {
+                        batch.failed += 1;
+                    }
+                    batch
+                        .receipts
+                        .push(TransactionExecutionReceipt::from_changeset(signed_tx, &cs));
                     wave_changeset.merge(cs);
                     wave_executed += 1;
                 }
@@ -871,7 +1006,6 @@ impl BlockchainEngine {
                 state_write
                     .apply_changeset_without_supply_validation(&wave_changeset)
                     .map_err(|e| anyhow::anyhow!("Failed to apply changeset: {}", e))?;
-                executed_count += wave_executed;
             } else {
                 // Apply changesets with proper error handling to prevent node crashes
                 let mut state_write = match state_arc.write() {
@@ -882,7 +1016,7 @@ impl BlockchainEngine {
                     }
                 };
 
-                for res in results {
+                for (signed_tx, res) in wave.iter().zip(results) {
                     match res {
                         Ok(cs) => {
                             if persist_objects {
@@ -891,23 +1025,37 @@ impl BlockchainEngine {
                                 runtime.persist_deleted_objects(&cs);
                             }
 
+                            let mut receipt =
+                                TransactionExecutionReceipt::from_changeset(signed_tx, &cs);
                             if let Err(e) = state_write.apply_changeset(&cs) {
                                 log::warn!("apply_changeset failed: {}", e);
-                                failed_count += 1;
+                                receipt.success = false;
+                                receipt.error_message =
+                                    Some(format!("Failed to apply transaction changeset: {}", e));
+                                batch.failed += 1;
+                            } else if cs.success {
+                                batch.executed += 1;
                             } else {
-                                executed_count += 1;
+                                batch.failed += 1;
                             }
+                            batch.receipts.push(receipt);
                         }
                         Err(e) => {
                             log::warn!("Parallel execution failed: {}", e);
-                            failed_count += 1;
+                            batch.failed += 1;
+                            batch.receipts.push(TransactionExecutionReceipt {
+                                transaction_hash: signed_tx.transaction_hash().to_vec(),
+                                success: false,
+                                gas_used: 0,
+                                error_message: Some(format!("Execution failed: {}", e)),
+                            });
                         }
                     }
                 }
             }
         }
 
-        Ok((executed_count, failed_count))
+        Ok(batch)
     }
 
     pub(crate) fn checkpoint_root_matches(
@@ -958,6 +1106,34 @@ impl BlockchainEngine {
             }
             Transaction::ExecuteFunction { .. } => GasOperation::ExecuteFunction { complexity: 1 },
         }
+    }
+
+    fn object_native_transfer_amount(tx: &Transaction) -> Option<u64> {
+        let Transaction::ExecuteFunction {
+            module,
+            function,
+            args,
+            ..
+        } = tx
+        else {
+            return None;
+        };
+
+        if module != Transaction::KANARI_MODULE
+            || function != Transaction::TRANSFER_AMOUNT_FUNCTION
+            || args.len() < 2
+        {
+            return None;
+        }
+
+        bcs::from_bytes::<u64>(&args[1]).ok()
+    }
+
+    fn required_native_amount_for_transaction(tx: &Transaction) -> u64 {
+        tx.native_call()
+            .map(|call| call.required_native_amount())
+            .or_else(|| Self::object_native_transfer_amount(tx))
+            .unwrap_or(0)
     }
 
     fn validate_transaction_gas(tx: &Transaction) -> Result<()> {
@@ -1018,10 +1194,7 @@ impl BlockchainEngine {
 
         let native_call = tx.native_call();
         let gas_op = Self::gas_operation_for_transaction(tx);
-        let required_amount = native_call
-            .as_ref()
-            .map(NativeCall::required_native_amount)
-            .unwrap_or(0);
+        let required_amount = Self::required_native_amount_for_transaction(tx);
 
         gas_meter.consume(gas_op.gas_units())?;
         let gas_cost = gas_meter.total_cost();
@@ -1078,9 +1251,7 @@ impl BlockchainEngine {
             return Ok(changeset);
         }
 
-        if native_call.as_ref().is_some_and(|call| {
-            call.required_native_amount() > (i64::MAX as u64).saturating_sub(gas_cost)
-        }) {
+        if required_amount > (i64::MAX as u64).saturating_sub(gas_cost) {
             changeset.mark_failed("Native amount exceeds the supported range".to_string());
             Self::apply_gas_and_sequence(
                 &mut changeset,
@@ -1367,8 +1538,6 @@ mod tests {
     use crate::consensus::{Checkpoint, PersistentDagState};
     use kanari_crypto::keys::{CurveType, generate_keypair};
     use kanari_move_runtime_v1::changeset::ChangeSet;
-    use kanari_move_runtime_v1::state::Account;
-    use kanari_types::balance::BalanceRecord;
     use kanari_types::kanari::KANARI_TOKEN_TYPE;
     use kanari_types::transaction::{SignedTransaction, Transaction};
     use move_core_types::account_address::AccountAddress;
@@ -1397,14 +1566,17 @@ mod tests {
 
     fn fund_sender(engine: &BlockchainEngine, address: &str, balance: u64) {
         let addr = AccountAddress::from_hex_literal(address).unwrap();
-        let mut account = Account::with_native_balance(addr, balance);
-        account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(balance));
-        engine
-            .state
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .save_account(&account)
-            .unwrap();
+        let dao =
+            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+        let mut state = engine.state.write().unwrap_or_else(|e| e.into_inner());
+
+        let mut mint = ChangeSet::new();
+        mint.mint(addr, balance);
+        state.apply_changeset(&mint).unwrap();
+
+        let mut treasury = ChangeSet::new();
+        treasury.add_treasury(dao, KANARI_TOKEN_TYPE.to_string(), state.total_supply);
+        state.apply_changeset(&treasury).unwrap();
     }
 
     fn secure_consensus_keys(
@@ -1692,7 +1864,11 @@ mod tests {
         assert!(changeset.success);
         assert_eq!(
             changeset.gas_used,
-            kanari_types::gas_v2::GasOperation::Transfer.gas_units()
+            kanari_types::gas::GasOperation::Transfer.gas_units()
+        );
+        let gas_cost = i128::from(
+            kanari_types::gas::GasOperation::Transfer.gas_units()
+                * kanari_types::gas::GasConfig::default().default_transaction_gas_price(),
         );
         assert_eq!(
             changeset
@@ -1700,11 +1876,144 @@ mod tests {
                 .get(&sender_address)
                 .unwrap()
                 .balance_delta,
-            -100_001
+            -(gas_cost + 1)
         );
         assert_eq!(
             changeset.account_changes.get(&dao).unwrap().balance_delta,
-            100_000
+            gas_cost
+        );
+    }
+
+    #[test]
+    fn applied_native_transfer_debits_sender_fee_and_credits_dao() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        fund_sender(&engine, &sender.address, 1_000_000);
+
+        let tx =
+            Transaction::new_transfer(sender.tagged_address(), recipient.address.clone(), 10, 0);
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+
+        let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+        let recipient_address = AccountAddress::from_hex_literal(&recipient.address).unwrap();
+        let dao =
+            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+        let dao_before = engine
+            .state_read()
+            .get_account(&dao)
+            .map(|account| account.native_balance())
+            .unwrap_or(0);
+        let gas_cost = kanari_types::gas::GasOperation::Transfer.gas_units()
+            * kanari_types::gas::GasConfig::default().default_transaction_gas_price();
+
+        let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+        assert!(changeset.success);
+
+        let mut state = engine.state_write();
+        state.apply_changeset(&changeset).unwrap();
+
+        assert_eq!(
+            state.get_account(&sender_address).unwrap().native_balance(),
+            1_000_000 - 10 - gas_cost
+        );
+        assert_eq!(
+            state
+                .get_account(&recipient_address)
+                .unwrap()
+                .native_balance(),
+            10
+        );
+        assert_eq!(
+            state.get_account(&dao).unwrap().native_balance(),
+            dao_before + gas_cost
+        );
+        state.validate_supply_invariants().unwrap();
+    }
+    #[test]
+    fn object_transfer_full_balance_fails_before_runtime_and_charges_gas_only() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        fund_sender(&engine, &sender.address, 1_000_000);
+
+        let gas = kanari_types::gas::GasConfig::default();
+        let tx = Transaction::ExecuteFunction {
+            sender: sender.tagged_address(),
+            module: Transaction::KANARI_MODULE.to_string(),
+            function: Transaction::TRANSFER_AMOUNT_FUNCTION.to_string(),
+            type_args: vec![],
+            args: vec![
+                AccountAddress::random().to_vec(),
+                bcs::to_bytes(&1_000_000u64).unwrap(),
+                bcs::to_bytes(&AccountAddress::from_hex_literal(&recipient.address).unwrap())
+                    .unwrap(),
+            ],
+            gas_limit: gas.default_transaction_gas_limit(),
+            gas_price: gas.default_transaction_gas_price(),
+            sequence_number: 0,
+        };
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+
+        let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+        let gas_cost = i128::from(
+            kanari_types::gas::GasOperation::ExecuteFunction { complexity: 1 }.gas_units()
+                * gas.default_transaction_gas_price(),
+        );
+
+        let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+
+        assert!(!changeset.success);
+        assert!(
+            changeset
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("Insufficient balance"))
+        );
+        assert_eq!(
+            changeset
+                .account_changes
+                .get(&sender_address)
+                .unwrap()
+                .balance_delta,
+            -gas_cost
+        );
+    }
+    #[test]
+    fn failed_execution_produces_and_persists_receipt() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let signed_tx = signed_transfer_from(&sender, 0);
+        let tx_hash = signed_tx.transaction_hash().to_vec();
+        let state = Arc::new(RwLock::new(engine.state_read().clone()));
+
+        let execution = engine
+            .execute_tx_waves_strict_serial_with_receipts(vec![signed_tx], &state, Some(123), false)
+            .unwrap();
+
+        assert_eq!(execution.executed, 0);
+        assert_eq!(execution.failed, 1);
+        assert_eq!(execution.receipts.len(), 1);
+        assert!(!execution.receipts[0].success);
+        assert!(
+            execution.receipts[0]
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("Insufficient balance"))
+        );
+
+        engine
+            .persist_transaction_receipts(&execution.receipts)
+            .unwrap();
+        assert_eq!(
+            engine.get_transaction_execution_receipt(&tx_hash),
+            Some(execution.receipts[0].clone())
         );
     }
 

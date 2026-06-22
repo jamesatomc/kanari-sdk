@@ -6,7 +6,7 @@ use crate::changeset::ChangeSet;
 use anyhow::{Result, ensure};
 use kanari_types::GasConfig;
 use kanari_types::address::Address as KanariAddress;
-use kanari_types::gas_v2::{GasMeter, GasOperation};
+use kanari_types::{GasMeter, GasOperation};
 use move_core_types::account_address::AccountAddress;
 
 use move_core_types::language_storage::ModuleId;

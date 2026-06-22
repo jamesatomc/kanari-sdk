@@ -57,6 +57,7 @@ struct StagedCheckpoint {
     checkpoint: Checkpoint,
     verified_state: StateManager,
     to_execute: Vec<SignedTransaction>,
+    receipts: Vec<TransactionExecutionReceipt>,
     validate_supply: bool,
 }
 
@@ -460,39 +461,49 @@ impl DagEngine {
                 .saturating_add(1)
                 .max(chain.height().saturating_add(1))
         };
-        let (state_root, executed, failed, verified_state, to_execute, validate_supply) = {
+        let (state_root, executed, failed, verified_state, to_execute, receipts, validate_supply) = {
             let state_snapshot = self.engine.state_read().clone();
             let state_arc = Arc::new(RwLock::new(state_snapshot));
             self.engine
                 .execute_system_prologue_to_state_for_dag_v2(&state_arc, timestamp)?;
             let mut validate_supply = true;
-            let (executed, failed) = match self
+            let execution = match self
                 .engine
                 .apply_zero_effect_native_batch(&transactions, &state_arc)?
             {
-                Some(result) => {
+                Some((executed, failed)) => {
                     validate_supply = false;
-                    result
+                    TransactionBatchExecution {
+                        executed,
+                        failed,
+                        receipts: transactions
+                            .iter()
+                            .map(TransactionExecutionReceipt::success)
+                            .collect(),
+                    }
                 }
-                None => self.engine.execute_tx_waves_deterministic_parallel(
-                    transactions.clone(),
-                    &state_arc,
-                    Some(timestamp),
-                    false,
-                )?,
+                None => self
+                    .engine
+                    .execute_tx_waves_deterministic_parallel_with_receipts(
+                        transactions.clone(),
+                        &state_arc,
+                        Some(timestamp),
+                        false,
+                    )?,
             };
             let verified_state = state_arc.read().unwrap_or_else(|e| e.into_inner()).clone();
             let state_root = verified_state.compute_state_root();
             (
                 state_root,
-                executed,
-                failed,
+                execution.executed,
+                execution.failed,
                 verified_state,
                 if validate_supply {
                     transactions.clone()
                 } else {
                     Vec::new()
                 },
+                execution.receipts,
                 validate_supply,
             )
         };
@@ -529,7 +540,13 @@ impl DagEngine {
             .to_bytes()
             .to_vec();
 
-        self.stage_locally_produced_vertex(&vertex, verified_state, to_execute, validate_supply)?;
+        self.stage_locally_produced_vertex(
+            &vertex,
+            verified_state,
+            to_execute,
+            receipts,
+            validate_supply,
+        )?;
         let checkpoint = self.finalize_staged_checkpoint(vertex.id)?;
         let checkpoint_info = Some(CheckpointInfo {
             sequence: checkpoint.sequence,
@@ -560,6 +577,7 @@ impl DagEngine {
         vertex: &DagVertex,
         verified_state: StateManager,
         to_execute: Vec<SignedTransaction>,
+        receipts: Vec<TransactionExecutionReceipt>,
         validate_supply: bool,
     ) -> Result<Checkpoint> {
         {
@@ -594,6 +612,7 @@ impl DagEngine {
                 checkpoint: checkpoint.clone(),
                 verified_state,
                 to_execute,
+                receipts,
                 validate_supply,
             },
         );
@@ -617,6 +636,7 @@ impl DagEngine {
             staged.checkpoint.clone(),
             staged.verified_state,
             staged.to_execute,
+            staged.receipts,
             staged.validate_supply,
         )?;
 

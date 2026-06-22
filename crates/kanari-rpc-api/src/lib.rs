@@ -219,6 +219,8 @@ pub struct TransactionDetails {
     pub status: String,
     pub block_height: Option<u64>,
     pub gas_used: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
     pub tx_type: String,
     pub sender: String,
     #[serde(skip_serializing_if = "Option::is_none")]

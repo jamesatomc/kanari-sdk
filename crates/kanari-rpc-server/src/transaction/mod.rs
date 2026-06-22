@@ -169,6 +169,7 @@ fn base_transaction_details(
         status,
         block_height,
         gas_used: None,
+        error_message: None,
         tx_type: tx_type.to_string(),
         sender,
         sender_address: Some(sender_address),
@@ -179,6 +180,22 @@ fn base_transaction_details(
         function: None,
         module_functions: None,
     }
+}
+
+fn apply_execution_receipt(
+    details: &mut TransactionDetails,
+    receipt: Option<&kanari_core::TransactionExecutionReceipt>,
+) {
+    let Some(receipt) = receipt else {
+        return;
+    };
+    details.status = if receipt.success {
+        "success".to_string()
+    } else {
+        "failed".to_string()
+    };
+    details.gas_used = Some(receipt.gas_used);
+    details.error_message = receipt.error_message.clone();
 }
 
 // =========================================================================
@@ -193,7 +210,14 @@ fn map_transaction_to_details(
     state_root_hex: Option<String>,
 ) -> TransactionDetails {
     let hash = format!("0x{}", tx_hash_hex);
-    let status_str = status.to_string();
+    let receipt = hex::decode(tx_hash_hex)
+        .ok()
+        .and_then(|tx_hash| state.engine.get_transaction_execution_receipt(&tx_hash));
+    let status_str = receipt
+        .as_ref()
+        .map(|receipt| if receipt.success { "success" } else { "failed" })
+        .unwrap_or(status)
+        .to_string();
     let sender_address = Address::parse_to_account_address(tx.sender_address())
         .map(|addr| addr.to_hex_literal())
         .unwrap_or_else(|_| tx.sender_address().to_string());
@@ -230,6 +254,7 @@ fn map_transaction_to_details(
             );
             details.module = Some(module_name.clone());
             details.module_functions = module_funcs;
+            apply_execution_receipt(&mut details, receipt.as_ref());
             details
         }
         Transaction::ExecuteFunction {
@@ -258,6 +283,7 @@ fn map_transaction_to_details(
             if let Some(NativeCall::TransferAmount { recipient, .. }) = tx.native_call() {
                 details.module = Some(format!("To: {}", recipient));
             }
+            apply_execution_receipt(&mut details, receipt.as_ref());
             details
         }
     }

@@ -11,6 +11,10 @@ license.workspace = true
 repository.workspace = true
 description.workspace = true
 
+[features]
+default = []
+zero-gas = []
+
 [dependencies]
 move-core-types = { workspace = true}
 # Error handling

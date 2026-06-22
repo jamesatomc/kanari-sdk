@@ -360,7 +360,7 @@ impl Transaction {
 
     /// Create a transfer transaction with default gas settings
     pub fn new_transfer(from: String, to: String, amount: u64, sequence_number: u64) -> Self {
-        let gas = crate::gas_v2::GasConfig::default();
+        let gas = crate::gas::GasConfig::default();
         Self::new_transfer_with_gas(
             from,
             to,
@@ -396,7 +396,7 @@ impl Transaction {
 
     /// Create a burn transaction with default gas settings
     pub fn new_burn(from: String, amount: u64, sequence_number: u64) -> Self {
-        let gas = crate::gas_v2::GasConfig::default();
+        let gas = crate::gas::GasConfig::default();
         Self::new_burn_with_gas(
             from,
             amount,
@@ -443,7 +443,7 @@ mod tests {
                 sequence_number,
                 ..
             } => {
-                let gas = crate::gas_v2::GasConfig::default();
+                let gas = crate::gas::GasConfig::default();
                 assert_eq!(module, Transaction::KANARI_MODULE);
                 assert_eq!(function, Transaction::TRANSFER_AMOUNT_FUNCTION);
                 assert_eq!(*gas_limit, gas.default_transaction_gas_limit());

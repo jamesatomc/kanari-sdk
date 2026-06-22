@@ -3,14 +3,14 @@
 
 use super::reroot_path;
 use crate::command::common::{
-    build_blocking_client, get_account_sequence, get_rpc_endpoint, get_sender_for_tx,
-    load_wallet_for, normalize_addr, resolve_sender,
+    build_blocking_client, ensure_can_pay_gas, get_account_info, get_rpc_endpoint,
+    get_sender_for_tx, load_wallet_for, normalize_addr, resolve_sender,
 };
 use anyhow::{Result, bail};
 use clap::*;
 use kanari_types::GasConfig;
-use kanari_types::gas_v2::{GasEstimate, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
+use kanari_types::{GasEstimate, GasOperation};
 use log::error;
 use move_package::BuildConfig;
 use std::path::PathBuf;
@@ -81,6 +81,7 @@ impl Publish {
 
         // Optionally show total estimated gas for all modules that will be published
         let mut total_estimated_gas: u64 = 0;
+        let mut total_estimated_gas_cost: u64 = 0;
         for mu in &modules_to_publish {
             let mut bytes = vec![];
             mu.unit.module.serialize(&mut bytes)?;
@@ -89,6 +90,7 @@ impl Publish {
             };
             let est = GasEstimate::from_operation(op, gas_price);
             total_estimated_gas = total_estimated_gas.saturating_add(est.gas_units);
+            total_estimated_gas_cost = total_estimated_gas_cost.saturating_add(est.total_cost_mist);
         }
         if modules_to_publish.len() > 1 {
             eprintln!(
@@ -123,7 +125,14 @@ impl Publish {
         let mut skipped_count = 0;
 
         // === Fetch base sequence number once to avoid race conditions ===
-        let base_seq: u64 = get_account_sequence(&client, &rpc, &sender_for_tx)?;
+        let account = get_account_info(&client, &rpc, &sender_for_tx)?;
+        ensure_can_pay_gas(
+            &account,
+            &sender_normalized,
+            total_estimated_gas_cost,
+            "module publish",
+        )?;
+        let base_seq = account.sequence_number;
 
         // Next sequence to use for publishing modules (increment only when a module is actually published)
         let mut next_seq = base_seq;

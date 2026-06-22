@@ -11,6 +11,7 @@ use kanari_common::get_main_wallet;
 use kanari_rpc_api::SignedTransactionData;
 use kanari_rpc_client::RpcClient;
 use kanari_types::{
+    GasConfig, GasOperation,
     address::Address,
     kanari::KANARI_TOKEN_TYPE,
     transaction::{SignedTransaction, Transaction},
@@ -101,9 +102,13 @@ pub async fn request_from_dev(
     const MIST_PER_KANARI: f64 = 1_000_000_000.0;
     let amount_mist = (amount * MIST_PER_KANARI).round() as u64;
 
-    // Estimate gas cost (transfer typically costs ~1000 mist/gas * 100000 gas = 100M mist = 0.1 KANARI)
-    let estimated_gas_cost = 100_000 * 1000;
-    let total_required = amount_mist + estimated_gas_cost;
+    let gas = GasConfig::default();
+    let estimated_gas_cost = GasOperation::Transfer
+        .gas_units()
+        .saturating_mul(gas.default_transaction_gas_price());
+    let total_required = amount_mist
+        .checked_add(estimated_gas_cost)
+        .context("Faucet amount plus gas fee exceeds u64")?;
     let native_balance = account
         .token_balances
         .get(KANARI_TOKEN_TYPE)

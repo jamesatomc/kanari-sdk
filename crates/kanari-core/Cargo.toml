@@ -39,3 +39,7 @@ minibytes = { path = "../mysticeti/crates/minibytes", default-features = false }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[features]
+default = []
+zero-gas = ["kanari-types/zero-gas"]

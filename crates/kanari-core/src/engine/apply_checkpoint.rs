@@ -1,7 +1,7 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::BlockchainEngine;
+use super::{BlockchainEngine, TransactionExecutionReceipt};
 use crate::consensus::Checkpoint;
 use anyhow::{Context, Result, bail};
 use kanari_move_runtime_v1::state::StateManager;
@@ -68,7 +68,12 @@ impl BlockchainEngine {
     pub(crate) fn prepare_checkpoint_state(
         &self,
         checkpoint: &Checkpoint,
-    ) -> Result<(Vec<u8>, StateManager, Vec<SignedTransaction>)> {
+    ) -> Result<(
+        Vec<u8>,
+        StateManager,
+        Vec<SignedTransaction>,
+        Vec<TransactionExecutionReceipt>,
+    )> {
         let state_snapshot = self.state_read().clone();
         let state_arc = Arc::new(RwLock::new(state_snapshot));
         let to_execute: Vec<SignedTransaction> = {
@@ -87,7 +92,7 @@ impl BlockchainEngine {
             self.apply_system_prologue_to_state(&state_arc, checkpoint.timestamp, false)?;
         }
 
-        self.execute_tx_waves_strict_serial(
+        let execution = self.execute_tx_waves_strict_serial_with_receipts(
             to_execute.clone(),
             &state_arc,
             Some(checkpoint.timestamp),
@@ -96,7 +101,12 @@ impl BlockchainEngine {
 
         let verified_state = state_arc.read().unwrap_or_else(|e| e.into_inner()).clone();
         let computed_root = verified_state.compute_state_root();
-        Ok((computed_root, verified_state, to_execute))
+        Ok((
+            computed_root,
+            verified_state,
+            to_execute,
+            execution.receipts,
+        ))
     }
 
     /// Helper: Common steps for finalizing Checkpoint to database
@@ -104,6 +114,7 @@ impl BlockchainEngine {
         &self,
         checkpoint: Checkpoint,
         new_state: StateManager,
+        receipts: Vec<TransactionExecutionReceipt>,
         validate_supply: bool,
     ) -> Result<()> {
         if validate_supply {
@@ -119,6 +130,8 @@ impl BlockchainEngine {
                 .commit()
                 .context("Failed to commit state to RocksDB")?;
         }
+
+        self.persist_transaction_receipts(&receipts)?;
 
         for runtime in &self.runtime_pool {
             runtime.clear_object_cache()?;
@@ -188,6 +201,7 @@ impl BlockchainEngine {
         checkpoint: Checkpoint,
         verified_state: StateManager,
         to_execute: Vec<SignedTransaction>,
+        receipts: Vec<TransactionExecutionReceipt>,
         validate_supply: bool,
     ) -> Result<()> {
         if !to_execute.is_empty() && Self::requires_runtime_side_effect_persistence(&to_execute) {
@@ -201,7 +215,7 @@ impl BlockchainEngine {
             )?;
         }
 
-        self.finalize_checkpoint(checkpoint, verified_state, validate_supply)
+        self.finalize_checkpoint(checkpoint, verified_state, receipts, validate_supply)
     }
 
     pub fn apply_checkpoint(&self, checkpoint: Checkpoint) -> Result<()> {
@@ -211,10 +225,10 @@ impl BlockchainEngine {
             checkpoint.transactions.len()
         );
 
-        let (computed_root, verified_state, to_execute) =
+        let (computed_root, verified_state, to_execute, receipts) =
             self.prepare_checkpoint_state(&checkpoint)?;
         self.ensure_checkpoint_root_matches(&checkpoint, &computed_root)?;
 
-        self.apply_prepared_checkpoint(checkpoint, verified_state, to_execute, true)
+        self.apply_prepared_checkpoint(checkpoint, verified_state, to_execute, receipts, true)
     }
 }

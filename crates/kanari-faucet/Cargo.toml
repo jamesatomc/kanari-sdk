@@ -19,3 +19,7 @@ kanari-crypto = { workspace = true }
 kanari-types = { workspace = true }
 kanari-common = { workspace = true }
 dotenvy = { workspace = true }
+
+[features]
+default = []
+zero-gas = ["kanari-types/zero-gas"]
