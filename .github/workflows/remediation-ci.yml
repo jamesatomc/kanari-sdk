@@ -28,7 +28,7 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check patch whitespace
-        run: git diff --check origin/${{ github.base_ref || 'remediation/all-20260620' }}...HEAD
+        run: git diff --check
       - name: Compile affected crates
         run: >-
           cargo check
