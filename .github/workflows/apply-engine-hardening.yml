@@ -19,8 +19,6 @@ jobs:
           ref: security/hardening-p0-remediation-20260623
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Apply exact source transformations
         shell: bash
@@ -33,40 +31,18 @@ jobs:
 
           replacements = [
               (
-                  '''        self.execute_tx_waves_parallel_inner(
-              transactions,
-              state_arc,
-              timestamp,
-              persist_objects,
-              false,
-              true,
-          )''',
-                  '''        self.execute_tx_waves_parallel_inner(
-              transactions,
-              state_arc,
-              timestamp,
-              persist_objects,
-              true,
-              true,
-          )''',
+                  "            persist_objects,\n            false,\n            true,\n        )",
+                  "            persist_objects,\n            true,\n            true,\n        )",
                   'deterministic execution mode',
               ),
               (
-                  '''                    KanariAddress::parse_to_account_address(sender)?,
-                      None,
-                      timestamp,''',
-                  '''                    KanariAddress::parse_to_account_address(sender)?,
-                      Some((tx.gas_limit(), tx.gas_price())),
-                      timestamp,''',
+                  "                    KanariAddress::parse_to_account_address(sender)?,\n                    None,\n                    timestamp,",
+                  "                    KanariAddress::parse_to_account_address(sender)?,\n                    Some((tx.gas_limit(), tx.gas_price())),\n                    timestamp,",
                   'publish gas budget',
               ),
               (
-                  '''                    Some(sender_addr),
-                      None,
-                      timestamp,''',
-                  '''                    Some(sender_addr),
-                      Some((tx.gas_limit(), tx.gas_price())),
-                      timestamp,''',
+                  "                    Some(sender_addr),\n                    None,\n                    timestamp,",
+                  "                    Some(sender_addr),\n                    Some((tx.gas_limit(), tx.gas_price())),\n                    timestamp,",
                   'entry-function gas budget',
               ),
           ]
@@ -83,8 +59,8 @@ jobs:
         shell: bash
         run: |
           git diff --check
+          test "$(grep -Fc 'Some((tx.gas_limit(), tx.gas_price()))' crates/kanari-core/src/engine.rs)" -eq 2
           git diff -- crates/kanari-core/src/engine.rs
-          grep -Fq 'Some((tx.gas_limit(), tx.gas_price()))' crates/kanari-core/src/engine.rs
       - name: Compile affected crates
         run: cargo check -p kanari-core -p kanari-move-runtime-v1 --all-targets
       - name: Test affected crates
