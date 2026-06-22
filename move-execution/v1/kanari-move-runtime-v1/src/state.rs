@@ -472,6 +472,47 @@ impl StateManager {
         changed
     }
 
+    fn apply_native_balance_delta(
+        account: &mut Account,
+        owner: AccountAddress,
+        native_balance_delta: i128,
+    ) -> Result<()> {
+        if native_balance_delta == 0 {
+            return Ok(());
+        }
+
+        let current = account.native_balance();
+        let next = if native_balance_delta > 0 {
+            let credit = u64::try_from(native_balance_delta)
+                .map_err(|_| anyhow::anyhow!("Native balance credit exceeds u64"))?;
+            current
+                .checked_add(credit)
+                .ok_or_else(|| anyhow::anyhow!("Native balance overflow for {}", owner))?
+        } else {
+            let debit = u64::try_from(
+                native_balance_delta
+                    .checked_neg()
+                    .ok_or_else(|| anyhow::anyhow!("Native balance debit overflow"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("Native balance debit exceeds u64"))?;
+            if current < debit {
+                anyhow::bail!(
+                    "Insufficient native balance for {}: current={}, debit={}",
+                    owner,
+                    current,
+                    debit
+                );
+            }
+            current - debit
+        };
+
+        if next == 0 {
+            account.token_balances.remove(KANARI_TOKEN_TYPE);
+        } else {
+            account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(next));
+        }
+        Ok(())
+    }
     fn recompute_token_balances_for_owner(
         &mut self,
         owner: AccountAddress,
@@ -515,37 +556,7 @@ impl StateManager {
 
         // Object writebacks are canonical for wallet coins, while gas and native account
         // operations live in AccountChange. Reapply the delta so writeback cannot erase gas.
-        if native_balance_delta > 0 {
-            let credit = u64::try_from(native_balance_delta)
-                .map_err(|_| anyhow::anyhow!("Native balance credit exceeds u64"))?;
-            let next = account
-                .native_balance()
-                .checked_add(credit)
-                .ok_or_else(|| anyhow::anyhow!("Native balance overflow for {}", owner))?;
-            account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(next));
-        } else if native_balance_delta < 0 {
-            let debit = u64::try_from(
-                native_balance_delta
-                    .checked_neg()
-                    .ok_or_else(|| anyhow::anyhow!("Native balance debit overflow"))?,
-            )
-            .map_err(|_| anyhow::anyhow!("Native balance debit exceeds u64"))?;
-            let current = account.native_balance();
-            if current < debit {
-                anyhow::bail!(
-                    "Insufficient native object balance for {}: current={}, debit={}",
-                    owner,
-                    current,
-                    debit
-                );
-            }
-            let next = current - debit;
-            if next == 0 {
-                account.token_balances.remove(KANARI_TOKEN_TYPE);
-            } else {
-                account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(next));
-            }
-        }
+        Self::apply_native_balance_delta(&mut account, owner, native_balance_delta)?;
         self.save_account(&account)?;
 
         Ok(self.adjust_global_supplies_for_account_delta(&old_balances, &account.token_balances))
@@ -1229,42 +1240,9 @@ impl StateManager {
         for (address, change) in &changeset.account_changes {
             let mut account = self.load_account_or_default(*address)?;
             let old_balances = account.token_balances.clone();
-            let native_token = KANARI_TOKEN_TYPE.to_string();
 
-            if change.balance_delta > 0 {
-                let amount = u64::try_from(change.balance_delta)
-                    .map_err(|_| anyhow::anyhow!("Native balance credit exceeds u64"))?;
-                let next = account
-                    .native_balance()
-                    .checked_add(amount)
-                    .ok_or_else(|| anyhow::anyhow!("Native balance overflow for {}", address))?;
-                account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
-                supply_delta = supply_delta
-                    .checked_add(change.balance_delta)
-                    .ok_or_else(|| anyhow::anyhow!("Supply delta overflow"))?;
-            } else if change.balance_delta < 0 {
-                let debit = u64::try_from(
-                    change
-                        .balance_delta
-                        .checked_neg()
-                        .ok_or_else(|| anyhow::anyhow!("Native balance debit overflow"))?,
-                )
-                .map_err(|_| anyhow::anyhow!("Native balance debit exceeds u64"))?;
-                let current = account.native_balance();
-                if current < debit {
-                    anyhow::bail!(
-                        "Insufficient native balance for {}: current={}, debit={}",
-                        address,
-                        current,
-                        debit
-                    );
-                }
-                let next = current - debit;
-                if next == 0 {
-                    account.token_balances.remove(KANARI_TOKEN_TYPE);
-                } else {
-                    account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
-                }
+            if change.balance_delta != 0 {
+                Self::apply_native_balance_delta(&mut account, *address, change.balance_delta)?;
                 supply_delta = supply_delta
                     .checked_add(change.balance_delta)
                     .ok_or_else(|| anyhow::anyhow!("Supply delta overflow"))?;
@@ -1953,7 +1931,7 @@ mod tests {
         assert!(
             state
                 .get_account(&publisher)
-                .map(|account| account.modules.contains(&"example".to_string()))
+                .map(|account| account.modules.contains("example"))
                 .unwrap_or(false)
         );
 

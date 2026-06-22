@@ -9,6 +9,13 @@ use kanari_types::transaction::SignedTransaction;
 use log::info;
 use std::sync::{Arc, RwLock};
 
+type PreparedCheckpointState = (
+    Vec<u8>,
+    StateManager,
+    Vec<SignedTransaction>,
+    Vec<TransactionExecutionReceipt>,
+);
+
 impl BlockchainEngine {
     fn requires_runtime_side_effect_persistence(transactions: &[SignedTransaction]) -> bool {
         transactions.iter().any(|signed_tx| {
@@ -68,12 +75,7 @@ impl BlockchainEngine {
     pub(crate) fn prepare_checkpoint_state(
         &self,
         checkpoint: &Checkpoint,
-    ) -> Result<(
-        Vec<u8>,
-        StateManager,
-        Vec<SignedTransaction>,
-        Vec<TransactionExecutionReceipt>,
-    )> {
+    ) -> Result<PreparedCheckpointState> {
         let state_snapshot = self.state_read().clone();
         let state_arc = Arc::new(RwLock::new(state_snapshot));
         let to_execute: Vec<SignedTransaction> = {

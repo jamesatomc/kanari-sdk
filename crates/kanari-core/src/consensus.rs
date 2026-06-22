@@ -34,6 +34,10 @@ pub struct DagVertex {
     pub timestamp: u64,
     pub signature: Vec<u8>,
     pub metadata: VertexMetadata,
+    #[serde(skip)]
+    pub cached_serialized_data: Option<Vec<u8>>,
+    #[serde(skip)]
+    pub cached_hash: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,13 +104,19 @@ impl DagVertex {
             timestamp,
             signature: Vec::new(),
             metadata,
+            cached_serialized_data: None,
+            cached_hash: None,
         };
         let hash = vertex.compute_hash()?;
+        vertex.cached_hash = Some(hash.to_vec());
         vertex.id = hash;
         Ok(vertex)
     }
 
     pub fn compute_hash(&self) -> Result<VertexId> {
+        if let Some(hash) = &self.cached_hash {
+            return Ok(vertex_id_from_hash_bytes(hash));
+        }
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
         let bytes = bcs::to_bytes(&(
             &self.chain_id,

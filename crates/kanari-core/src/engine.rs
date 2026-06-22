@@ -72,15 +72,6 @@ impl TransactionExecutionReceipt {
             error_message: changeset.error_message.clone(),
         }
     }
-
-    fn success(transaction: &SignedTransaction) -> Self {
-        Self {
-            transaction_hash: transaction.transaction_hash().to_vec(),
-            success: true,
-            gas_used: 0,
-            error_message: None,
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -878,6 +869,14 @@ impl BlockchainEngine {
             .iter()
             .any(|tx| matches!(tx.transaction, Transaction::PublishModule { .. }));
 
+        if let Some((executed, failed)) =
+            self.apply_zero_effect_native_batch(&transactions, state_arc)?
+        {
+            batch.executed = executed;
+            batch.failed = failed;
+            return Ok(batch);
+        }
+
         if serial_execution {
             if has_module_publish {
                 self.runtime_pool[0].reload_vm_cache()?;
@@ -1096,6 +1095,17 @@ impl BlockchainEngine {
         Ok(())
     }
 
+    fn fail_with_gas_and_sequence(
+        changeset: &mut ChangeSet,
+        sender: AccountAddress,
+        gas_cost: u64,
+        gas_used: u64,
+        message: String,
+    ) -> Result<()> {
+        changeset.mark_failed(message);
+        Self::apply_gas_and_sequence(changeset, sender, gas_cost, gas_used)
+    }
+
     fn gas_operation_for_transaction(tx: &Transaction) -> GasOperation {
         match tx {
             Transaction::PublishModule { module_bytes, .. } => GasOperation::PublishModule {
@@ -1152,7 +1162,35 @@ impl BlockchainEngine {
             tx.gas_limit(),
             required
         );
+        required
+            .checked_mul(tx.gas_price())
+            .ok_or_else(|| anyhow::anyhow!("Gas cost overflow"))?;
         Ok(())
+    }
+    fn parse_entry_function_target(
+        module: &str,
+        type_args: &[String],
+    ) -> Result<(ModuleId, Vec<move_core_types::language_storage::TypeTag>)> {
+        let parts: Vec<&str> = module.split("::").collect();
+        anyhow::ensure!(
+            parts.len() == 2,
+            "Invalid module format. Expected: address::module"
+        );
+
+        let addr = KanariAddress::parse_to_account_address(parts[0])
+            .map_err(|error| anyhow::anyhow!("Invalid module address: {}", error))?;
+        let module_name = move_core_types::identifier::Identifier::new(parts[1])
+            .map_err(|error| anyhow::anyhow!("Invalid module name: {}", error))?;
+
+        let type_tags = type_args
+            .iter()
+            .map(|type_arg| {
+                parse_type_tag(type_arg.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Invalid type argument: {}", type_arg))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok((ModuleId::new(addr, module_name), type_tags))
     }
 
     pub(crate) fn persist_dag_state(&self, state: PersistentDagState) -> Result<()> {
@@ -1242,15 +1280,6 @@ impl BlockchainEngine {
             }
         }
 
-        if gas_cost > i64::MAX as u64 {
-            changeset.mark_failed("Gas cost exceeds the supported range".to_string());
-            changeset
-                .get_or_create_change(sender_addr)
-                .increment_sequence();
-            changeset.set_gas_used(gas_meter.gas_used);
-            return Ok(changeset);
-        }
-
         if required_amount > (i64::MAX as u64).saturating_sub(gas_cost) {
             changeset.mark_failed("Native amount exceeds the supported range".to_string());
             Self::apply_gas_and_sequence(
@@ -1309,28 +1338,20 @@ impl BlockchainEngine {
                     return Ok(changeset);
                 }
 
-                let parts: Vec<&str> = module.split("::").collect();
-                if parts.len() != 2 {
-                    changeset.mark_failed(
-                        "Invalid module format. Expected: address::module".to_string(),
-                    );
-                    changeset.set_gas_used(0);
-                    return Ok(changeset);
-                }
-
-                let addr = KanariAddress::parse_to_account_address(parts[0])?;
-                let module_id = ModuleId::new(
-                    addr,
-                    move_core_types::identifier::Identifier::new(parts[1])?,
-                );
-
-                let type_tags: Vec<move_core_types::language_storage::TypeTag> = type_args
-                    .iter()
-                    .map(|s| {
-                        parse_type_tag(s.as_str())
-                            .ok_or_else(|| anyhow::anyhow!("Invalid type argument: {}", s))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let (module_id, type_tags) =
+                    match Self::parse_entry_function_target(module, type_args) {
+                        Ok(target) => target,
+                        Err(error) => {
+                            Self::fail_with_gas_and_sequence(
+                                &mut changeset,
+                                sender_addr,
+                                gas_cost,
+                                gas_meter.gas_used,
+                                error.to_string(),
+                            )?;
+                            return Ok(changeset);
+                        }
+                    };
 
                 match runtime.execute_entry_function_with_tx_hash_and_persistence(
                     &module_id,
@@ -1837,6 +1858,24 @@ mod tests {
     }
 
     #[test]
+    fn gas_validation_rejects_overflowing_gas_cost() {
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        let gas = kanari_types::gas::GasConfig::default();
+        let tx = Transaction::new_transfer_with_gas(
+            sender.tagged_address(),
+            recipient.address,
+            1,
+            0,
+            gas.default_transaction_gas_limit(),
+            u64::MAX,
+        );
+
+        let error = BlockchainEngine::validate_transaction_gas(&tx).unwrap_err();
+
+        assert!(error.to_string().contains("Gas cost overflow"));
+    }
+    #[test]
     fn gas_application_does_not_increment_sequence_twice() {
         let sender = AccountAddress::random();
         let mut changeset = ChangeSet::new();
@@ -1985,6 +2024,53 @@ mod tests {
             -gas_cost
         );
     }
+
+    #[test]
+    fn malformed_execute_function_charges_gas_and_sequence() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        fund_sender(&engine, &sender.address, 1_000_000);
+
+        let gas = kanari_types::gas::GasConfig::default();
+        let tx = Transaction::ExecuteFunction {
+            sender: sender.tagged_address(),
+            module: "not_a_module_path".to_string(),
+            function: "run".to_string(),
+            type_args: vec![],
+            args: vec![],
+            gas_limit: gas.default_transaction_gas_limit(),
+            gas_price: gas.default_transaction_gas_price(),
+            sequence_number: 0,
+        };
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+
+        let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+        let gas_cost = i128::from(
+            kanari_types::gas::GasOperation::ExecuteFunction { complexity: 1 }.gas_units()
+                * gas.default_transaction_gas_price(),
+        );
+
+        let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+
+        assert!(!changeset.success);
+        assert!(
+            changeset
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("Invalid module format"))
+        );
+        let sender_change = changeset.account_changes.get(&sender_address).unwrap();
+        assert_eq!(sender_change.sequence_increment, 1);
+        assert_eq!(sender_change.balance_delta, -gas_cost);
+        assert_eq!(
+            changeset.gas_used,
+            kanari_types::gas::GasOperation::ExecuteFunction { complexity: 1 }.gas_units()
+        );
+    }
+
     #[test]
     fn failed_execution_produces_and_persists_receipt() {
         let engine = BlockchainEngine::new_in_memory().unwrap();

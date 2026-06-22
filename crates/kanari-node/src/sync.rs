@@ -596,34 +596,36 @@ impl SyncManager {
         self.divergent_peers_guard().contains_key(peer_id)
     }
 
+    fn should_request_with_cooldown(
+        pending: &mut BTreeMap<u64, u64>,
+        key: u64,
+        now: u64,
+        cooldown_ms: u64,
+    ) -> bool {
+        if pending
+            .get(&key)
+            .copied()
+            .is_some_and(|last_requested| now.saturating_sub(last_requested) < cooldown_ms)
+        {
+            return false;
+        }
+
+        pending.insert(key, now);
+        true
+    }
     fn should_request_checkpoint_sequence(&self, sequence: u64, now: u64) -> bool {
         let mut pending = self.pending_checkpoint_requests_guard();
-        match pending.get(&sequence).copied() {
-            Some(last_requested)
-                if now.saturating_sub(last_requested) < REQUEST_RETRY_COOLDOWN_MS =>
-            {
-                false
-            }
-            _ => {
-                pending.insert(sequence, now);
-                true
-            }
-        }
+        Self::should_request_with_cooldown(&mut pending, sequence, now, REQUEST_RETRY_COOLDOWN_MS)
     }
 
     fn should_request_dag_vertices_for_round(&self, parent_round: u64, now: u64) -> bool {
         let mut pending = self.pending_dag_vertex_requests_guard();
-        match pending.get(&parent_round).copied() {
-            Some(last_requested)
-                if now.saturating_sub(last_requested) < DAG_VERTEX_REQUEST_RETRY_COOLDOWN_MS =>
-            {
-                false
-            }
-            _ => {
-                pending.insert(parent_round, now);
-                true
-            }
-        }
+        Self::should_request_with_cooldown(
+            &mut pending,
+            parent_round,
+            now,
+            DAG_VERTEX_REQUEST_RETRY_COOLDOWN_MS,
+        )
     }
 
     fn clear_pending_checkpoint_requests_up_to(&self, sequence: u64) {

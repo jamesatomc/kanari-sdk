@@ -3,7 +3,10 @@ use anyhow::{Context, Result};
 use kanari_core::BlockchainEngine;
 use kanari_crypto::hash_data_blake3;
 use kanari_crypto::keys::{CurveType, KeyPair, keypair_from_private_key};
-use kanari_types::transaction::{SignedTransaction, Transaction};
+use kanari_types::{
+    GasConfig,
+    transaction::{SignedTransaction, Transaction},
+};
 
 pub fn prepare_engine() -> Result<BlockchainEngine> {
     let mut engine = BlockchainEngine::new_in_memory()?;
@@ -35,6 +38,7 @@ pub fn build_signed_workload(
         .map(deterministic_sender_keypair)
         .collect::<Result<_>>()?;
 
+    let gas = GasConfig::default();
     let signed_txs = (0..config.tx_count)
         .map(|tx_index| {
             let sender_index = tx_index % sender_count;
@@ -44,8 +48,8 @@ pub fn build_signed_workload(
                 sender.tagged_address(),
                 0,
                 sequence_number as u64,
-                100_000,
-                0,
+                gas.default_transaction_gas_limit(),
+                gas.default_transaction_gas_price(),
             );
             let mut signed_tx = SignedTransaction::new(tx);
             signed_tx
