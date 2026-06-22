@@ -3,6 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Monetary gas price used while Kanari is operating in zero-fee mode.
+pub const ZERO_GAS_PRICE: u64 = 0;
+
 /// Gas configuration and pricing for the Kanari blockchain
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasConfig {
@@ -25,22 +28,35 @@ pub struct GasConfig {
     pub storage_rebate_rate: u8,
 }
 
+impl GasConfig {
+    pub fn default_transaction_gas_limit(&self) -> u64 {
+        self.max_gas_per_tx
+    }
+
+    pub fn default_transaction_gas_price(&self) -> u64 {
+        ZERO_GAS_PRICE
+    }
+
+    pub fn validate_price(&self, _gas_price: u64) -> Result<(), GasError> {
+        // Prices are ignored in zero-fee mode. Gas units are still metered.
+        Ok(())
+    }
+}
+
 impl Default for GasConfig {
     fn default() -> Self {
         Self {
-            base_price: 1,
-            max_gas_per_tx: 100_000,
-            max_gas_per_block: 1_000_000,
-            // Keep zero-price compatibility for existing callers while restoring
-            // deterministic gas accounting and block-level budget enforcement.
-            min_gas_price: 0,
-            storage_price_per_byte: 1,
-            storage_rebate_rate: 99,
+            base_price: ZERO_GAS_PRICE,    // Zero-fee mode
+            max_gas_per_tx: 100_000,       // 100K gas per transaction
+            max_gas_per_block: 1_000_000,  // 1M gas per block
+            min_gas_price: ZERO_GAS_PRICE, // Allow zero gas price
+            storage_price_per_byte: 0,     // No storage fee
+            storage_rebate_rate: 0,        // No rebate is needed when storage is free
         }
     }
 }
 
-/// Gas costs for different operations
+/// Gas units for different operations (used for resource metering only)
 #[derive(Debug, Clone, Copy)]
 pub enum GasOperation {
     /// Transfer native tokens
@@ -56,14 +72,20 @@ pub enum GasOperation {
 }
 
 impl GasOperation {
-    /// Calculate gas units required for this operation
+    /// Calculate resource-metering gas units required for this operation
     pub fn gas_units(&self) -> u64 {
         match self {
-            GasOperation::Transfer => 100,
-            GasOperation::PublishModule { module_size } => 500 + (*module_size as u64),
-            GasOperation::ExecuteFunction { complexity } => 200 + (*complexity as u64 * 10),
-            GasOperation::CreateAccount => 150,
-            GasOperation::UpdateAccount => 50,
+            GasOperation::Transfer => 100, // Metering units only; monetary cost is zero
+            GasOperation::PublishModule { module_size } => {
+                // Base units + per-byte metering units
+                500 + (*module_size as u64)
+            }
+            GasOperation::ExecuteFunction { complexity } => {
+                // Base units + complexity multiplier
+                200 + (*complexity as u64 * 10)
+            }
+            GasOperation::CreateAccount => 150, // Metering units only
+            GasOperation::UpdateAccount => 50,  // Metering units only
         }
     }
 
@@ -85,7 +107,7 @@ pub struct GasMeter {
     /// Gas units used
     pub gas_used: u64,
 
-    /// Gas price per unit (in Mist)
+    /// Gas price per unit (always zero in zero-fee mode)
     pub gas_price: u64,
 
     /// Maximum gas allowed
@@ -99,10 +121,10 @@ pub struct GasMeter {
 }
 
 impl GasMeter {
-    pub fn new(gas_limit: u64, gas_price: u64) -> Self {
+    pub fn new(gas_limit: u64, _gas_price: u64) -> Self {
         Self {
             gas_used: 0,
-            gas_price,
+            gas_price: ZERO_GAS_PRICE,
             gas_limit,
             storage_bytes_written: 0,
             storage_bytes_deleted: 0,
@@ -110,13 +132,12 @@ impl GasMeter {
     }
 
     /// Charge for storage bytes written
-    pub fn charge_storage(&mut self, bytes: u64, config: &GasConfig) -> Result<(), GasError> {
-        self.storage_bytes_written = self.storage_bytes_written.saturating_add(bytes);
-        let mist_cost = bytes
-            .checked_mul(config.storage_price_per_byte)
+    pub fn charge_storage(&mut self, bytes: u64, _config: &GasConfig) -> Result<(), GasError> {
+        self.storage_bytes_written = self
+            .storage_bytes_written
+            .checked_add(bytes)
             .ok_or(GasError::Overflow)?;
-        let gas_cost = mist_cost / self.gas_price.max(1);
-        self.consume(gas_cost)
+        Ok(())
     }
 
     /// Record storage rebate (refund)
@@ -125,13 +146,8 @@ impl GasMeter {
     }
 
     /// Calculate net storage fee in Mist
-    pub fn net_storage_fee(&self, config: &GasConfig) -> i64 {
-        let cost = self.storage_bytes_written as i64 * config.storage_price_per_byte as i64;
-        let rebate = (self.storage_bytes_deleted as i64
-            * config.storage_price_per_byte as i64
-            * config.storage_rebate_rate as i64)
-            / 100;
-        cost - rebate
+    pub fn net_storage_fee(&self, _config: &GasConfig) -> i64 {
+        0
     }
 
     /// Consume gas for an operation
@@ -154,7 +170,7 @@ impl GasMeter {
 
     /// Calculate total gas cost in Mist
     pub fn total_cost(&self) -> u64 {
-        self.gas_used.saturating_mul(self.gas_price)
+        0
     }
 
     /// Calculate remaining gas
@@ -186,15 +202,12 @@ pub struct GasEstimate {
 }
 
 impl GasEstimate {
-    pub fn new(gas_units: u64, gas_price: u64) -> Self {
-        let total_cost_mist = gas_units.saturating_mul(gas_price);
-        let total_cost_kanari = total_cost_mist as f64 / 1_000_000_000.0;
-
+    pub fn new(gas_units: u64, _gas_price: u64) -> Self {
         Self {
             gas_units,
-            gas_price,
-            total_cost_mist,
-            total_cost_kanari,
+            gas_price: ZERO_GAS_PRICE,
+            total_cost_mist: 0,
+            total_cost_kanari: 0.0,
         }
     }
 
@@ -256,31 +269,62 @@ pub struct TransactionGas {
 }
 
 impl TransactionGas {
-    pub fn new(gas_limit: u64, gas_price: u64) -> Self {
+    pub fn new(gas_limit: u64, _gas_price: u64) -> Self {
         Self {
             gas_limit,
-            gas_price,
+            gas_price: ZERO_GAS_PRICE,
             gas_used: 0,
             gas_refund: 0,
         }
     }
 
     pub fn total_cost(&self) -> u64 {
-        self.gas_used.saturating_mul(self.gas_price)
+        0
     }
 
     pub fn refund_amount(&self) -> u64 {
-        self.gas_refund.saturating_mul(self.gas_price)
+        0
     }
 
     pub fn net_cost(&self) -> u64 {
-        self.total_cost().saturating_sub(self.refund_amount())
+        0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gas_config_provides_valid_transaction_defaults() {
+        let config = GasConfig::default();
+
+        assert_eq!(
+            config.default_transaction_gas_limit(),
+            config.max_gas_per_tx
+        );
+        assert_eq!(config.default_transaction_gas_price(), ZERO_GAS_PRICE);
+    }
+
+    #[test]
+    fn gas_config_accepts_zero_price() {
+        let config = GasConfig::default();
+
+        assert_eq!(config.min_gas_price, ZERO_GAS_PRICE);
+        assert!(config.validate_price(0).is_ok());
+    }
+
+    #[test]
+    fn storage_fee_is_not_added_to_execution_gas_units() {
+        let config = GasConfig::default();
+        let mut meter = GasMeter::new(100_000, 10);
+        meter.consume(100).unwrap();
+        meter.charge_storage(1_000, &config).unwrap();
+
+        assert_eq!(meter.gas_used, 100);
+        assert_eq!(meter.total_cost(), 0);
+        assert_eq!(meter.net_storage_fee(&config), 0);
+    }
 
     #[test]
     fn test_gas_meter_consume() {
@@ -305,18 +349,19 @@ mod tests {
         assert_eq!(GasOperation::CreateAccount.gas_units(), 150);
 
         let publish = GasOperation::PublishModule { module_size: 1000 };
-        assert_eq!(publish.gas_units(), 1_500);
+        assert_eq!(publish.gas_units(), 1_500); // 500 + 1000
 
         let execute = GasOperation::ExecuteFunction { complexity: 10 };
-        assert_eq!(execute.gas_units(), 300);
+        assert_eq!(execute.gas_units(), 300); // 200 + 10 * 10
     }
 
     #[test]
     fn test_gas_estimate() {
         let estimate = GasEstimate::new(100, 1);
         assert_eq!(estimate.gas_units, 100);
-        assert_eq!(estimate.total_cost_mist, 100);
-        assert_eq!(estimate.total_cost_kanari, 0.0000001);
+        assert_eq!(estimate.gas_price, ZERO_GAS_PRICE);
+        assert_eq!(estimate.total_cost_mist, 0);
+        assert_eq!(estimate.total_cost_kanari, 0.0);
     }
 
     #[test]
@@ -324,7 +369,8 @@ mod tests {
         let mut meter = GasMeter::new(100_000, 1);
         meter.consume(100).unwrap();
 
-        assert_eq!(meter.total_cost(), 100);
+        assert_eq!(meter.gas_price, ZERO_GAS_PRICE);
+        assert_eq!(meter.total_cost(), 0);
     }
 
     #[test]
@@ -341,8 +387,9 @@ mod tests {
         tx_gas.gas_used = 100;
         tx_gas.gas_refund = 20;
 
-        assert_eq!(tx_gas.total_cost(), 100);
-        assert_eq!(tx_gas.refund_amount(), 20);
-        assert_eq!(tx_gas.net_cost(), 80);
+        assert_eq!(tx_gas.gas_price, ZERO_GAS_PRICE);
+        assert_eq!(tx_gas.total_cost(), 0);
+        assert_eq!(tx_gas.refund_amount(), 0);
+        assert_eq!(tx_gas.net_cost(), 0);
     }
 }
