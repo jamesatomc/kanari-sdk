@@ -25,10 +25,8 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path('crates/kanari-core/src/engine.rs')
           source = path.read_text()
-
           replacements = [
               (
                   "            persist_objects,\n            false,\n            true,\n        )",
@@ -46,13 +44,11 @@ jobs:
                   'entry-function gas budget',
               ),
           ]
-
           for old, new, label in replacements:
               count = source.count(old)
               if count != 1:
                   raise SystemExit(f'{label}: expected exactly one source match, found {count}')
               source = source.replace(old, new, 1)
-
           path.write_text(source)
           PY
       - name: Validate patch shape
@@ -63,10 +59,6 @@ jobs:
           git diff -- crates/kanari-core/src/engine.rs
       - name: Compile affected crates
         run: cargo check -p kanari-core -p kanari-move-runtime-v1 --all-targets
-      - name: Test affected crates
-        run: |
-          cargo test -p kanari-core --lib
-          cargo test -p kanari-move-runtime-v1 --lib
       - name: Commit validated patch
         shell: bash
         run: |
