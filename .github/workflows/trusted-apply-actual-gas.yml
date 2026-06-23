@@ -25,7 +25,24 @@ jobs:
           fetch-depth: 0
 
       - name: Apply actual gas-cost patch
-        run: python3 scripts/apply_actual_gas_cost_fix.py
+        id: actual_patch
+        continue-on-error: true
+        run: python3 scripts/apply_actual_gas_cost_fix.py > actual-gas-patch.log 2>&1
+
+      - name: Upload actual gas patch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: actual-gas-patch-diagnostics
+          path: actual-gas-patch.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Stop after actual gas patch failure
+        if: steps.actual_patch.outcome == 'failure'
+        run: |
+          cat actual-gas-patch.log
+          exit 1
 
       - name: Propagate genesis persistence errors
         run: python3 scripts/fix_genesis_persistence_results.py
