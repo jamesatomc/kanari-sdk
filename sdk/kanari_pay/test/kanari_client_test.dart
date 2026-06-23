@@ -1,10 +1,11 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
-import 'package:kanari_pay/kanari_pay.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:kanari_crypto/kanari_crypto.dart';
-import 'dart:convert';
-import 'dart:typed_data';
+import 'package:kanari_pay/kanari_pay.dart';
 
 void main() {
   group('KanariClient', () {
@@ -45,7 +46,7 @@ void main() {
       expect(clientLocal.url, 'http://127.0.0.1:6767/rpc');
     });
 
-    test('transfer signs and submits correctly', () async {
+    test('native transfer signs and submits through canonical RPC', () async {
       final mockWallet = KanariWallet(
         KeyPairData(
           privateKey: 'priv',
@@ -58,10 +59,11 @@ void main() {
       );
 
       Map<String, dynamic>? capturedParams;
+      String? capturedMethod;
 
       final mockClient = MockClient((request) async {
-        final body = jsonDecode(request.body);
-        final method = body['method'];
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final method = body['method'] as String;
 
         if (method == 'kanari_getAccount') {
           return http.Response(
@@ -73,34 +75,16 @@ void main() {
                 'sequence_number': 5,
                 'modules': [],
                 'token_balances': {},
-                'owned_objects': [
-                  {
-                    'id':
-                        '0x0000000000000000000000000000000000000000000000000000000000000abc',
-                    'owner': '0x123',
-                    'type_': '0x2::coin::Coin<0x2::kanari::KANARI>',
-                    'data': [
-                      ...List<int>.filled(32, 0),
-                      232,
-                      3,
-                      0,
-                      0,
-                      0,
-                      0,
-                      0,
-                      0,
-                    ],
-                    'version': 1,
-                  },
-                ],
+                'owned_objects': [],
               },
               'id': 1,
             }),
             200,
           );
         }
-        if (method == 'kanari_callFunction') {
-          capturedParams = body['params'] as Map<String, dynamic>;
+        if (method == 'kanari_submitTransaction') {
+          capturedMethod = method;
+          capturedParams = Map<String, dynamic>.from(body['params'] as Map);
           return http.Response(
             jsonEncode({
               'jsonrpc': '2.0',
@@ -126,16 +110,18 @@ void main() {
 
       expect(result.hash, '0xtxhash');
       expect(result.status, 'success');
-
-      // Verify params normalization and serialization
+      expect(capturedMethod, 'kanari_submitTransaction');
+      expect(capturedMethod, isNot('kanari_callFunction'));
       expect(capturedParams, isNotNull);
-      final txData = capturedParams!;
-      expect(txData['sender'], 'Ed25519:0x123');
-      expect(txData['package'], '0x2');
-      expect(txData['module'], 'kanari');
-      expect(txData['function'], 'transfer_amount');
-      expect(txData['sequence_number'], 5);
-      expect(txData['signature'], isA<List>());
+      expect(capturedParams!['sender'], 'Ed25519:0x123');
+      expect(
+        capturedParams!['recipient'],
+        '0x${'456'.padLeft(64, '0')}',
+      );
+      expect(capturedParams!['amount'], 1000);
+      expect(capturedParams!['sequence_number'], 5);
+      expect(capturedParams!['execute_immediate'], true);
+      expect(capturedParams!['signature'], isA<List>());
     });
 
     test('publishModule signs and submits correctly', () async {
@@ -153,8 +139,8 @@ void main() {
       Map<String, dynamic>? capturedParams;
 
       final mockClient = MockClient((request) async {
-        final body = jsonDecode(request.body);
-        final method = body['method'];
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final method = body['method'] as String;
 
         if (method == 'kanari_getAccount') {
           return http.Response(
@@ -173,7 +159,7 @@ void main() {
           );
         }
         if (method == 'kanari_publishModule') {
-          capturedParams = body['params'] as Map<String, dynamic>;
+          capturedParams = Map<String, dynamic>.from(body['params'] as Map);
           return http.Response(
             jsonEncode({
               'jsonrpc': '2.0',
@@ -199,8 +185,6 @@ void main() {
 
       expect(result.hash, '0xpubhash');
       expect(result.status, 'success');
-
-      // Verify params
       expect(capturedParams, isNotNull);
       expect(capturedParams!['sender'], 'Ed25519:0x123');
       expect(capturedParams!['module_bytes'], [1, 2, 3]);
@@ -224,8 +208,8 @@ void main() {
       Map<String, dynamic>? capturedParams;
 
       final mockClient = MockClient((request) async {
-        final body = jsonDecode(request.body);
-        final method = body['method'];
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final method = body['method'] as String;
 
         if (method == 'kanari_getAccount') {
           return http.Response(
@@ -244,7 +228,7 @@ void main() {
           );
         }
         if (method == 'kanari_callFunction') {
-          capturedParams = body['params'] as Map<String, dynamic>;
+          capturedParams = Map<String, dynamic>.from(body['params'] as Map);
           return http.Response(
             jsonEncode({
               'jsonrpc': '2.0',
@@ -275,8 +259,6 @@ void main() {
 
       expect(result.hash, '0xcallhash');
       expect(result.status, 'success');
-
-      // Verify params
       expect(capturedParams, isNotNull);
       expect(capturedParams!['sender'], 'Ed25519:0x123');
       expect(capturedParams!['package'], '0x1');
@@ -305,8 +287,8 @@ void main() {
       Map<String, dynamic>? capturedParams;
 
       final mockClient = MockClient((request) async {
-        final body = jsonDecode(request.body);
-        final method = body['method'];
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final method = body['method'] as String;
 
         if (method == 'kanari_getAccount') {
           return http.Response(
@@ -325,7 +307,7 @@ void main() {
           );
         }
         if (method == 'kanari_submitTransaction') {
-          capturedParams = body['params'] as Map<String, dynamic>;
+          capturedParams = Map<String, dynamic>.from(body['params'] as Map);
           return http.Response(
             jsonEncode({
               'jsonrpc': '2.0',
@@ -347,8 +329,6 @@ void main() {
 
       expect(result.hash, '0xburnhash');
       expect(result.status, 'success');
-
-      // Verify params
       expect(capturedParams, isNotNull);
       expect(capturedParams!['sender'], 'Ed25519:0x123');
       expect(capturedParams!['amount'], 500);
