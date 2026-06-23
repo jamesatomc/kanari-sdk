@@ -154,7 +154,21 @@ jobs:
             ${{ runner.os }}-cargo-audit-v1-
 
       - name: Generate workspace lockfile
-        run: cargo generate-lockfile
+        run: |
+          set +e
+          cargo generate-lockfile > cargo-resolve.log 2>&1
+          status=$?
+          cat cargo-resolve.log
+          exit $status
+
+      - name: Upload Cargo resolver diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-resolver-diagnostics
+          path: cargo-resolve.log
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Capture audited dependency trees
         run: |
