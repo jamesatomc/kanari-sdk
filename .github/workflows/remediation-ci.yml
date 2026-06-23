@@ -98,19 +98,37 @@ jobs:
           git diff -- crates/kanari-core/src/engine.rs
       - name: Compile candidate
         run: cargo check -p kanari-core -p kanari-move-runtime-v1 --all-targets
-      - name: Test candidate
+      - name: Test candidate and capture logs
+        id: candidate-tests
+        continue-on-error: true
+        shell: bash
         run: |
-          cargo test -p kanari-core --lib
-          cargo test -p kanari-move-runtime-v1 --lib
-      - name: Stage validated candidate
+          set +e
+          mkdir -p validated/logs
+          cargo test -p kanari-core --lib 2>&1 | tee validated/logs/kanari-core-tests.log
+          core_status=${PIPESTATUS[0]}
+          echo "$core_status" > validated/logs/kanari-core-tests.status
+          cargo test -p kanari-move-runtime-v1 --lib 2>&1 | tee validated/logs/move-runtime-tests.log
+          runtime_status=${PIPESTATUS[0]}
+          echo "$runtime_status" > validated/logs/move-runtime-tests.status
+          exit 0
+      - name: Stage candidate
+        if: always()
         run: |
           mkdir -p validated/crates/kanari-core/src
           cp crates/kanari-core/src/engine.rs validated/crates/kanari-core/src/engine.rs
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: validated-engine-hardening
+          name: engine-hardening-diagnostics
           path: validated
           retention-days: 1
+      - name: Enforce candidate test result
+        if: always()
+        shell: bash
+        run: |
+          test "$(cat validated/logs/kanari-core-tests.status)" -eq 0
+          test "$(cat validated/logs/move-runtime-tests.status)" -eq 0
 
   dependency-policy:
     runs-on: ubuntu-latest
