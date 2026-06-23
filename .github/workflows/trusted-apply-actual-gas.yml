@@ -1,17 +1,20 @@
 name: Trusted Apply Actual Gas Fix
 
 on:
-  push:
+  pull_request:
     branches:
       - fix-gas
     paths:
-      - .github/workflows/trusted-apply-actual-gas.yml
+      - scripts/apply_actual_gas_cost_fix.py
+      - scripts/fix_genesis_persistence_results.py
+      - .github/workflows/apply-actual-gas-cost-fix.yml
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event.pull_request.head.ref == 'audit/fix-critical-high'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
