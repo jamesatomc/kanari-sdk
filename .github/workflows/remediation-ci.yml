@@ -49,6 +49,69 @@ jobs:
       - name: Test Move runtime
         run: cargo test -p kanari-move-runtime-v1 --lib
 
+  engine-hardening-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply exact gas and scheduler hardening candidate
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/kanari-core/src/engine.rs')
+          source = path.read_text()
+          replacements = [
+              (
+                  "            persist_objects,\n            false,\n            true,\n        )",
+                  "            persist_objects,\n            true,\n            true,\n        )",
+                  'deterministic execution mode',
+              ),
+              (
+                  "                    KanariAddress::parse_to_account_address(sender)?,\n                    None,\n                    timestamp,",
+                  "                    KanariAddress::parse_to_account_address(sender)?,\n                    Some((tx.gas_limit(), tx.gas_price())),\n                    timestamp,",
+                  'publish gas budget',
+              ),
+              (
+                  "                    Some(sender_addr),\n                    None,\n                    timestamp,",
+                  "                    Some(sender_addr),\n                    Some((tx.gas_limit(), tx.gas_price())),\n                    timestamp,",
+                  'entry-function gas budget',
+              ),
+          ]
+
+          for old, new, label in replacements:
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one source match, found {count}')
+              source = source.replace(old, new, 1)
+
+          path.write_text(source)
+          PY
+      - name: Validate candidate diff
+        shell: bash
+        run: |
+          git diff --check
+          test "$(grep -Fc 'Some((tx.gas_limit(), tx.gas_price()))' crates/kanari-core/src/engine.rs)" -eq 2
+          git diff -- crates/kanari-core/src/engine.rs
+      - name: Compile candidate
+        run: cargo check -p kanari-core -p kanari-move-runtime-v1 --all-targets
+      - name: Test candidate
+        run: |
+          cargo test -p kanari-core --lib
+          cargo test -p kanari-move-runtime-v1 --lib
+      - name: Stage validated candidate
+        run: |
+          mkdir -p validated/crates/kanari-core/src
+          cp crates/kanari-core/src/engine.rs validated/crates/kanari-core/src/engine.rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-engine-hardening
+          path: validated
+          retention-days: 1
+
   dependency-policy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
