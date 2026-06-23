@@ -1,6 +1,10 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Crypto test-vector generators intentionally print reproducible vectors, and the
+// split `crypto/tests.rs` layout creates a nested `tests` module by design.
+#![cfg_attr(test, allow(clippy::module_inception, clippy::print_stdout))]
+
 use move_core_types::account_address::AccountAddress;
 use move_vm_runtime::native_functions::{NativeFunctionTable, make_table_from_iter};
 
