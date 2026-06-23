@@ -66,6 +66,26 @@ impl DagVertex {
         Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
     }
 
+    fn compute_signing_digest_uncached(&self) -> Result<VertexId> {
+        let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
+        let bytes = bcs::to_bytes(&(
+            b"kanari:dag-vertex-signature:v1".as_slice(),
+            &self.id,
+            &self.chain_id,
+            self.round,
+            &self.author,
+            &self.parents,
+            tx_hashes,
+            self.timestamp,
+            self.metadata.tx_count,
+            self.metadata.total_gas_used,
+            &self.metadata.state_root,
+            self.metadata.is_checkpoint,
+            self.metadata.checkpoint_seq,
+        ))?;
+        Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
+    }
+
     pub fn new<T>(
         round: Round,
         author: AuthorityId,
@@ -140,28 +160,19 @@ impl DagVertex {
     /// Bind the externally assigned Mysticeti block id to the full Kanari vertex payload.
     pub fn signing_digest(&self) -> Result<VertexId> {
         if let Some(digest) = &self.cached_signing_digest {
-            return Ok(vertex_id_from_hash_bytes(digest));
+            let computed = self.compute_signing_digest_uncached()?;
+            if vertex_id_from_hash_bytes(digest) != computed {
+                anyhow::bail!("Vertex signing digest mismatch");
+            }
+            return Ok(computed);
         }
-        let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
-        let bytes = bcs::to_bytes(&(
-            b"kanari:dag-vertex-signature:v1".as_slice(),
-            &self.id,
-            &self.chain_id,
-            self.round,
-            &self.author,
-            &self.parents,
-            tx_hashes,
-            self.timestamp,
-            self.metadata.tx_count,
-            self.metadata.total_gas_used,
-            &self.metadata.state_root,
-            self.metadata.is_checkpoint,
-            self.metadata.checkpoint_seq,
-        ))?;
-        Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
+        self.compute_signing_digest_uncached()
     }
 
-    pub fn verify(&self) -> Result<()> {
+    /// Verify only the vertex payload/cache consistency.
+    /// This does not validate network-level invariants such as author membership,
+    /// parent availability, or the signature against the authority key.
+    pub fn verify_payload_consistency(&self) -> Result<()> {
         if let Some(cached_hash) = &self.cached_hash {
             let computed = self.compute_hash_uncached()?;
             if vertex_id_from_hash_bytes(cached_hash) != computed {
@@ -253,35 +264,8 @@ pub struct DagProductionPolicy {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dag_vertex_verify_allows_external_vertex_id_when_payload_hash_is_cached() {
-        let tx = SignedTransaction::new(kanari_types::transaction::Transaction::PublishModule {
-            sender: "0x1".to_string(),
-            module_bytes: vec![1, 2, 3],
-            module_name: "example".to_string(),
-            gas_limit: 1,
-            gas_price: 1,
-            sequence_number: 0,
-        });
-        let mut vertex = DagVertex::new(
-            1,
-            "auth1".to_string(),
-            "kanari-v2-mysticeti".to_string(),
-            Vec::new(),
-            vec![tx],
-            vec![7u8; 32],
-            123,
-        );
-        let payload_hash = vertex.compute_hash().unwrap();
-        vertex.id = [9u8; 32];
-
-        vertex.verify().unwrap();
-        assert_eq!(vertex.compute_hash().unwrap(), payload_hash);
-    }
-}
+#[path = "../tests/unit/consensus_tests.rs"]
+mod tests;
 
 impl DagProductionPolicy {
     pub fn should_wait_for_current_round_quorum(&self) -> bool {
