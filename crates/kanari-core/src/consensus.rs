@@ -187,6 +187,36 @@ impl DagVertex {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuorumCertificate {
+    /// Aggregated validator signatures or individual signatures
+    pub signatures: Vec<Vec<u8>>,
+    /// Bitmap or list of validators who signed
+    pub signers: Vec<String>,
+    /// Epoch or committee version this certificate is valid for
+    pub epoch: u64,
+    /// Total voting power represented by these signatures
+    pub total_voting_power: u64,
+    /// Required quorum threshold (voting power)
+    pub quorum_threshold: u64,
+}
+
+impl QuorumCertificate {
+    pub fn genesis() -> Self {
+        Self {
+            signatures: Vec::new(),
+            signers: Vec::new(),
+            epoch: 0,
+            total_voting_power: 0,
+            quorum_threshold: 0,
+        }
+    }
+
+    pub fn verify_quorum(&self, required_voting_power: u64) -> bool {
+        self.total_voting_power >= required_voting_power && !self.signatures.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub sequence: u64,
     pub vertices: Vec<VertexId>,
@@ -194,6 +224,10 @@ pub struct Checkpoint {
     pub state_root: Vec<u8>,
     pub timestamp: u64,
     pub prev_checkpoint_hash: Vec<u8>,
+    /// Optional quorum certificate proving BFT finality
+    pub quorum_certificate: Option<QuorumCertificate>,
+    /// Epoch this checkpoint belongs to
+    pub epoch: u64,
 }
 
 impl Checkpoint {
@@ -215,6 +249,8 @@ impl Checkpoint {
             state_root,
             timestamp,
             prev_checkpoint_hash,
+            quorum_certificate: None,
+            epoch: 0,
         }
     }
 
@@ -225,6 +261,8 @@ impl Checkpoint {
             &tx_hashes,
             &self.state_root,
             &self.prev_checkpoint_hash,
+            &self.quorum_certificate,
+            self.epoch,
         ))?;
         Ok(hash_data_blake3(&serialized))
     }

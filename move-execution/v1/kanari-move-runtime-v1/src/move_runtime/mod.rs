@@ -457,18 +457,13 @@ impl MoveRuntime {
             session.finish().0.map_err(|e| anyhow::anyhow!("{:?}", e))?
         };
 
-        if persist_runtime_state {
-            self.apply_move_changeset(move_changeset.clone())?;
-
-            // Perform hot-reload to clear cache immediately after publish is done.
-            self.reload_vm_cache()?;
-        }
-
+        // Build the ChangeSet first without persisting
         let mut cs = ChangeSet::new();
         cs.publish_module(sender, module_id.name().to_string());
         self.parse_move_changeset(&move_changeset, &mut cs);
         self.parse_move_events(&events, &mut cs);
 
+        // Apply gas accounting BEFORE any persistence
         if let Some((gas_limit, gas_price)) = gas_info {
             let gas_op = GasOperation::PublishModule {
                 module_size: module_bytes.len(),
@@ -483,6 +478,15 @@ impl MoveRuntime {
                 written,
                 deleted,
             )?;
+        }
+
+        // Only persist AFTER all validation and gas accounting is complete
+        if persist_runtime_state && cs.success {
+            self.apply_move_changeset(move_changeset.clone())?;
+            self.persist_created_objects(&cs)?;
+            self.persist_deleted_objects(&cs)?;
+            // Perform hot-reload to clear cache immediately after publish is done.
+            self.reload_vm_cache()?;
         }
 
         Ok(cs)
@@ -789,7 +793,7 @@ impl MoveRuntime {
             .push((object_id.to_string(), updated_obj));
     }
 
-    pub fn persist_created_objects(&self, cs: &ChangeSet) {
+    pub fn persist_created_objects(&self, cs: &ChangeSet) -> Result<()> {
         for (id, created) in &cs.created_objects {
             let stored = StoredObject {
                 id: id.clone(),
@@ -798,14 +802,16 @@ impl MoveRuntime {
                 data: created.data.clone(),
                 version: created.version,
             };
-            let _ = self.object_storage.store_object(stored);
+            self.object_storage.store_object(stored)?;
         }
+        Ok(())
     }
 
-    pub fn persist_deleted_objects(&self, cs: &ChangeSet) {
+    pub fn persist_deleted_objects(&self, cs: &ChangeSet) -> Result<()> {
         for obj_id in &cs.deleted_objects {
-            let _ = self.object_storage.delete_object(obj_id);
+            self.object_storage.delete_object(obj_id)?;
         }
+        Ok(())
     }
 
     pub fn preload_object_snapshot(
@@ -852,8 +858,8 @@ impl MoveRuntime {
         )?;
 
         state.apply_changeset(&cs)?;
-        self.persist_created_objects(&cs);
-        self.persist_deleted_objects(&cs);
+        self.persist_created_objects(&cs)?;
+        self.persist_deleted_objects(&cs)?;
 
         let (object_id, _) = cs
             .created_objects
@@ -1331,9 +1337,10 @@ impl MoveRuntime {
                     )?;
                 }
 
-                if persist_runtime_state {
-                    self.persist_created_objects(&cs);
-                    self.persist_deleted_objects(&cs);
+                // Only persist AFTER all validation and gas accounting is complete
+                if persist_runtime_state && cs.success {
+                    self.persist_created_objects(&cs)?;
+                    self.persist_deleted_objects(&cs)?;
                 }
 
                 Ok(cs)
@@ -1352,9 +1359,7 @@ impl MoveRuntime {
                         0,
                         0,
                     );
-                    if persist_runtime_state {
-                        self.persist_created_objects(&cs);
-                    }
+                    // Do NOT persist on error - state should remain unchanged
                 }
                 Err(anyhow::anyhow!("exec error: {:?}", e))
             }

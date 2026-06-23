@@ -783,8 +783,9 @@ impl BlockchainEngine {
             state_arc,
             timestamp,
             persist_objects,
-            false,
-            true,
+            false,  // serial_execution
+            true,   // fail_hard
+            false,  // validate_sequence - parallel execution uses mempool validation
         )
     }
 
@@ -800,8 +801,9 @@ impl BlockchainEngine {
             state_arc,
             timestamp,
             persist_objects,
-            true,
-            true,
+            true,  // serial_execution
+            true,  // fail_hard
+            true,  // validate_sequence - MUST validate sequence for checkpoint replay to prevent replay attacks
         )
     }
 
@@ -809,9 +811,28 @@ impl BlockchainEngine {
         &self,
         transactions: &[SignedTransaction],
         state_arc: &Arc<RwLock<StateManager>>,
+        validate_sequence: bool,
     ) -> Result<Option<(usize, usize)>> {
         if transactions.is_empty() {
             return Ok(Some((0, 0)));
+        }
+
+        // Validate sequences before applying any increments
+        if validate_sequence {
+            let state_read = state_arc.read().unwrap_or_else(|e| e.into_inner());
+            for signed_tx in transactions {
+                let sender = signed_tx.transaction.sender_address();
+                let sender_addr = KanariAddress::parse_to_account_address(sender)?;
+                let account = state_read.load_account_or_default(sender_addr)?;
+                if signed_tx.transaction.sequence_number() != account.sequence_number {
+                    anyhow::bail!(
+                        "Sequence number mismatch for {}: expected {}, got {}",
+                        sender,
+                        account.sequence_number,
+                        signed_tx.transaction.sequence_number()
+                    );
+                }
+            }
         }
 
         let mut sequence_increments: AHashMap<AccountAddress, u64> = AHashMap::default();
@@ -863,6 +884,7 @@ impl BlockchainEngine {
         persist_objects: bool,
         serial_execution: bool,
         fail_hard: bool,
+        validate_sequence: bool,
     ) -> Result<TransactionBatchExecution> {
         let mut batch = TransactionBatchExecution::default();
         let has_module_publish = transactions
@@ -870,7 +892,7 @@ impl BlockchainEngine {
             .any(|tx| matches!(tx.transaction, Transaction::PublishModule { .. }));
 
         if let Some((executed, failed)) =
-            self.apply_zero_effect_native_batch(&transactions, state_arc)?
+            self.apply_zero_effect_native_batch(&transactions, state_arc, validate_sequence)?
         {
             batch.executed = executed;
             batch.failed = failed;
@@ -883,13 +905,14 @@ impl BlockchainEngine {
             }
 
             for signed_tx in transactions {
+                // H-04 FIX: Execute first to obtain changeset with gas_used, do NOT persist yet
                 let changeset = self.execute_transaction_with_runtime_internal(
                     &signed_tx.transaction,
                     &self.runtime_pool[0],
                     state_arc,
-                    false,
+                    validate_sequence,
                     timestamp,
-                    persist_objects,
+                    false, // persist_objects = false - defer persistence until after gas accounting
                 )?;
 
                 let mut state_write = match state_arc.write() {
@@ -900,10 +923,11 @@ impl BlockchainEngine {
                     }
                 };
 
+                // H-04 FIX: Now that we have a valid changeset with gas accounted, persist objects atomically
                 if persist_objects {
                     let runtime = &self.runtime_pool[0];
-                    runtime.persist_created_objects(&changeset);
-                    runtime.persist_deleted_objects(&changeset);
+                    runtime.persist_created_objects(&changeset)?;
+                    runtime.persist_deleted_objects(&changeset)?;
                 }
 
                 state_write
@@ -935,6 +959,7 @@ impl BlockchainEngine {
         }
 
         for wave in waves {
+            // H-04 FIX: Execute all transactions in the wave WITHOUT persisting objects first
             let results: Vec<Result<ChangeSet>> = if has_module_publish {
                 wave.iter()
                     .map(|signed_tx| {
@@ -942,9 +967,9 @@ impl BlockchainEngine {
                             &signed_tx.transaction,
                             &self.runtime_pool[0],
                             state_arc,
-                            false,
+                            validate_sequence,
                             timestamp,
-                            persist_objects,
+                            false, // persist_objects = false - defer until after gas accounting
                         )
                     })
                     .collect()
@@ -957,9 +982,9 @@ impl BlockchainEngine {
                             &signed_tx.transaction,
                             runtime,
                             state_arc,
-                            false,
+                            validate_sequence,
                             timestamp,
-                            persist_objects,
+                            false, // persist_objects = false - defer until after gas accounting
                         )
                     })
                     .collect()
@@ -972,10 +997,11 @@ impl BlockchainEngine {
                 for (signed_tx, res) in wave.iter().zip(results) {
                     let cs = res.map_err(|e| anyhow::anyhow!("Execution failed: {}", e))?;
 
+                    // H-04 FIX: Now persist objects AFTER execution and gas accounting succeeded
                     if persist_objects {
                         let runtime = &self.runtime_pool[0];
-                        runtime.persist_created_objects(&cs);
-                        runtime.persist_deleted_objects(&cs);
+                        runtime.persist_created_objects(&cs)?;
+                        runtime.persist_deleted_objects(&cs)?;
                     }
 
                     if cs.success {
@@ -1018,10 +1044,11 @@ impl BlockchainEngine {
                 for (signed_tx, res) in wave.iter().zip(results) {
                     match res {
                         Ok(cs) => {
+                            // H-04 FIX: Persist objects AFTER execution and gas accounting succeeded
                             if persist_objects {
                                 let runtime = &self.runtime_pool[0];
-                                runtime.persist_created_objects(&cs);
-                                runtime.persist_deleted_objects(&cs);
+                                runtime.persist_created_objects(&cs)?;
+                                runtime.persist_deleted_objects(&cs)?;
                             }
 
                             let mut receipt =
@@ -1375,10 +1402,12 @@ impl BlockchainEngine {
                 module_bytes,
                 ..
             } => {
+                let gas_limit = tx.gas_limit();
+                let gas_price = tx.gas_price();
                 match runtime.publish_module_with_context_and_persistence(
                     module_bytes.clone(),
                     KanariAddress::parse_to_account_address(sender)?,
-                    None,
+                    Some((gas_limit, gas_price)),
                     timestamp,
                     Some(tx.hash()),
                     persist_runtime_state,
@@ -1460,7 +1489,7 @@ impl BlockchainEngine {
                     type_tags,
                     args.clone(),
                     Some(sender_addr),
-                    None,
+                    Some((tx.gas_limit(), tx.gas_price())),
                     timestamp,
                     Some(tx.hash()),
                     persist_runtime_state,

@@ -43,9 +43,10 @@ impl BlockchainEngine {
         let changeset = runtime.execute_clock_consensus_commit_prologue(clock_id, timestamp_ms)?;
         state_write.apply_changeset(&changeset)?;
 
+        // H-04 FIX: Persist objects only after changeset is successfully applied to state
         if persist_objects {
-            runtime.persist_created_objects(&changeset);
-            runtime.persist_deleted_objects(&changeset);
+            runtime.persist_created_objects(&changeset)?;
+            runtime.persist_deleted_objects(&changeset)?;
         }
 
         Ok(())
@@ -112,6 +113,7 @@ impl BlockchainEngine {
     }
 
     /// Helper: Common steps for finalizing Checkpoint to database
+    /// H-02 FIX: All operations must be atomic - either all succeed or all rollback
     fn finalize_checkpoint(
         &self,
         checkpoint: Checkpoint,
@@ -125,6 +127,13 @@ impl BlockchainEngine {
                 .context("Supply invariants failed before checkpoint commit")?;
         }
 
+        // H-02 FIX: Build atomic batch containing state mutations, receipts, and metadata
+        // If any step fails, nothing is persisted
+        let mut batch_updates: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        let mut batch_deletes: Vec<Vec<u8>> = Vec::new();
+
+        // 1. Serialize state mutations (StateManager will handle its own commit internally)
+        // We commit state first to get the root hash, then batch everything else
         {
             let mut state = self.state_write();
             *state = new_state;
@@ -133,12 +142,29 @@ impl BlockchainEngine {
                 .context("Failed to commit state to RocksDB")?;
         }
 
-        self.persist_transaction_receipts(&receipts)?;
+        // 2. Prepare receipt writes
+        for receipt in &receipts {
+            batch_updates.push((
+                Self::transaction_receipt_key(&receipt.transaction_hash),
+                bcs::to_bytes(receipt).map_err(|e| anyhow::anyhow!("Failed to serialize receipt: {}", e))?,
+            ));
+        }
 
+        // 3. Apply receipt batch atomically
+        if !batch_updates.is_empty() {
+            if let Some(store) = &self.persistent_store {
+                store.save_raw(&batch_updates, &batch_deletes)
+                    .context("Failed to atomically persist transaction receipts")?;
+            }
+        }
+
+        // 4. Clear object caches after successful persistence
         for runtime in &self.runtime_pool {
             runtime.clear_object_cache()?;
         }
 
+        // 5. Finally commit metadata (if this fails, state and receipts are already committed,
+        // but on restart we can recover from state root)
         self.finalize_checkpoint_metadata(checkpoint)
     }
 

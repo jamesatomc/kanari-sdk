@@ -38,14 +38,13 @@ impl super::MoveRuntime {
 
                 // Try to load object from storage
                 if let Some(stored_obj) = stored_obj {
+                    // H-05 FIX: Explicit ownership model - only allow mutable borrow for:
+                    // 1. Objects owned by the transaction sender
+                    // 2. Shared objects (owner == AccountAddress::ZERO) - these require version locks in a full implementation
+                    // System/std addresses do NOT grant global mutable access
                     let mutable_allowed = sender.is_none_or(|s_addr| {
-                        let sys_addr =
-                            kanari_types::address::Address::kanari_system_account_address();
-                        let std_addr = kanari_types::address::Address::std_account_address();
                         stored_obj.owner == s_addr
                             || stored_obj.owner == AccountAddress::ZERO
-                            || stored_obj.owner == sys_addr
-                            || stored_obj.owner == std_addr
                     });
                     // Insert into LoadedObjectsExt so native_borrow_global and borrow_global_mut can find it
                     let exts = session.get_native_extensions();
