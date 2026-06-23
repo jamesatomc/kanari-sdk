@@ -2,6 +2,7 @@ use super::MoveVMState;
 use anyhow::Result;
 use move_core_types::language_storage::StructTag;
 use std::str::FromStr;
+#[allow(clippy::duplicate_mod)]
 #[path = "../test_support.rs"]
 mod test_support;
 

@@ -22,6 +22,7 @@ impl super::MoveRuntime {
             crate::storage::resolver::KanariMoveResolver,
         >,
         args: &[Vec<u8>],
+        sender: Option<AccountAddress>,
     ) -> anyhow::Result<()> {
         use kanari_system_natives::object::LoadedObjectsExt;
 
@@ -37,13 +38,28 @@ impl super::MoveRuntime {
 
                 // Try to load object from storage
                 if let Some(stored_obj) = stored_obj {
+                    let mutable_allowed = sender.is_none_or(|s_addr| {
+                        let sys_addr =
+                            kanari_types::address::Address::kanari_system_account_address();
+                        let std_addr = kanari_types::address::Address::std_account_address();
+                        stored_obj.owner == s_addr
+                            || stored_obj.owner == AccountAddress::ZERO
+                            || stored_obj.owner == sys_addr
+                            || stored_obj.owner == std_addr
+                    });
                     // Insert into LoadedObjectsExt so native_borrow_global and borrow_global_mut can find it
                     let exts = session.get_native_extensions();
                     let loaded_ext = exts.get_mut::<LoadedObjectsExt>();
-                    loaded_ext.insert(object_id.clone(), stored_obj.type_name, stored_obj.data);
+                    loaded_ext.insert(
+                        object_id.clone(),
+                        stored_obj.type_name,
+                        stored_obj.data,
+                        mutable_allowed,
+                    );
                     log::debug!(
-                        "[RUNTIME] Preloaded object {} into LoadedObjectsExt",
-                        object_id
+                        "[RUNTIME] Preloaded object {} into LoadedObjectsExt (mutable_allowed={})",
+                        object_id,
+                        mutable_allowed
                     );
                 }
             }

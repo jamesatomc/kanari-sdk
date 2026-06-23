@@ -33,7 +33,7 @@ fn main() {
     println!("Generated new K256 wallet:");
     println!("  Address: {}", keypair.address);
     println!("  Tagged Address: {}", keypair.tagged_address());
-    println!("  Private Key: {}", &*keypair.private_key);
+    println!("  Private Key: {}", *keypair.private_key);
     println!("  Public Key: {}", keypair.public_key);
 
     // Sign a message
@@ -88,7 +88,7 @@ fn main() {
     println!("Generated new P256 wallet:");
     println!("  Address: {}", p256_keypair.address);
     println!("  Tagged Address: {}", p256_keypair.tagged_address());
-    println!("  Private Key: {}", &*p256_keypair.private_key);
+    println!("  Private Key: {}", *p256_keypair.private_key);
     println!("  Public Key: {}", p256_keypair.public_key);
 
     // Sign a message
@@ -225,7 +225,7 @@ fn main() {
     println!("Generated new Ed25519 wallet:");
     println!("  Address: {}", ed25519_keypair.address);
     println!("  Tagged Address: {}", ed25519_keypair.tagged_address());
-    println!("  Private Key: {}", &*ed25519_keypair.private_key);
+    println!("  Private Key: {}", *ed25519_keypair.private_key);
     println!("  Public Key: {}", ed25519_keypair.public_key);
 
     // Sign a message
@@ -334,7 +334,7 @@ fn main() {
     match keypair_from_mnemonic(&mnemonic, CurveType::K256) {
         Ok(mnemonic_keypair) => {
             println!("  Address: {}", mnemonic_keypair.address);
-            println!("  Private Key: {}", &*mnemonic_keypair.private_key);
+            println!("  Private Key: {}", *mnemonic_keypair.private_key);
 
             // Sign a message with the mnemonic-derived key
             let message_mnemonic = b"Hello from mnemonic!";

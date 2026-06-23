@@ -18,6 +18,7 @@ pub const E_OBJECT_NOT_FOUND: u64 = 9_001;
 pub const E_OBJECT_LAYOUT_UNAVAILABLE: u64 = 9_002;
 pub const E_OBJECT_TYPE_MISMATCH: u64 = 9_003;
 pub const E_OBJECT_DESERIALIZE_FAILED: u64 = 9_004;
+pub const E_OBJECT_MUTATION_NOT_ALLOWED: u64 = 9_005;
 
 #[derive(Debug, Clone)]
 pub struct GasParameters {
@@ -93,13 +94,6 @@ pub struct SavedObject {
     pub data: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
-pub struct BorrowedObject {
-    pub object_id: String,
-    pub object_type: String,
-    pub data: Vec<u8>,
-}
-
 #[derive(Tid, Default)]
 pub struct SavedObjectsExt {
     pub objects: Vec<SavedObject>,
@@ -134,36 +128,42 @@ impl DeletedObjectsExt {
 }
 
 /// Extension for loaded objects from storage
+#[derive(Clone, Debug)]
+pub struct LoadedObject {
+    pub type_str: String,
+    pub data: Vec<u8>,
+    pub mutable_allowed: bool,
+}
+
 #[derive(Tid, Default)]
 pub struct LoadedObjectsExt {
-    pub objects: std::collections::HashMap<String, (String, Vec<u8>)>,
+    pub objects: std::collections::HashMap<String, LoadedObject>,
 }
 
 impl LoadedObjectsExt {
-    pub fn insert(&mut self, object_id: String, type_str: String, data: Vec<u8>) {
-        self.objects.insert(object_id, (type_str, data));
+    pub fn insert(
+        &mut self,
+        object_id: String,
+        type_str: String,
+        data: Vec<u8>,
+        mutable_allowed: bool,
+    ) {
+        self.objects.insert(
+            object_id,
+            LoadedObject {
+                type_str,
+                data,
+                mutable_allowed,
+            },
+        );
     }
-    pub fn get(&self, object_id: &str) -> Option<&(String, Vec<u8>)> {
+    pub fn get(&self, object_id: &str) -> Option<&LoadedObject> {
         self.objects.get(object_id)
     }
-}
 
-/// Extension for tracking borrowed mutable objects
-#[derive(Tid, Default)]
-pub struct BorrowedObjectsExt {
-    pub objects: Vec<BorrowedObject>,
-}
-
-impl BorrowedObjectsExt {
-    pub fn record(&mut self, object_id: String, type_str: String, data: Vec<u8>) {
-        self.objects.push(BorrowedObject {
-            object_id,
-            object_type: type_str,
-            data,
-        });
-    }
-    pub fn take_all(&mut self) -> Vec<BorrowedObject> {
-        std::mem::take(&mut self.objects)
+    pub fn get_mutable(&self, object_id: &str) -> Option<&LoadedObject> {
+        let loaded = self.objects.get(object_id)?;
+        loaded.mutable_allowed.then_some(loaded)
     }
 }
 
@@ -219,9 +219,11 @@ fn native_borrow_global(
             ext.get(&object_id).cloned()
         });
 
-    let Some((type_str, obj_data)) = loaded_data.flatten() else {
+    let Some(loaded) = loaded_data.flatten() else {
         return Ok(NR::err(context.gas_used(), E_OBJECT_NOT_FOUND));
     };
+    let type_str = loaded.type_str;
+    let obj_data = loaded.data;
 
     native_charge_gas_early_exit!(
         context,
@@ -283,15 +285,26 @@ fn native_borrow_global_mut(
     let object_addr = pop_arg!(arguments, AccountAddress);
     let object_id = format!("0x{}", hex::encode(object_addr.as_ref()));
 
-    // Load object from storage via context's extension
     let loaded_data =
         crate::native_ext::with_ext_mut_or_default::<LoadedObjectsExt, _>(context, |ext| {
-            ext.get(&object_id).cloned()
+            ext.get_mutable(&object_id).cloned()
         });
 
-    let Some((type_str, obj_data)) = loaded_data.flatten() else {
-        return Ok(NR::err(context.gas_used(), E_OBJECT_NOT_FOUND));
+    let Some(loaded) = loaded_data.flatten() else {
+        let exists =
+            crate::native_ext::with_ext_mut_or_default::<LoadedObjectsExt, _>(context, |ext| {
+                ext.get(&object_id).is_some()
+            })
+            .unwrap_or(false);
+        let code = if exists {
+            E_OBJECT_MUTATION_NOT_ALLOWED
+        } else {
+            E_OBJECT_NOT_FOUND
+        };
+        return Ok(NR::err(context.gas_used(), code));
     };
+    let type_str = loaded.type_str;
+    let obj_data = loaded.data;
 
     native_charge_gas_early_exit!(
         context,
@@ -333,11 +346,6 @@ fn native_borrow_global_mut(
         ty_args[0].clone(),
         obj_val,
     )?;
-
-    // Track borrowed objects for later writeback
-    crate::native_ext::with_ext_mut_or_default::<BorrowedObjectsExt, _>(context, |ext| {
-        ext.record(object_id.clone(), type_str, obj_data);
-    });
 
     Ok(NR::ok(context.gas_used(), smallvec![obj_ref]))
 }
@@ -477,13 +485,14 @@ mod tests {
         let type_str = "0x1::coin::Coin<0x1::kanari_coin::KANARI>".to_string();
         let data = vec![0x01, 0x02, 0x03];
 
-        ext.insert(object_id.clone(), type_str.clone(), data.clone());
+        ext.insert(object_id.clone(), type_str.clone(), data.clone(), false);
 
         let retrieved = ext.get(&object_id);
         assert!(retrieved.is_some());
-        let (retrieved_type, retrieved_data) = retrieved.unwrap();
-        assert_eq!(*retrieved_type, type_str);
-        assert_eq!(*retrieved_data, data);
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.type_str, type_str);
+        assert_eq!(retrieved.data, data);
+        assert!(!retrieved.mutable_allowed);
     }
 
     #[test]
@@ -495,21 +504,21 @@ mod tests {
     }
 
     #[test]
-    fn test_borrowed_objects_ext_tracking() {
-        // Test BorrowedObjectsExt for tracking borrowed mutable objects
-        let mut ext = BorrowedObjectsExt::default();
+    fn test_loaded_objects_ext_mutable_gate() {
         let object_id =
             "0x1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a".to_string();
         let type_str = "0x1::coin::Coin<0x1::kanari_coin::KANARI>".to_string();
         let data = vec![0x01, 0x02, 0x03];
+        let mut ext = LoadedObjectsExt::default();
 
-        ext.record(object_id.clone(), type_str.clone(), data.clone());
+        ext.insert(object_id.clone(), type_str.clone(), data.clone(), false);
+        assert!(ext.get_mutable(&object_id).is_none());
 
-        let all = ext.take_all();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].object_id, object_id);
-        assert_eq!(all[0].object_type, type_str);
-        assert_eq!(all[0].data, data);
+        ext.insert(object_id.clone(), type_str.clone(), data.clone(), true);
+        let loaded = ext.get_mutable(&object_id).expect("mutable access");
+        assert_eq!(loaded.type_str, type_str);
+        assert_eq!(loaded.data, data);
+        assert!(loaded.mutable_allowed);
     }
 
     #[test]

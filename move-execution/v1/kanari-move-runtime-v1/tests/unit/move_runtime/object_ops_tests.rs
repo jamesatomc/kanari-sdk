@@ -1,5 +1,6 @@
 use super::*;
 use crate::move_runtime::MoveRuntime;
+#[allow(clippy::duplicate_mod)]
 #[path = "../test_support.rs"]
 mod test_support;
 

@@ -1,4 +1,5 @@
 use super::*;
+#[allow(clippy::duplicate_mod)]
 #[path = "test_support.rs"]
 mod test_support;
 
@@ -166,6 +167,37 @@ fn token_balance_hint_is_ignored_when_owner_is_recomputed_from_objects() -> Resu
             .token_supply_summary(KANARI_TOKEN_TYPE)?
             .wallet_visible_supply,
         base.wallet_visible_supply + 210_000
+    );
+    state.validate_supply_invariants()?;
+
+    Ok(())
+}
+
+#[test]
+fn token_balance_hint_replaces_balance_instead_of_accumulating() -> Result<()> {
+    let owner = test_addr("0x1111")?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+
+    let account = Account::with_native_balance(owner, 210_000);
+    state.save_account(&account)?;
+    set_native_supply_for_test(&mut state, base.total_supply + 209_900)?;
+    state.global_token_supplies.insert(
+        KANARI_TOKEN_TYPE.to_string(),
+        base.wallet_visible_supply + 210_000,
+    );
+
+    let mut cs = ChangeSet::new();
+    cs.add_token_balance_set(owner, KANARI_TOKEN_TYPE.to_string(), 209_900);
+
+    state.apply_changeset(&cs)?;
+
+    assert_eq!(state.get_account(&owner).unwrap().native_balance(), 209_900);
+    assert_eq!(
+        state
+            .token_supply_summary(KANARI_TOKEN_TYPE)?
+            .wallet_visible_supply,
+        base.wallet_visible_supply + 209_900
     );
     state.validate_supply_invariants()?;
 

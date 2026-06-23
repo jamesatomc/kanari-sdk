@@ -594,7 +594,7 @@ mod tests {
             "K256 DER signature is larger than 64 bytes"
         );
 
-        println!(
+        eprintln!(
             "✅ Signature strategies confirmed: Ed25519={} bytes (RFC-8032), K256={} bytes (DER)",
             ed_sig.len(),
             k256_sig.len()

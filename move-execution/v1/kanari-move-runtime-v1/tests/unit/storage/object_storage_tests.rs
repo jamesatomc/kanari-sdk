@@ -1,4 +1,5 @@
 use super::*;
+#[allow(clippy::duplicate_mod)]
 #[path = "../test_support.rs"]
 mod test_support;
 

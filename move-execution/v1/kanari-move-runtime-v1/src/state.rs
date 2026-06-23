@@ -1594,15 +1594,7 @@ impl StateManager {
             let normalized_token_type = Self::normalize_token_type(token_type);
 
             let old_balances = account.token_balances.clone();
-            let current = account.get_token_balance(&normalized_token_type);
-            let next = current.checked_add(amount.value()).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Token balance overflow for owner {} and token {}",
-                    owner,
-                    normalized_token_type
-                )
-            })?;
-            account.set_token_balance(normalized_token_type, BalanceRecord::new(next));
+            account.set_token_balance(normalized_token_type, BalanceRecord::new(amount.value()));
             self.save_account(&account)?;
 
             if self.adjust_global_supplies_for_account_delta(&old_balances, &account.token_balances)

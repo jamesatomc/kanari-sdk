@@ -8,9 +8,7 @@ use kanari_system_natives::dynamic_field::{
     DynamicFieldReferencesExt, DynamicFieldResolver, DynamicFieldResolverExt, DynamicFieldsExt,
 };
 use kanari_system_natives::event::EventsExt;
-use kanari_system_natives::object::{
-    BorrowedObjectsExt, DeletedObjectsExt, LoadedObjectsExt, SavedObjectsExt,
-};
+use kanari_system_natives::object::{DeletedObjectsExt, LoadedObjectsExt, SavedObjectsExt};
 use kanari_system_natives::transfer_natives::TransferredObjectsExt;
 use kanari_types::clock::ClockModule;
 use kanari_types::event::Event;
@@ -999,7 +997,7 @@ impl MoveRuntime {
         let mut session = self.create_session_with_storage_ext(&vm_guard);
 
         // Preload object arguments so native object borrows can resolve them from extensions.
-        self.preload_objects_for_execution(&mut session, &args)?;
+        self.preload_objects_for_execution(&mut session, &args, sender)?;
 
         let mut auto_merged_coin_ids = Vec::new();
         let mut merged_coin_types = std::collections::HashSet::new();
@@ -1198,7 +1196,6 @@ impl MoveRuntime {
                     deleted_objects,
                     dynamic_fields_ops,
                     dynamic_field_mutations,
-                    borrowed_objects,
                 ) = {
                     let exts_after = session.get_native_extensions();
                     (
@@ -1210,7 +1207,6 @@ impl MoveRuntime {
                         exts_after
                             .get_mut::<DynamicFieldReferencesExt>()
                             .take_mutated(),
-                        exts_after.get_mut::<BorrowedObjectsExt>().take_all(),
                     )
                 };
 
@@ -1271,29 +1267,6 @@ impl MoveRuntime {
                         "saved",
                     );
                     processed_ids.insert(saved.object_id);
-                }
-
-                // Record objects that were updated through `borrow_global_mut`.
-                for borrowed in borrowed_objects {
-                    if processed_ids.contains(&borrowed.object_id) {
-                        continue;
-                    }
-
-                    let (owner, version) = self.resolve_saved_owner_and_version(
-                        &loaded_mutable_objects,
-                        &borrowed.object_id,
-                    );
-
-                    self.upsert_created_object(
-                        &mut cs,
-                        owner,
-                        &borrowed.object_id,
-                        &borrowed.object_type,
-                        borrowed.data.clone(),
-                        version,
-                        "borrowed_mut",
-                    );
-                    processed_ids.insert(borrowed.object_id);
                 }
 
                 self.add_transferred_objects_to_changeset(
@@ -1409,7 +1382,6 @@ impl MoveRuntime {
 
         // Track objects loaded and mutated through object native functions.
         extensions.add(LoadedObjectsExt::default());
-        extensions.add(BorrowedObjectsExt::default());
 
         vm_guard.new_session_with_extensions(self.resolver.clone(), extensions)
     }
@@ -1479,7 +1451,7 @@ impl MoveRuntime {
         let mut session = self.create_session_with_storage_ext(&vm_guard);
 
         // Preload object arguments so view functions can borrow them through natives.
-        self.preload_objects_for_execution(&mut session, args)
+        self.preload_objects_for_execution(&mut session, args, None)
             .map_err(|e| anyhow::anyhow!("Failed to preload objects: {}", e))?;
 
         // Parse and load type arguments before invocation.
@@ -1551,6 +1523,9 @@ impl MoveRuntime {
             }
             Some(kanari_system_natives::object::E_OBJECT_DESERIALIZE_FAILED) => {
                 "object data could not be deserialized with the current struct layout; this commonly happens after an incompatible contract upgrade"
+            }
+            Some(kanari_system_natives::object::E_OBJECT_MUTATION_NOT_ALLOWED) => {
+                "mutable object access is not allowed for this sender or object"
             }
             Some(1100) => {
                 "object data could not be deserialized or loaded; check object id, type args, and contract version"

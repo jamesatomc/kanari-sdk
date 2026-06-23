@@ -81,7 +81,8 @@ module kanari_system::object {
     public native fun save_object<T: key>(obj: &T);
 
     /// Load an object from storage by its address and return a mutable reference.
-    /// This enables runtime resolution of object IDs passed from CLI.
+    /// Mutable access is only allowed for objects the runtime authorizes for this call
+    /// (typically sender-owned, shared, or system-owned objects).
     /// 
     /// # Example
     /// ```move
@@ -91,7 +92,7 @@ module kanari_system::object {
     public native fun borrow_global_mut<T: key>(addr: address): &mut T;
 
     /// Load an object from storage by its address and return an immutable reference.
-    /// This allows reading any object's data without requiring ownership or mutability.
+    /// This reads objects that the runtime preloaded for the current call.
     /// 
     /// # Example
     /// ```move

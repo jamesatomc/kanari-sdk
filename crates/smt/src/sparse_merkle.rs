@@ -205,7 +205,7 @@ impl SparseMerkleTree {
                     key_hash.copy_from_slice(&key[2..]);
                     existing.push((key_hash, value.as_slice()));
                 }
-                existing.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+                existing.sort_unstable_by_key(|(left, _)| *left);
 
                 let mut hashed_updates = Vec::with_capacity(updates.len());
                 for (index, (key, value)) in updates.iter().enumerate() {
@@ -698,7 +698,7 @@ fn compute_sparse_root_from_leaf_hashes(mut current: Vec<([u8; 32], [u8; 32])>) 
         return DEFAULT_HASHES[0];
     }
 
-    current.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    current.sort_unstable_by_key(|(left, _)| *left);
 
     for depth in (1..=256).rev() {
         let mut next = Vec::with_capacity(current.len().saturating_div(2).saturating_add(1));
