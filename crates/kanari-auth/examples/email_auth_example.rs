@@ -1,6 +1,8 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
+
 //! Example demonstrating email-based authentication and transaction signing
 //!
 //! This example shows:

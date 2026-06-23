@@ -1,3 +1,5 @@
+#![allow(clippy::duplicate_mod)]
+
 use super::BlockchainEngine;
 use crate::blockchain::Blockchain;
 use crate::consensus::{Checkpoint, PersistentDagState};

@@ -305,6 +305,7 @@ async fn handle_network_status(state: &RpcServerState, request: &RpcRequest) -> 
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use axum::{

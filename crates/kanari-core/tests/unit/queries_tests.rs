@@ -1,3 +1,5 @@
+#![allow(clippy::duplicate_mod)]
+
 use super::*;
 use crate::{CheckpointSyncData, consensus::Checkpoint};
 use kanari_move_runtime_v1::changeset::{ChangeSet, CreatedObject};
