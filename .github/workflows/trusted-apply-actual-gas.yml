@@ -1,0 +1,40 @@
+name: Trusted Apply Actual Gas Fix
+
+on:
+  push:
+    branches:
+      - fix-gas
+    paths:
+      - .github/workflows/trusted-apply-actual-gas.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout remediation branch
+        uses: actions/checkout@v4
+        with:
+          ref: audit/fix-critical-high
+          fetch-depth: 0
+
+      - name: Apply security patches
+        run: |
+          python3 scripts/apply_actual_gas_cost_fix.py
+          python3 scripts/fix_genesis_persistence_results.py
+          cargo fmt --all
+          git diff --check
+
+      - name: Commit source changes and remove staging files
+        run: |
+          git config user.name "kanari-security-bot"
+          git config user.email "security-bot@users.noreply.github.com"
+          git rm scripts/apply_actual_gas_cost_fix.py
+          git rm scripts/fix_genesis_persistence_results.py
+          git rm .github/workflows/apply-actual-gas-cost-fix.yml
+          git add crates/kanari-core move-execution/v1/kanari-move-runtime-v1
+          git commit -m "fix(gas): charge actual VM and storage cost"
+          git push origin HEAD:audit/fix-critical-high
