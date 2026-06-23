@@ -41,25 +41,23 @@ impl BlockchainEngine {
         // Hash, verify, and extract metadata in one parallel pass.
         let mut verified_txs = signed_txs
             .into_par_iter()
-            .map(
-                |signed_tx| -> Result<VerifiedMempoolTransaction> {
-                    let verified = signed_tx.into_verified()?;
-                    Self::validate_transaction_gas(verified.transaction())?;
-                    let tx_hash = verified.hash().to_vec();
-                    let sender = verified.transaction().sender_address();
-                    let normalized_sender = sender_cache
-                        .get(sender)
-                        .expect("sender cache must contain every batch sender")
-                        .clone();
-                    let sequence_number = verified.transaction().sequence_number();
-                    Ok((
-                        verified.into_signed_transaction(),
-                        tx_hash,
-                        normalized_sender,
-                        sequence_number,
-                    ))
-                },
-            )
+            .map(|signed_tx| -> Result<VerifiedMempoolTransaction> {
+                let verified = signed_tx.into_verified()?;
+                Self::validate_transaction_gas(verified.transaction())?;
+                let tx_hash = verified.hash().to_vec();
+                let sender = verified.transaction().sender_address();
+                let normalized_sender = sender_cache
+                    .get(sender)
+                    .expect("sender cache must contain every batch sender")
+                    .clone();
+                let sequence_number = verified.transaction().sequence_number();
+                Ok((
+                    verified.into_signed_transaction(),
+                    tx_hash,
+                    normalized_sender,
+                    sequence_number,
+                ))
+            })
             .collect::<Result<Vec<_>>>()?;
 
         verified_txs.sort_by(|a, b| {
@@ -124,9 +122,7 @@ impl BlockchainEngine {
         let chain = match self.blockchain.read() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                log::error!(
-                    "Blockchain lock poisoned in mempool admission, recovering..."
-                );
+                log::error!("Blockchain lock poisoned in mempool admission, recovering...");
                 poisoned.into_inner()
             }
         };
@@ -166,7 +162,9 @@ impl BlockchainEngine {
                         .copied()
                         .unwrap_or(0),
                 )
-                .ok_or_else(|| anyhow::anyhow!("Pending sequence number overflow for {}", sender))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Pending sequence number overflow for {}", sender)
+                })?;
 
             for (expected_seq, tx_seq) in (expected_start..).zip(tx_sequences.iter().copied()) {
                 if tx_seq < expected_seq {
@@ -294,9 +292,7 @@ mod tests {
             sequence_number,
         );
         let mut signed = SignedTransaction::new(transaction);
-        signed
-            .sign(&sender.private_key, sender.curve_type)
-            .unwrap();
+        signed.sign(&sender.private_key, sender.curve_type).unwrap();
         signed
     }
 
@@ -335,12 +331,7 @@ mod tests {
             .unwrap();
 
         let error = engine
-            .admit_verified_transactions(vec![(
-                verified_tx,
-                tx_hash,
-                sender,
-                sequence_number,
-            )])
+            .admit_verified_transactions(vec![(verified_tx, tx_hash, sender, sequence_number)])
             .unwrap_err();
 
         assert!(error.to_string().contains("already executed"));
