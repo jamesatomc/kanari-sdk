@@ -166,17 +166,7 @@ jobs:
             done
           } > audit-dependency-tree.txt
 
-      - name: Install cargo-audit
-        run: |
-          if ! command -v cargo-audit >/dev/null 2>&1; then
-            cargo install cargo-audit --locked
-          fi
-
-      - name: Audit dependencies
-        run: cargo audit --deny warnings
-
-      - name: Upload audit diagnostics
-        if: always()
+      - name: Upload audit dependency tree
         uses: actions/upload-artifact@v4
         with:
           name: audit-diagnostics
@@ -185,3 +175,12 @@ jobs:
             audit-dependency-tree.txt
           if-no-files-found: error
           retention-days: 3
+
+      - name: Install cargo-audit
+        run: |
+          if ! command -v cargo-audit >/dev/null 2>&1; then
+            cargo install cargo-audit --locked
+          fi
+
+      - name: Audit dependencies
+        run: cargo audit --deny warnings
