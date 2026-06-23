@@ -24,6 +24,34 @@ jobs:
           ref: audit/fix-critical-high
           fetch-depth: 0
 
+      - name: Normalize duplicate runtime replacement
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/apply_actual_gas_cost_fix.py")
+          text = path.read_text()
+          old = '''fn = replace_once(
+              fn,
+              \'''                    Ok(move_cs) => changeset.merge(move_cs),\''',
+              \'''                    Ok(move_cs) => {
+                                  runtime_completed = true;
+                                  changeset.merge(move_cs);
+                              },\''',
+              "track publish runtime completion",
+          )'''
+          new = '''fn = fn.replace(
+              \'''                    Ok(move_cs) => changeset.merge(move_cs),\''',
+              \'''                    Ok(move_cs) => {
+                                  runtime_completed = true;
+                                  changeset.merge(move_cs);
+                              },\''',
+              1,
+          )'''
+          if text.count(old) != 1:
+              raise RuntimeError(f"expected one publish replacement block, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
       - name: Apply actual gas-cost patch
         id: actual_patch
         continue-on-error: true
