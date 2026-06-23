@@ -1139,6 +1139,27 @@ impl BlockchainEngine {
         bcs::from_bytes::<u64>(&args[1]).ok()
     }
 
+    fn object_transfer_recipient(tx: &Transaction) -> Option<AccountAddress> {
+        let Transaction::ExecuteFunction {
+            module,
+            function,
+            args,
+            ..
+        } = tx
+        else {
+            return None;
+        };
+
+        if module != Transaction::KANARI_MODULE
+            || function != Transaction::TRANSFER_AMOUNT_FUNCTION
+            || args.len() < 3
+        {
+            return None;
+        }
+
+        bcs::from_bytes::<AccountAddress>(&args[2]).ok()
+    }
+
     fn required_native_amount_for_transaction(tx: &Transaction) -> u64 {
         tx.native_call()
             .map(|call| call.required_native_amount())
@@ -1319,6 +1340,19 @@ impl BlockchainEngine {
                 args,
                 ..
             } => {
+                if function == Transaction::TRANSFER_AMOUNT_FUNCTION
+                    && module == Transaction::KANARI_MODULE
+                    && Self::object_transfer_recipient(tx).is_some_and(|recipient| recipient == sender_addr)
+                {
+                    Self::apply_gas_and_sequence(
+                        &mut changeset,
+                        sender_addr,
+                        gas_cost,
+                        gas_meter.gas_used,
+                    )?;
+                    return Ok(changeset);
+                }
+
                 if let Some(native_call) = native_call {
                     match native_call {
                         NativeCall::TransferAmount { recipient, amount } => {
@@ -1965,6 +1999,101 @@ mod tests {
                 .unwrap()
                 .native_balance(),
             10
+        );
+        assert_eq!(
+            state.get_account(&dao).unwrap().native_balance(),
+            dao_before + gas_cost
+        );
+        state.validate_supply_invariants().unwrap();
+    }
+
+    #[test]
+    fn self_native_transfer_only_charges_gas_and_keeps_supply_valid() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        fund_sender(&engine, &sender.address, 1_000_000);
+
+        let tx = Transaction::new_transfer(sender.tagged_address(), sender.address.clone(), 210_000, 0);
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+
+        let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+        let dao =
+            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+        let dao_before = engine
+            .state_read()
+            .get_account(&dao)
+            .map(|account| account.native_balance())
+            .unwrap_or(0);
+        let gas_cost = kanari_types::gas::GasOperation::Transfer.gas_units()
+            * kanari_types::gas::GasConfig::default().default_transaction_gas_price();
+
+        let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+        assert!(changeset.success);
+
+        let mut state = engine.state_write();
+        state.apply_changeset(&changeset).unwrap();
+
+        assert_eq!(
+            state.get_account(&sender_address).unwrap().native_balance(),
+            1_000_000 - gas_cost
+        );
+        assert_eq!(
+            state.get_account(&dao).unwrap().native_balance(),
+            dao_before + gas_cost
+        );
+        state.validate_supply_invariants().unwrap();
+    }
+
+    #[test]
+    fn self_object_transfer_only_charges_gas_and_keeps_supply_valid() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        fund_sender(&engine, &sender.address, 1_000_000);
+
+        let gas = kanari_types::gas::GasConfig::default();
+        let tx = Transaction::ExecuteFunction {
+            sender: sender.tagged_address(),
+            module: Transaction::KANARI_MODULE.to_string(),
+            function: Transaction::TRANSFER_AMOUNT_FUNCTION.to_string(),
+            type_args: vec![],
+            args: vec![
+                AccountAddress::random().to_vec(),
+                bcs::to_bytes(&210_000u64).unwrap(),
+                bcs::to_bytes(&AccountAddress::from_hex_literal(&sender.address).unwrap()).unwrap(),
+            ],
+            gas_limit: gas.default_transaction_gas_limit(),
+            gas_price: gas.default_transaction_gas_price(),
+            sequence_number: 0,
+        };
+        let mut signed_tx = SignedTransaction::new(tx);
+        signed_tx
+            .sign(&sender.private_key, sender.curve_type)
+            .unwrap();
+
+        let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+        let dao =
+            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+        let dao_before = engine
+            .state_read()
+            .get_account(&dao)
+            .map(|account| account.native_balance())
+            .unwrap_or(0);
+        let gas_cost = kanari_types::gas::GasOperation::ExecuteFunction { complexity: 1 }
+            .gas_units()
+            * gas.default_transaction_gas_price();
+
+        let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+        assert!(changeset.success);
+
+        let mut state = engine.state_write();
+        state.apply_changeset(&changeset).unwrap();
+
+        assert_eq!(
+            state.get_account(&sender_address).unwrap().native_balance(),
+            1_000_000 - gas_cost
         );
         assert_eq!(
             state.get_account(&dao).unwrap().native_balance(),
