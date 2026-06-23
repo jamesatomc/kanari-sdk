@@ -636,9 +636,7 @@ fn batch_submit_rejects_duplicate_transactions() {
         .submit_transactions_batch(vec![tx.clone(), tx])
         .unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("duplicated in submitted batch"));
+    assert!(err.to_string().contains("duplicated in submitted batch"));
 }
 
 #[test]
