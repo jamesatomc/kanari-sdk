@@ -49,7 +49,7 @@ jobs:
         run: |
           set -o pipefail
           cargo check -p kanari-node --all-targets 2>&1 | tee -a medium-security.log
-          cargo test -p kanari-node --lib 2>&1 | tee -a medium-security.log
+          cargo test -p kanari-node --bin kanari-node 2>&1 | tee -a medium-security.log
           cargo clippy -p kanari-node --all-targets -- -D warnings 2>&1 | tee -a medium-security.log
 
       - name: Verify core with canonical gas rules
