@@ -75,7 +75,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --quiet --workspace --all-targets --message-format short -- -D warnings
 
   test:
     name: Workspace tests
