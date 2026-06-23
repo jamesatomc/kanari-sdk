@@ -10,7 +10,7 @@ on:
       - .github/workflows/apply-actual-gas-cost-fix.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   apply:
@@ -52,24 +52,33 @@ jobs:
           path.write_text(text.replace(old, new, 1))
           PY
 
-      - name: Apply actual gas-cost patch
-        run: python3 scripts/apply_actual_gas_cost_fix.py
-
-      - name: Propagate genesis persistence errors
-        run: python3 scripts/fix_genesis_persistence_results.py
-
-      - name: Format sources
-        run: cargo fmt --all
-
-      - name: Validate patch shape
-        run: git diff --check
-
-      - name: Stage patched source artifact
+      - name: Apply and format remediation
         run: |
-          mkdir -p patched-source
+          python3 scripts/apply_actual_gas_cost_fix.py
+          python3 scripts/fix_genesis_persistence_results.py
+          cargo fmt --all
+          git diff --check
+
+      - name: Create detached Git commit object
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base_commit=$(git rev-parse HEAD)
+          base_tree=$(git show -s --format=%T "$base_commit")
+          tree_entries='[]'
+
           while IFS= read -r file; do
-            mkdir -p "patched-source/$(dirname "$file")"
-            cp "$file" "patched-source/$file"
+            encoded=$(base64 -w0 "$file")
+            blob_sha=$(
+              jq -n --arg content "$encoded" '{content:$content,encoding:"base64"}' |
+                gh api --method POST "repos/${GITHUB_REPOSITORY}/git/blobs" --input - --jq '.sha'
+            )
+            tree_entries=$(
+              jq --arg path "$file" --arg sha "$blob_sha" \
+                '. + [{path:$path,mode:"100644",type:"blob",sha:$sha}]' \
+                <<<"$tree_entries"
+            )
           done <<'FILES'
           crates/kanari-core/src/engine.rs
           crates/kanari-core/tests/unit/engine_tests.rs
@@ -79,10 +88,25 @@ jobs:
           move-execution/v1/kanari-move-runtime-v1/tests/unit/changeset_tests.rs
           FILES
 
-      - name: Upload patched sources
+          tree_sha=$(
+            jq -n --arg base_tree "$base_tree" --argjson tree "$tree_entries" \
+              '{base_tree:$base_tree,tree:$tree}' |
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/trees" --input - --jq '.sha'
+          )
+          commit_sha=$(
+            jq -n \
+              --arg message "fix(gas): charge actual VM and storage cost" \
+              --arg tree "$tree_sha" \
+              --arg parent "$base_commit" \
+              '{message:$message,tree:$tree,parents:[$parent]}' |
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/commits" --input - --jq '.sha'
+          )
+          printf '%s\n' "$commit_sha" > generated-commit-sha.txt
+
+      - name: Upload generated commit SHA
         uses: actions/upload-artifact@v4
         with:
-          name: patched-actual-gas-sources
-          path: patched-source
+          name: generated-actual-gas-commit
+          path: generated-commit-sha.txt
           if-no-files-found: error
           retention-days: 3
