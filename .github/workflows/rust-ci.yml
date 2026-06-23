@@ -36,10 +36,9 @@ env:
 
 jobs:
   format:
-    name: Rustfmt (advisory)
+    name: Rustfmt
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -73,35 +72,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-clippy-
             ${{ runner.os }}-cargo-
 
-      - name: Run Clippy autofix pass
+      - name: Run Clippy
         run: |
           set +e
-          cargo clippy --fix --quiet -p kanari-system-natives --all-targets --allow-dirty --allow-staged --message-format short -- -D warnings > clippy.log 2>&1
+          cargo clippy --workspace --all-targets -- -D warnings > clippy.log 2>&1
           status=$?
-          git diff > clippy-fix.patch
-          mapfile -d '' changed_files < <(git diff --name-only -z)
-          if (( ${#changed_files[@]} > 0 )); then
-            tar -czf clippy-fixed-files.tar.gz "${changed_files[@]}"
-          else
-            tar -czf clippy-fixed-files.tar.gz --files-from /dev/null
-          fi
           cat clippy.log
           exit $status
 
       - name: Upload Clippy diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: clippy-diagnostics
-          path: |
-            clippy.log
-            clippy-fix.patch
-            clippy-fixed-files.tar.gz
+          path: clippy.log
           if-no-files-found: error
           retention-days: 3
 
@@ -123,7 +112,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-test-
             ${{ runner.os }}-cargo-
@@ -142,53 +131,19 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo tools and registry
+      - name: Cache cargo-audit and registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-audit-v1-${{ hashFiles('**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-audit-v2-${{ hashFiles('**/Cargo.toml', '.cargo/audit.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-audit-v1-
+            ${{ runner.os }}-cargo-audit-v2-
 
       - name: Generate workspace lockfile
-        run: |
-          set +e
-          cargo generate-lockfile > cargo-resolve.log 2>&1
-          status=$?
-          cat cargo-resolve.log
-          exit $status
-
-      - name: Upload Cargo resolver diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-resolver-diagnostics
-          path: cargo-resolve.log
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Capture audited dependency trees
-        run: |
-          {
-            for crate in hickory-proto rsa bincode difference paste pqcrypto-dilithium pqcrypto-internals pqcrypto-sphincsplus pqcrypto-traits; do
-              echo "===== cargo tree -i ${crate} ====="
-              cargo tree -i "${crate}" || true
-              echo
-            done
-          } > audit-dependency-tree.txt
-
-      - name: Upload audit dependency tree
-        uses: actions/upload-artifact@v4
-        with:
-          name: audit-diagnostics
-          path: |
-            Cargo.lock
-            audit-dependency-tree.txt
-          if-no-files-found: error
-          retention-days: 3
+        run: cargo generate-lockfile
 
       - name: Install cargo-audit
         run: |
