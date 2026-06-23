@@ -9,7 +9,7 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - "rust-toolchain.toml"
-      - "audit.toml"
+      - ".cargo/audit.toml"
       - ".github/workflows/rust-ci.yml"
   push:
     branches:
@@ -19,7 +19,7 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - "rust-toolchain.toml"
-      - "audit.toml"
+      - ".cargo/audit.toml"
       - ".github/workflows/rust-ci.yml"
   workflow_dispatch:
 
