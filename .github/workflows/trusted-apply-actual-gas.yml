@@ -81,13 +81,12 @@ jobs:
       - name: Validate patch shape
         run: git diff --check
 
-      - name: Commit source changes and remove staging files
+      - name: Commit source changes and remove staging scripts
         run: |
           git config user.name "kanari-security-bot"
           git config user.email "security-bot@users.noreply.github.com"
           git rm scripts/apply_actual_gas_cost_fix.py
           git rm scripts/fix_genesis_persistence_results.py
-          git rm .github/workflows/apply-actual-gas-cost-fix.yml
           git add crates/kanari-core move-execution/v1/kanari-move-runtime-v1
           git commit -m "fix(gas): charge actual VM and storage cost"
           git push origin HEAD:audit/fix-critical-high
