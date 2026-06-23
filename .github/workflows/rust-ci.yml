@@ -9,6 +9,7 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - "rust-toolchain.toml"
+      - "audit.toml"
       - ".github/workflows/rust-ci.yml"
   push:
     branches:
@@ -18,6 +19,7 @@ on:
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - "rust-toolchain.toml"
+      - "audit.toml"
       - ".github/workflows/rust-ci.yml"
   workflow_dispatch:
 
@@ -154,6 +156,16 @@ jobs:
       - name: Generate workspace lockfile
         run: cargo generate-lockfile
 
+      - name: Capture audited dependency trees
+        run: |
+          {
+            for crate in hickory-proto rsa bincode difference paste pqcrypto-dilithium pqcrypto-internals pqcrypto-sphincsplus pqcrypto-traits; do
+              echo "===== cargo tree -i ${crate} ====="
+              cargo tree -i "${crate}" || true
+              echo
+            done
+          } > audit-dependency-tree.txt
+
       - name: Install cargo-audit
         run: |
           if ! command -v cargo-audit >/dev/null 2>&1; then
@@ -162,3 +174,14 @@ jobs:
 
       - name: Audit dependencies
         run: cargo audit --deny warnings
+
+      - name: Upload audit diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-diagnostics
+          path: |
+            Cargo.lock
+            audit-dependency-tree.txt
+          if-no-files-found: error
+          retention-days: 3
