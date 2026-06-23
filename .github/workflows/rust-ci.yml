@@ -75,7 +75,21 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run Clippy
-        run: cargo clippy --quiet --workspace --all-targets --message-format short -- -D warnings
+        run: |
+          set +e
+          cargo clippy --quiet --workspace --all-targets --message-format short -- -D warnings > clippy.log 2>&1
+          status=$?
+          cat clippy.log
+          exit $status
+
+      - name: Upload Clippy diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-diagnostics
+          path: clippy.log
+          if-no-files-found: error
+          retention-days: 3
 
   test:
     name: Workspace tests
