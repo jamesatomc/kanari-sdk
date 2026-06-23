@@ -61,9 +61,7 @@ class TransactionOperations {
   String? _normalizedTokenTypeFromCoinObject(String objectType) {
     final start = objectType.indexOf('<');
     final end = objectType.lastIndexOf('>');
-    if (start == -1 || end == -1 || end <= start) {
-      return null;
-    }
+    if (start == -1 || end == -1 || end <= start) return null;
 
     final outerType = objectType.substring(0, start);
     if (!outerType.endsWith('::coin::Coin') &&
@@ -71,17 +69,13 @@ class TransactionOperations {
       return null;
     }
 
-    final tokenType = objectType.substring(start + 1, end);
-    return BcsUtils.normalizeTokenType(tokenType);
+    return BcsUtils.normalizeTokenType(objectType.substring(start + 1, end));
   }
 
   int? _readCoinBalance(List<int> data) {
-    if (data.length < 40) {
-      return null;
-    }
-
-    final balanceBytes = Uint8List.fromList(data.sublist(32, 40));
-    return ByteData.sublistView(balanceBytes).getUint64(0, Endian.little);
+    if (data.length < 40) return null;
+    final bytes = Uint8List.fromList(data.sublist(32, 40));
+    return ByteData.sublistView(bytes).getUint64(0, Endian.little);
   }
 
   Future<TransactionResult> _signAndSubmit({
@@ -143,11 +137,10 @@ class TransactionOperations {
     bool? executeImmediate,
   }) async {
     final account = await queries.getAccount(wallet.address);
-    final senderAddress = _getSenderForTx(wallet);
-
+    final sender = _getSenderForTx(wallet);
     final txData = {
       'PublishModule': {
-        'sender': senderAddress,
+        'sender': sender,
         'module_bytes': moduleBytes,
         'module_name': moduleName,
         'gas_limit': gasLimit,
@@ -155,9 +148,8 @@ class TransactionOperations {
         'sequence_number': account.sequenceNumber,
       },
     };
-
     final params = {
-      'sender': senderAddress,
+      'sender': sender,
       'module_bytes': moduleBytes,
       'module_name': moduleName,
       'gas_limit': gasLimit,
@@ -176,20 +168,11 @@ class TransactionOperations {
 
   String _findSpendableCoinObjectId(AccountInfo account, String tokenType) {
     final wantedToken = BcsUtils.normalizeTokenType(tokenType);
-
     for (final obj in account.ownedObjects ?? const []) {
-      if (_normalizedTokenTypeFromCoinObject(obj.type) != wantedToken) {
-        continue;
-      }
-
-      final coinBalance = _readCoinBalance(obj.data);
-      if (coinBalance == null || coinBalance == 0) {
-        continue;
-      }
-
-      return obj.id;
+      if (_normalizedTokenTypeFromCoinObject(obj.type) != wantedToken) continue;
+      final balance = _readCoinBalance(obj.data);
+      if (balance != null && balance > 0) return obj.id;
     }
-
     throw Exception(
       'No spendable Coin<$tokenType> object found.\n'
       'This wallet needs a spendable Coin object for the selected token.',
@@ -208,7 +191,6 @@ class TransactionOperations {
     final normalizedRecipient = BcsUtils.normalizeAddress(recipient);
     final wantedToken = BcsUtils.normalizeTokenType(tokenType);
     final coinObjectId = _findSpendableCoinObjectId(account, wantedToken);
-
     final parts = wantedToken.split('::');
     if (parts.length < 3) {
       throw ArgumentError(
@@ -216,39 +198,69 @@ class TransactionOperations {
       );
     }
 
-    final args = <List<int>>[
-      BcsUtils.hexToBytes(BcsUtils.normalizeObjectId(coinObjectId)),
-      BcsUtils.encodeU64(amount),
-      BcsUtils.hexToBytes(normalizedRecipient),
-    ];
-
     return executeFunction(
       wallet: wallet,
       package: parts[0],
       module: parts[1],
       function: 'transfer_amount',
-      typeArgs: const <String>[],
-      args: args,
+      args: <List<int>>[
+        BcsUtils.hexToBytes(BcsUtils.normalizeObjectId(coinObjectId)),
+        BcsUtils.encodeU64(amount),
+        BcsUtils.hexToBytes(normalizedRecipient),
+      ],
       gasLimit: gasLimit,
       gasPrice: gasPrice,
       executeImmediate: true,
     );
   }
 
+  /// Transfers the native KANARI balance through the canonical account path.
+  ///
+  /// Native KANARI must not be routed through the generic Coin-object call path:
+  /// account gas debits are maintained outside the Move Coin object and a later
+  /// object recomputation can otherwise restore an earlier gas debit. The server
+  /// represents this request as the canonical 0x2::kanari::transfer_amount native
+  /// transaction, so the signed BCS payload below must match that representation.
   Future<TransactionResult> transfer({
     required KanariWallet wallet,
     required String recipient,
     required int amount,
     int gasLimit = TransactionConstants.defaultGasLimit,
     int gasPrice = TransactionConstants.defaultGasPrice,
-  }) {
-    return _transferCoinObject(
+  }) async {
+    final account = await queries.getAccount(wallet.address);
+    final sender = _getSenderForTx(wallet);
+    final normalizedRecipient = BcsUtils.normalizeAddress(recipient);
+    final txData = {
+      'ExecuteFunction': {
+        'sender': sender,
+        'module': '0x2::kanari',
+        'function': 'transfer_amount',
+        'type_args': <String>[],
+        'args': <List<int>>[
+          BcsUtils.encodeU64(amount),
+          BcsUtils.encodeString(normalizedRecipient),
+        ],
+        'gas_limit': gasLimit,
+        'gas_price': gasPrice,
+        'sequence_number': account.sequenceNumber,
+      },
+    };
+    final params = {
+      'sender': sender,
+      'recipient': normalizedRecipient,
+      'amount': amount,
+      'gas_limit': gasLimit,
+      'gas_price': gasPrice,
+      'sequence_number': account.sequenceNumber,
+      'execute_immediate': true,
+    };
+
+    return _signAndSubmit(
       wallet: wallet,
-      recipient: recipient,
-      tokenType: token_utils.kanariTokenType,
-      amount: amount,
-      gasLimit: gasLimit,
-      gasPrice: gasPrice,
+      txData: txData,
+      rpcMethod: TransactionConstants.rpcSubmitTransaction,
+      params: params,
     );
   }
 
@@ -264,12 +276,11 @@ class TransactionOperations {
     bool? executeImmediate,
   }) async {
     final account = await queries.getAccount(wallet.address);
-    final senderAddress = _getSenderForTx(wallet);
+    final sender = _getSenderForTx(wallet);
     final packageAddress = BcsUtils.normalizeAnyAddress(package);
-
     final txData = {
       'ExecuteFunction': {
-        'sender': senderAddress,
+        'sender': sender,
         'module': '$packageAddress::$module',
         'function': function,
         'type_args': typeArgs,
@@ -279,9 +290,8 @@ class TransactionOperations {
         'sequence_number': account.sequenceNumber,
       },
     };
-
     final params = {
-      'sender': senderAddress,
+      'sender': sender,
       'package': packageAddress,
       'module': module,
       'function': function,
@@ -308,20 +318,18 @@ class TransactionOperations {
     int gasPrice = TransactionConstants.defaultGasPrice,
   }) async {
     final account = await queries.getAccount(wallet.address);
-    final senderAddress = _getSenderForTx(wallet);
-
+    final sender = _getSenderForTx(wallet);
     final txData = {
       'Burn': {
-        'from': senderAddress,
+        'from': sender,
         'amount': amount,
         'gas_limit': gasLimit,
         'gas_price': gasPrice,
         'sequence_number': account.sequenceNumber,
       },
     };
-
     final params = {
-      'sender': senderAddress,
+      'sender': sender,
       'amount': amount,
       'gas_limit': gasLimit,
       'gas_price': gasPrice,
@@ -343,7 +351,7 @@ class TransactionOperations {
     required int amount,
     int gasLimit = TransactionConstants.defaultGasLimit,
     int gasPrice = 0,
-  }) async {
+  }) {
     return _transferCoinObject(
       wallet: wallet,
       recipient: recipient,
