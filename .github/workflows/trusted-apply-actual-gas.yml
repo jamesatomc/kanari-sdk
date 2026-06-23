@@ -1,0 +1,67 @@
+name: Trusted Apply Clippy Security Fix
+
+on:
+  pull_request:
+    branches:
+      - fix-gas
+    paths:
+      - scripts/fix_clippy_security.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'audit/fix-critical-high'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout remediation branch
+        uses: actions/checkout@v4
+        with:
+          ref: audit/fix-critical-high
+          fetch-depth: 0
+
+      - name: Apply and verify source fix
+        run: |
+          python3 scripts/fix_clippy_security.py
+          cargo fmt --all
+          cargo check -p kanari-core --all-targets
+          cargo clippy -p kanari-core --all-targets -- -D warnings
+          git diff --check
+
+      - name: Create detached Git commit object
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base_commit=$(git rev-parse HEAD)
+          base_tree=$(git show -s --format=%T "$base_commit")
+          file=crates/kanari-core/src/engine.rs
+          encoded=$(base64 -w0 "$file")
+          blob_sha=$(
+            jq -n --arg content "$encoded" '{content:$content,encoding:"base64"}' |
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/blobs" --input - --jq '.sha'
+          )
+          tree_sha=$(
+            jq -n --arg base_tree "$base_tree" --arg path "$file" --arg sha "$blob_sha" \
+              '{base_tree:$base_tree,tree:[{path:$path,mode:"100644",type:"blob",sha:$sha}]}' |
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/trees" --input - --jq '.sha'
+          )
+          commit_sha=$(
+            jq -n \
+              --arg message "fix(security): propagate persistence failures and remove dead helpers" \
+              --arg tree "$tree_sha" \
+              --arg parent "$base_commit" \
+              '{message:$message,tree:$tree,parents:[$parent]}' |
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/commits" --input - --jq '.sha'
+          )
+          printf '%s\n' "$commit_sha" > generated-commit-sha.txt
+
+      - name: Upload generated commit SHA
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-clippy-security-commit
+          path: generated-commit-sha.txt
+          if-no-files-found: error
+          retention-days: 3
