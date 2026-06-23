@@ -306,7 +306,11 @@ move-coverage = { path = "third_party/move/crates/move-coverage" }
 move-bytecode-verifier = { path = "third_party/move/crates/move-bytecode-verifier" }
 
 [patch.crates-io]
+bitcoin-io = { path = "third_party/patches/bitcoin-io-0.1.100" }
+bitcoin_hashes = { path = "third_party/patches/bitcoin_hashes-0.14.100" }
 libp2p-kad = { path = "third_party/patches/libp2p-kad-0.48.0" }
+libp2p-dns = { path = "third_party/patches/libp2p-dns-0.44.0" }
+libp2p-mdns = { path = "third_party/patches/libp2p-mdns-0.48.0" }
 proc-macro-error2 = { path = "third_party/patches/proc-macro-error2-2.0.1" }
 
 

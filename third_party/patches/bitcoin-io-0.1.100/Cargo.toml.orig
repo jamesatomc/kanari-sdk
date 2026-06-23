@@ -1,0 +1,29 @@
+[package]
+name = "bitcoin-io"
+# We jumped to `v0.1.100` when doing the MSRV bump to Rust `1.74`
+# leaving room for a bunch of secuity releases upto this number if
+# needed.
+version = "0.1.100"
+authors = ["Matt Corallo <birchneutea@mattcorallo.com>"]
+license = "CC0-1.0"
+repository = "https://github.com/rust-bitcoin/rust-bitcoin"
+documentation = "https://docs.rs/bitcoin-io/"
+description = "Simple I/O traits for no-std (and std) environments"
+categories = ["no-std"]
+keywords = [ "io", "no-std" ]
+readme = "README.md"
+edition = "2021"
+rust-version = "1.74.0"
+exclude = ["tests", "contrib"]
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(rust_v_1_63)', 'cfg(rust_v_1_72)', 'cfg(rust_v_1_73)', 'cfg(rust_v_1_75)', 'cfg(rust_v_1_78)'] }
