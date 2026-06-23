@@ -3,7 +3,17 @@
 
 // Crypto test-vector generators intentionally print reproducible vectors, and the
 // split `crypto/tests.rs` layout creates a nested `tests` module by design.
-#![cfg_attr(test, allow(clippy::module_inception, clippy::print_stdout))]
+#![cfg_attr(
+    test,
+    allow(
+        unused_assignments,
+        clippy::manual_range_contains,
+        clippy::module_inception,
+        clippy::needless_borrows_for_generic_args,
+        clippy::print_stdout,
+        clippy::useless_vec
+    )
+)]
 
 use move_core_types::account_address::AccountAddress;
 use move_vm_runtime::native_functions::{NativeFunctionTable, make_table_from_iter};
