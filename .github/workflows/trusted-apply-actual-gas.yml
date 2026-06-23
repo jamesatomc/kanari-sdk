@@ -31,18 +31,40 @@ jobs:
           cargo fmt --all
           git diff --check
 
-      - name: Verify affected crates
+      - name: Verify gas protocol schedule
         run: |
-          cargo check -p kanari-types --all-targets
-          cargo test -p kanari-types --lib
-          cargo clippy -p kanari-types --all-targets -- -D warnings
-          cargo check -p kanari-auth --all-targets
-          cargo test -p kanari-auth --lib
-          cargo clippy -p kanari-auth --all-targets -- -D warnings
-          cargo check -p kanari-node --all-targets
-          cargo test -p kanari-node --lib
-          cargo clippy -p kanari-node --all-targets -- -D warnings
-          cargo check -p kanari-core --all-targets
+          set -o pipefail
+          cargo check -p kanari-types --all-targets 2>&1 | tee -a medium-security.log
+          cargo test -p kanari-types --lib 2>&1 | tee -a medium-security.log
+          cargo clippy -p kanari-types --all-targets -- -D warnings 2>&1 | tee -a medium-security.log
+
+      - name: Verify Argon2id migration
+        run: |
+          set -o pipefail
+          cargo check -p kanari-auth --all-targets 2>&1 | tee -a medium-security.log
+          cargo test -p kanari-auth --lib 2>&1 | tee -a medium-security.log
+          cargo clippy -p kanari-auth --all-targets -- -D warnings 2>&1 | tee -a medium-security.log
+
+      - name: Verify persistent P2P identity
+        run: |
+          set -o pipefail
+          cargo check -p kanari-node --all-targets 2>&1 | tee -a medium-security.log
+          cargo test -p kanari-node --lib 2>&1 | tee -a medium-security.log
+          cargo clippy -p kanari-node --all-targets -- -D warnings 2>&1 | tee -a medium-security.log
+
+      - name: Verify core with canonical gas rules
+        run: |
+          set -o pipefail
+          cargo check -p kanari-core --all-targets 2>&1 | tee -a medium-security.log
+
+      - name: Upload Medium verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: medium-security-diagnostics
+          path: medium-security.log
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Commit verified source changes
         run: |
