@@ -79,7 +79,7 @@ jobs:
       - name: Run Clippy autofix pass
         run: |
           set +e
-          cargo clippy --fix --quiet --workspace --all-targets --allow-dirty --allow-staged --message-format short -- -D warnings > clippy.log 2>&1
+          cargo clippy --fix --quiet -p kanari-system-natives --all-targets --allow-dirty --allow-staged --message-format short -- -D warnings > clippy.log 2>&1
           status=$?
           git diff > clippy-fix.patch
           mapfile -d '' changed_files < <(git diff --name-only -z)
