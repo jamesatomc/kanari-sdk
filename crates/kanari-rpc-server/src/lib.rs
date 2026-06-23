@@ -318,6 +318,7 @@ mod tests {
     use kanari_crypto::keys::{CurveType, generate_keypair};
     use kanari_rpc_api::methods;
     use kanari_types::balance::BalanceRecord;
+    use kanari_types::gas::GasConfig;
     use kanari_types::kanari::KANARI_TOKEN_TYPE;
     use kanari_types::transaction::{SignedTransaction, Transaction};
     use move_core_types::account_address::AccountAddress;
@@ -326,7 +327,9 @@ mod tests {
 
     fn test_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn coin_data(amount: u64) -> Vec<u8> {
@@ -599,6 +602,7 @@ mod tests {
     async fn submitted_transaction_hash_is_queryable() {
         let guard = test_guard();
         let app = build_test_router();
+        let gas = GasConfig::default();
 
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         let recipient = generate_keypair(CurveType::Ed25519).unwrap();
@@ -613,8 +617,8 @@ mod tests {
             ..
         } = &mut transaction
         {
-            *gas_limit = 1_000_000;
-            *gas_price = 1;
+            *gas_limit = gas.max_gas_per_tx;
+            *gas_price = gas.default_transaction_gas_price();
         }
         let mut signed_tx = SignedTransaction::new(transaction);
         signed_tx
@@ -628,8 +632,8 @@ mod tests {
                 "sender": sender_tagged,
                 "recipient": recipient_address,
                 "amount": 1,
-                "gas_limit": 1_000_000,
-                "gas_price": 1,
+                "gas_limit": gas.max_gas_per_tx,
+                "gas_price": gas.default_transaction_gas_price(),
                 "sequence_number": 0,
                 "signature": signed_tx.signature,
             }),
@@ -668,6 +672,7 @@ mod tests {
     #[tokio::test]
     async fn submit_transaction_can_execute_immediately() {
         let guard = test_guard();
+        let gas = GasConfig::default();
         let mut engine = BlockchainEngine::new_in_memory().unwrap();
         engine.set_authorities(
             "0x1".to_string(),
@@ -685,8 +690,8 @@ mod tests {
             recipient_address.clone(),
             1,
             0,
-            1_000_000,
-            1,
+            gas.max_gas_per_tx,
+            gas.default_transaction_gas_price(),
         );
         let mut signed_tx = SignedTransaction::new(transaction);
         signed_tx
@@ -701,8 +706,8 @@ mod tests {
                 "sender": sender_tagged,
                 "recipient": recipient_address,
                 "amount": 1,
-                "gas_limit": 1_000_000,
-                "gas_price": 1,
+                "gas_limit": gas.max_gas_per_tx,
+                "gas_price": gas.default_transaction_gas_price(),
                 "sequence_number": 0,
                 "signature": signed_tx.signature,
                 "execute_immediate": true,
@@ -722,6 +727,7 @@ mod tests {
     async fn submit_transaction_rejects_missing_signature() {
         let guard = test_guard();
         let app = build_test_router();
+        let gas = GasConfig::default();
 
         let response = rpc_call_response(
             app,
@@ -730,8 +736,8 @@ mod tests {
                 "sender": "0x1111",
                 "recipient": "0x2222",
                 "amount": 1,
-                "gas_limit": 1_000_000,
-                "gas_price": 1,
+                "gas_limit": gas.max_gas_per_tx,
+                "gas_price": gas.default_transaction_gas_price(),
                 "sequence_number": 0,
                 "execute_immediate": true,
             }),
