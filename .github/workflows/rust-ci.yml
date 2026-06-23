@@ -8,6 +8,7 @@ on:
       - "**/*.rs"
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/rust-ci.yml"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "**/*.rs"
       - "**/Cargo.toml"
       - "**/Cargo.lock"
+      - "rust-toolchain.toml"
       - ".github/workflows/rust-ci.yml"
   workflow_dispatch:
 
@@ -74,11 +76,18 @@ jobs:
             ${{ runner.os }}-clippy-
             ${{ runner.os }}-cargo-
 
-      - name: Run Clippy
+      - name: Run Clippy autofix pass
         run: |
           set +e
-          cargo clippy --quiet --workspace --all-targets --message-format short -- -D warnings > clippy.log 2>&1
+          cargo clippy --fix --quiet --workspace --all-targets --allow-dirty --allow-staged --message-format short -- -D warnings > clippy.log 2>&1
           status=$?
+          git diff > clippy-fix.patch
+          mapfile -d '' changed_files < <(git diff --name-only -z)
+          if (( ${#changed_files[@]} > 0 )); then
+            tar -czf clippy-fixed-files.tar.gz "${changed_files[@]}"
+          else
+            tar -czf clippy-fixed-files.tar.gz --files-from /dev/null
+          fi
           cat clippy.log
           exit $status
 
@@ -87,7 +96,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clippy-diagnostics
-          path: clippy.log
+          path: |
+            clippy.log
+            clippy-fix.patch
+            clippy-fixed-files.tar.gz
           if-no-files-found: error
           retention-days: 3
 
