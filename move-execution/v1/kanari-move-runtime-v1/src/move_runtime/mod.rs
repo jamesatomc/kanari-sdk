@@ -4,7 +4,9 @@
 use crate::storage::resolver::KanariMoveResolver;
 use anyhow::Result;
 use kanari_crypto::hash_data_blake3;
-use kanari_system_natives::dynamic_field::DynamicFieldsExt;
+use kanari_system_natives::dynamic_field::{
+    DynamicFieldReferencesExt, DynamicFieldResolver, DynamicFieldResolverExt, DynamicFieldsExt,
+};
 use kanari_system_natives::event::EventsExt;
 use kanari_system_natives::object::{
     BorrowedObjectsExt, DeletedObjectsExt, LoadedObjectsExt, SavedObjectsExt,
@@ -67,6 +69,14 @@ struct AutoMergeReceiptData {
 }
 
 type LoadedMutableObject = (usize, String, AccountAddress, String, u64);
+
+struct RuntimeDynamicFieldResolver(Arc<dyn ObjectStore>);
+
+impl DynamicFieldResolver for RuntimeDynamicFieldResolver {
+    fn get_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Option<Vec<u8>> {
+        self.0.get_dynamic_field(object_id, name_bytes)
+    }
+}
 
 #[derive(Clone)]
 struct ExecutionOptions {
@@ -1187,6 +1197,7 @@ impl MoveRuntime {
                     saved_objects,
                     deleted_objects,
                     dynamic_fields_ops,
+                    dynamic_field_mutations,
                     borrowed_objects,
                 ) = {
                     let exts_after = session.get_native_extensions();
@@ -1196,6 +1207,9 @@ impl MoveRuntime {
                         exts_after.get_mut::<SavedObjectsExt>().take_all(),
                         exts_after.get_mut::<DeletedObjectsExt>().take_all(),
                         exts_after.get_mut::<DynamicFieldsExt>().take_all(),
+                        exts_after
+                            .get_mut::<DynamicFieldReferencesExt>()
+                            .take_mutated(),
                         exts_after.get_mut::<BorrowedObjectsExt>().take_all(),
                     )
                 };
@@ -1330,6 +1344,10 @@ impl MoveRuntime {
                         }
                     }
                 }
+                for (object_id, name_bytes, value_bytes) in dynamic_field_mutations {
+                    cs.added_dynamic_fields
+                        .push((object_id, name_bytes, value_bytes));
+                }
 
                 if let Some((gas_limit, gas_price)) = gas_info {
                     let complexity = 1 + (total_merge_reads as u32 / 10);
@@ -1378,6 +1396,12 @@ impl MoveRuntime {
         // Register the core extensions used by object, event, and dynamic-field natives.
         let mut extensions = NativeContextExtensions::default();
         extensions.add(DynamicFieldsExt::default());
+        extensions.add(DynamicFieldReferencesExt::default());
+        extensions.add(DynamicFieldResolverExt {
+            resolver: Some(Arc::new(RuntimeDynamicFieldResolver(
+                self.object_storage.clone(),
+            ))),
+        });
         extensions.add(EventsExt::default());
         extensions.add(SavedObjectsExt::default());
         extensions.add(DeletedObjectsExt::default());

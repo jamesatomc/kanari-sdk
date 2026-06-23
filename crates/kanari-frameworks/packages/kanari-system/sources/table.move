@@ -6,6 +6,9 @@ module kanari_system::table {
     use kanari_system::tx_context::TxContext;
     use kanari_system::dynamic_field;
 
+    #[test_only]
+    use kanari_system::tx_context;
+
     /// Error codes
     const ETableNotEmpty: u64 = 1;
 
@@ -61,5 +64,25 @@ module kanari_system::table {
         let Table { id, size } = table;
         assert!(size == 0, ETableNotEmpty);
         object::delete(id);
+    }
+
+    #[test]
+    fun test_table_dynamic_field_borrow_roundtrip() {
+        let ctx = tx_context::dummy();
+        let table = new<u64, u64>(&mut ctx);
+
+        add(&mut table, 7, 11);
+        assert!(contains(&table, 7), 0);
+        assert!(*borrow(&table, 7) == 11, 1);
+
+        *borrow_mut(&mut table, 7) = 42;
+        assert!(*borrow(&table, 7) == 42, 2);
+        assert!(length(&table) == 1, 3);
+
+        let value = remove(&mut table, 7);
+        assert!(value == 42, 4);
+        assert!(!contains(&table, 7), 5);
+
+        destroy_empty(table);
     }
 }
