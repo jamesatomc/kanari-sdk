@@ -24,12 +24,17 @@ jobs:
           ref: audit/fix-critical-high
           fetch-depth: 0
 
-      - name: Apply security patches
-        run: |
-          python3 scripts/apply_actual_gas_cost_fix.py
-          python3 scripts/fix_genesis_persistence_results.py
-          cargo fmt --all
-          git diff --check
+      - name: Apply actual gas-cost patch
+        run: python3 scripts/apply_actual_gas_cost_fix.py
+
+      - name: Propagate genesis persistence errors
+        run: python3 scripts/fix_genesis_persistence_results.py
+
+      - name: Format sources
+        run: cargo fmt --all
+
+      - name: Validate patch shape
+        run: git diff --check
 
       - name: Commit source changes and remove staging files
         run: |
