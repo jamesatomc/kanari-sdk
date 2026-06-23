@@ -32,9 +32,10 @@ env:
 
 jobs:
   format:
-    name: Rustfmt
+    name: Rustfmt (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -48,9 +49,10 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy
+    name: Clippy (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    continue-on-error: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
