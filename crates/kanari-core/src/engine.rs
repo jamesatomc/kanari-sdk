@@ -1160,6 +1160,63 @@ impl BlockchainEngine {
         bcs::from_bytes::<AccountAddress>(&args[2]).ok()
     }
 
+    fn object_transfer_object_id(tx: &Transaction) -> Option<String> {
+        let Transaction::ExecuteFunction {
+            module,
+            function,
+            args,
+            ..
+        } = tx
+        else {
+            return None;
+        };
+
+        if module != Transaction::KANARI_MODULE
+            || function != Transaction::TRANSFER_AMOUNT_FUNCTION
+            || args.is_empty()
+        {
+            return None;
+        }
+
+        AccountAddress::from_bytes(&args[0])
+            .ok()
+            .map(|address| address.to_hex_literal())
+    }
+
+    fn is_valid_self_object_transfer_noop(
+        tx: &Transaction,
+        sender_addr: AccountAddress,
+        state: &StateManager,
+    ) -> bool {
+        let Some(recipient) = Self::object_transfer_recipient(tx) else {
+            return false;
+        };
+        if recipient != sender_addr {
+            return false;
+        }
+
+        let Some(object_id) = Self::object_transfer_object_id(tx) else {
+            return false;
+        };
+        let Some(amount) = Self::object_native_transfer_amount(tx) else {
+            return false;
+        };
+        let Some(object) = state.get_object(&object_id).ok().flatten() else {
+            return false;
+        };
+        if object.owner != sender_addr || !object.type_.contains("::coin::Coin<") {
+            return false;
+        }
+        if object.data.len() < 40 {
+            return false;
+        }
+
+        let mut balance_bytes = [0u8; 8];
+        balance_bytes.copy_from_slice(&object.data[32..40]);
+        let object_balance = u64::from_le_bytes(balance_bytes);
+        amount <= object_balance
+    }
+
     fn required_native_amount_for_transaction(tx: &Transaction) -> u64 {
         tx.native_call()
             .map(|call| call.required_native_amount())
@@ -1342,15 +1399,25 @@ impl BlockchainEngine {
             } => {
                 if function == Transaction::TRANSFER_AMOUNT_FUNCTION
                     && module == Transaction::KANARI_MODULE
-                    && Self::object_transfer_recipient(tx).is_some_and(|recipient| recipient == sender_addr)
                 {
-                    Self::apply_gas_and_sequence(
-                        &mut changeset,
-                        sender_addr,
-                        gas_cost,
-                        gas_meter.gas_used,
-                    )?;
-                    return Ok(changeset);
+                    let state = match state_arc.read() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            log::error!(
+                                "State arc lock poisoned in self-transfer guard, recovering..."
+                            );
+                            poisoned.into_inner()
+                        }
+                    };
+                    if Self::is_valid_self_object_transfer_noop(tx, sender_addr, &state) {
+                        Self::apply_gas_and_sequence(
+                            &mut changeset,
+                            sender_addr,
+                            gas_cost,
+                            gas_meter.gas_used,
+                        )?;
+                        return Ok(changeset);
+                    }
                 }
 
                 if let Some(native_call) = native_call {
@@ -2013,7 +2080,8 @@ mod tests {
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         fund_sender(&engine, &sender.address, 1_000_000);
 
-        let tx = Transaction::new_transfer(sender.tagged_address(), sender.address.clone(), 210_000, 0);
+        let tx =
+            Transaction::new_transfer(sender.tagged_address(), sender.address.clone(), 210_000, 0);
         let mut signed_tx = SignedTransaction::new(tx);
         signed_tx
             .sign(&sender.private_key, sender.curve_type)
@@ -2048,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    fn self_object_transfer_only_charges_gas_and_keeps_supply_valid() {
+    fn invalid_self_object_transfer_fails_with_gas_instead_of_succeeding() {
         let engine = BlockchainEngine::new_in_memory().unwrap();
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
         fund_sender(&engine, &sender.address, 1_000_000);
@@ -2086,7 +2154,7 @@ mod tests {
             * gas.default_transaction_gas_price();
 
         let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
-        assert!(changeset.success);
+        assert!(!changeset.success);
 
         let mut state = engine.state_write();
         state.apply_changeset(&changeset).unwrap();
@@ -2101,6 +2169,7 @@ mod tests {
         );
         state.validate_supply_invariants().unwrap();
     }
+
     #[test]
     fn object_transfer_full_balance_fails_before_runtime_and_charges_gas_only() {
         let engine = BlockchainEngine::new_in_memory().unwrap();
