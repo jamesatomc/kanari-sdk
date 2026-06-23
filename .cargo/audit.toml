@@ -1,0 +1,30 @@
+# RustSec policy exceptions.
+#
+# Every entry below is explicit and reviewable. Advisories with an available
+# compatible fix must not be added here. RUSTSEC-2026-0119 is intentionally
+# absent because hickory-proto is upgraded to 0.26.1 through the pinned libp2p
+# revision.
+
+[advisories]
+ignore = [
+    # hickory-proto NSEC3 validation issue: upstream currently publishes no
+    # fixed release. Kanari uses hickory through libp2p mDNS and does not perform
+    # authoritative DNSSEC closest-encloser validation.
+    "RUSTSEC-2026-0118",
+
+    # RustCrypto rsa Marvin attack: no fixed rsa release exists. Kanari's
+    # production use is public-key RS256 verification only; it performs no RSA
+    # private-key decryption or signing. Test-only key generation is isolated
+    # from production secrets.
+    "RUSTSEC-2023-0071",
+
+    # Temporary migration exceptions for unmaintained dependencies. New
+    # advisories remain blocking under `cargo audit --deny warnings`.
+    "RUSTSEC-2025-0141", # bincode 1.x and 2.x
+    "RUSTSEC-2020-0095", # difference, through the vendored Move toolchain
+    "RUSTSEC-2024-0436", # paste, through Move/libp2p transitive dependencies
+    "RUSTSEC-2024-0380", # pqcrypto-dilithium -> pqcrypto-mldsa migration
+    "RUSTSEC-2026-0163", # pqcrypto-internals / archived PQClean upstream
+    "RUSTSEC-2026-0160", # pqcrypto-sphincsplus / archived PQClean upstream
+    "RUSTSEC-2026-0162", # pqcrypto-traits / archived PQClean upstream
+]
