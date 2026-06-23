@@ -25,7 +25,9 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
 ed25519-dalek = { workspace = true }
-libp2p = { workspace = true }
+# libp2p 0.57 upgrades libp2p-mdns to 0.49 and hickory-proto to 0.26.1,
+# fixing RUSTSEC-2026-0119 in the mDNS message encoder.
+libp2p = { version = "0.57.0", features = ["tcp", "noise", "yamux", "gossipsub", "mdns", "kad", "identify", "macros", "tokio", "relay", "dcutr", "ping"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 bincode = { workspace = true }
