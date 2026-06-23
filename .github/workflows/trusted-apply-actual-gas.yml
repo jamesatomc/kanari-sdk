@@ -10,7 +10,7 @@ on:
       - .github/workflows/apply-actual-gas-cost-fix.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   apply:
@@ -53,24 +53,7 @@ jobs:
           PY
 
       - name: Apply actual gas-cost patch
-        id: actual_patch
-        continue-on-error: true
-        run: python3 scripts/apply_actual_gas_cost_fix.py > actual-gas-patch.log 2>&1
-
-      - name: Upload actual gas patch diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: actual-gas-patch-diagnostics
-          path: actual-gas-patch.log
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Stop after actual gas patch failure
-        if: steps.actual_patch.outcome == 'failure'
-        run: |
-          cat actual-gas-patch.log
-          exit 1
+        run: python3 scripts/apply_actual_gas_cost_fix.py
 
       - name: Propagate genesis persistence errors
         run: python3 scripts/fix_genesis_persistence_results.py
@@ -81,12 +64,25 @@ jobs:
       - name: Validate patch shape
         run: git diff --check
 
-      - name: Commit source changes and remove staging scripts
+      - name: Stage patched source artifact
         run: |
-          git config user.name "kanari-security-bot"
-          git config user.email "security-bot@users.noreply.github.com"
-          git rm scripts/apply_actual_gas_cost_fix.py
-          git rm scripts/fix_genesis_persistence_results.py
-          git add crates/kanari-core move-execution/v1/kanari-move-runtime-v1
-          git commit -m "fix(gas): charge actual VM and storage cost"
-          git push origin HEAD:audit/fix-critical-high
+          mkdir -p patched-source
+          while IFS= read -r file; do
+            mkdir -p "patched-source/$(dirname "$file")"
+            cp "$file" "patched-source/$file"
+          done <<'FILES'
+          crates/kanari-core/src/engine.rs
+          crates/kanari-core/tests/unit/engine_tests.rs
+          move-execution/v1/kanari-move-runtime-v1/src/changeset.rs
+          move-execution/v1/kanari-move-runtime-v1/src/genesis.rs
+          move-execution/v1/kanari-move-runtime-v1/src/move_runtime/gas_ops.rs
+          move-execution/v1/kanari-move-runtime-v1/tests/unit/changeset_tests.rs
+          FILES
+
+      - name: Upload patched sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-actual-gas-sources
+          path: patched-source
+          if-no-files-found: error
+          retention-days: 3
