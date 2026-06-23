@@ -1,13 +1,11 @@
-name: Trusted Apply Actual Gas Fix
+name: Trusted Apply Gas Compile Fix
 
 on:
   pull_request:
     branches:
       - fix-gas
     paths:
-      - scripts/apply_actual_gas_cost_fix.py
-      - scripts/fix_genesis_persistence_results.py
-      - .github/workflows/apply-actual-gas-cost-fix.yml
+      - scripts/fix_actual_gas_compile.py
 
 permissions:
   contents: write
@@ -16,7 +14,7 @@ jobs:
   apply:
     if: github.event.pull_request.head.ref == 'audit/fix-critical-high'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout remediation branch
         uses: actions/checkout@v4
@@ -24,89 +22,16 @@ jobs:
           ref: audit/fix-critical-high
           fetch-depth: 0
 
-      - name: Normalize duplicate runtime replacement
+      - name: Apply compile fix
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("scripts/apply_actual_gas_cost_fix.py")
-          text = path.read_text()
-          old = '''fn = replace_once(
-              fn,
-              \'''                    Ok(move_cs) => changeset.merge(move_cs),\''',
-              \'''                    Ok(move_cs) => {
-                                  runtime_completed = true;
-                                  changeset.merge(move_cs);
-                              },\''',
-              "track publish runtime completion",
-          )'''
-          new = '''fn = fn.replace(
-              \'''                    Ok(move_cs) => changeset.merge(move_cs),\''',
-              \'''                    Ok(move_cs) => {
-                                  runtime_completed = true;
-                                  changeset.merge(move_cs);
-                              },\''',
-              1,
-          )'''
-          if text.count(old) != 1:
-              raise RuntimeError(f"expected one publish replacement block, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1))
-          PY
-
-      - name: Apply and format remediation
-        run: |
-          python3 scripts/apply_actual_gas_cost_fix.py
-          python3 scripts/fix_genesis_persistence_results.py
+          python3 scripts/fix_actual_gas_compile.py
           cargo fmt --all
           git diff --check
 
-      - name: Create detached Git commit object
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Commit compile fix
         run: |
-          set -euo pipefail
-          base_commit=$(git rev-parse HEAD)
-          base_tree=$(git show -s --format=%T "$base_commit")
-          tree_entries='[]'
-
-          while IFS= read -r file; do
-            encoded=$(base64 -w0 "$file")
-            blob_sha=$(
-              jq -n --arg content "$encoded" '{content:$content,encoding:"base64"}' |
-                gh api --method POST "repos/${GITHUB_REPOSITORY}/git/blobs" --input - --jq '.sha'
-            )
-            tree_entries=$(
-              jq --arg path "$file" --arg sha "$blob_sha" \
-                '. + [{path:$path,mode:"100644",type:"blob",sha:$sha}]' \
-                <<<"$tree_entries"
-            )
-          done <<'FILES'
-          crates/kanari-core/src/engine.rs
-          crates/kanari-core/tests/unit/engine_tests.rs
-          move-execution/v1/kanari-move-runtime-v1/src/changeset.rs
-          move-execution/v1/kanari-move-runtime-v1/src/genesis.rs
-          move-execution/v1/kanari-move-runtime-v1/src/move_runtime/gas_ops.rs
-          move-execution/v1/kanari-move-runtime-v1/tests/unit/changeset_tests.rs
-          FILES
-
-          tree_sha=$(
-            jq -n --arg base_tree "$base_tree" --argjson tree "$tree_entries" \
-              '{base_tree:$base_tree,tree:$tree}' |
-              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/trees" --input - --jq '.sha'
-          )
-          commit_sha=$(
-            jq -n \
-              --arg message "fix(gas): charge actual VM and storage cost" \
-              --arg tree "$tree_sha" \
-              --arg parent "$base_commit" \
-              '{message:$message,tree:$tree,parents:[$parent]}' |
-              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/commits" --input - --jq '.sha'
-          )
-          printf '%s\n' "$commit_sha" > generated-commit-sha.txt
-
-      - name: Upload generated commit SHA
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-actual-gas-commit
-          path: generated-commit-sha.txt
-          if-no-files-found: error
-          retention-days: 3
+          git config user.name "kanari-security-bot"
+          git config user.email "security-bot@users.noreply.github.com"
+          git add crates/kanari-core/src/engine.rs
+          git commit -m "fix(gas): use scoped gas cost variables"
+          git push origin HEAD:audit/fix-critical-high
