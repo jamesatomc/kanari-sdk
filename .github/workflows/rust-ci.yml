@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - kanari-sdk
+      - fix-gas
     paths:
       - "**/*.rs"
       - "**/Cargo.toml"
