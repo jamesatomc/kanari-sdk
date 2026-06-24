@@ -15,7 +15,7 @@ from security_hardening import (
     phase_post,
 )
 
-PATCHSET_VERSION = 6
+PATCHSET_VERSION = 7
 
 
 def main() -> None:
