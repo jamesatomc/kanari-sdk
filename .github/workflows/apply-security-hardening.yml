@@ -8,6 +8,13 @@ on:
       - scripts/apply_security_hardening.py
       - scripts/security_hardening/**
       - .github/workflows/apply-security-hardening.yml
+  pull_request:
+    branches:
+      - fix-gas
+    paths:
+      - scripts/apply_security_hardening.py
+      - scripts/security_hardening/**
+      - .github/workflows/apply-security-hardening.yml
 
 permissions:
   contents: write
