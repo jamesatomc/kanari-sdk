@@ -21,5 +21,6 @@ kanari-common = { workspace = true }
 dotenvy = { workspace = true }
 
 [features]
-default = []
+# Faucet transactions follow the network's zero monetary gas policy by default.
+default = ["zero-gas"]
 zero-gas = ["kanari-types/zero-gas"]
