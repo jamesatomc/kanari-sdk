@@ -1314,7 +1314,17 @@ impl BlockchainEngine {
 
         gas_meter.consume(gas_op.gas_units())?;
         let gas_cost = gas_meter.total_cost();
-        let total_required = required_amount.saturating_add(gas_cost);
+        // Reserve the sender's maximum signed gas liability before execution.
+        // Runtime usage can increase above the static admission cost, but can
+        // never exceed gas_limit; reserving the limit prevents an otherwise
+        // valid checkpoint from failing later while applying the final debit.
+        let max_gas_cost = tx
+            .gas_limit()
+            .checked_mul(tx.gas_price())
+            .ok_or_else(|| anyhow::anyhow!("Gas cost overflow"))?;
+        let total_required = required_amount
+            .checked_add(max_gas_cost)
+            .ok_or_else(|| anyhow::anyhow!("Required balance overflow"))?;
 
         if validate_sequence || total_required > 0 {
             let state = match state_arc.read() {
@@ -1337,13 +1347,13 @@ impl BlockchainEngine {
                 if balance < total_required {
                     let msg = if required_amount > 0 {
                         format!(
-                            "Insufficient balance: need {} (amount: {}, gas: {}) but have {}",
-                            total_required, required_amount, gas_cost, balance
+                            "Insufficient balance: need {} (amount: {}, max gas: {}) but have {}",
+                            total_required, required_amount, max_gas_cost, balance
                         )
                     } else {
                         format!(
-                            "Insufficient balance for gas: need {}, have {}",
-                            gas_cost, balance
+                            "Insufficient balance for maximum gas liability: need {}, have {}",
+                            max_gas_cost, balance
                         )
                     };
                     changeset.mark_failed(msg);
@@ -1358,7 +1368,7 @@ impl BlockchainEngine {
             }
         }
 
-        if required_amount > (i64::MAX as u64).saturating_sub(gas_cost) {
+        if required_amount > (i64::MAX as u64).saturating_sub(max_gas_cost) {
             changeset.mark_failed("Native amount exceeds the supported range".to_string());
             Self::apply_gas_and_sequence(
                 &mut changeset,
@@ -1385,6 +1395,10 @@ impl BlockchainEngine {
                 ) {
                     Ok(move_cs) => changeset.merge(move_cs),
                     Err(e) => {
+                        // MoveVM currently returns an error without its consumed meter.
+                        // Charge the signed limit fail-closed so an attacker cannot run
+                        // to out-of-gas repeatedly while paying only admission gas.
+                        changeset.set_gas_used(tx.gas_limit());
                         changeset.mark_failed(format!("Publish failed: {}", e));
                     }
                 }
@@ -1467,6 +1481,9 @@ impl BlockchainEngine {
                 ) {
                     Ok(move_cs) => changeset.merge(move_cs),
                     Err(e) => {
+                        // Preserve deterministic anti-DoS accounting even though
+                        // the runtime error path cannot return its internal meter.
+                        changeset.set_gas_used(tx.gas_limit());
                         changeset.mark_failed(format!("Execution failed: {}", e));
                     }
                 }
