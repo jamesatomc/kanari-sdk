@@ -41,5 +41,7 @@ minibytes = { path = "../mysticeti/crates/minibytes", default-features = false }
 tempfile = { workspace = true }
 
 [features]
-default = []
+# Kanari mainnet policy is zero monetary gas while retaining gas-unit limits.
+# Paid gas remains available for compatibility testing with --no-default-features.
+default = ["zero-gas"]
 zero-gas = ["kanari-types/zero-gas"]
