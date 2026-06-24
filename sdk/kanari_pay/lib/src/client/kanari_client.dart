@@ -159,7 +159,7 @@ class KanariClient {
     List<String> typeArgs = const [],
     List<List<int>> args = const [],
     int gasLimit = TransactionConstants.defaultGasLimit,
-    int gasPrice = 0,
+    int gasPrice = TransactionConstants.defaultGasPrice,
     bool? executeImmediate,
   }) {
     return _transactions.executeFunction(
@@ -197,7 +197,7 @@ class KanariClient {
     required String tokenType,
     required int amount,
     int gasLimit = TransactionConstants.defaultGasLimit,
-    int gasPrice = 0,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) {
     return _transactions.transferToken(
       wallet: wallet,

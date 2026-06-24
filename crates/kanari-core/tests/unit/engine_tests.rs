@@ -1,12 +1,13 @@
 #![allow(clippy::duplicate_mod)]
 
-use super::BlockchainEngine;
+use super::{BlockchainEngine, FORCE_TX_EXECUTION_PANIC};
 use crate::blockchain::Blockchain;
 use crate::consensus::{Checkpoint, PersistentDagState};
 use kanari_crypto::keys::{CurveType, generate_keypair};
 use kanari_move_runtime_v1::changeset::ChangeSet;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use move_core_types::account_address::AccountAddress;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 #[path = "test_support.rs"]
@@ -585,6 +586,53 @@ fn failed_execution_produces_and_persists_receipt() {
     assert_eq!(
         engine.get_transaction_execution_receipt(&tx_hash),
         Some(execution.receipts[0].clone())
+    );
+}
+
+#[test]
+fn immediate_execution_panic_returns_failed_changeset() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    fund_sender(&engine, &sender.address, 1_000_000);
+    let signed_tx = signed_transfer_from(&sender, 0);
+
+    FORCE_TX_EXECUTION_PANIC.store(true, Ordering::SeqCst);
+    let result = engine.execute_transaction_immediate(signed_tx);
+    FORCE_TX_EXECUTION_PANIC.store(false, Ordering::SeqCst);
+
+    let (_, changeset) = result.expect("panic must be isolated into a failed changeset");
+    assert!(!changeset.success);
+    assert!(
+        changeset
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("transaction execution panicked"))
+    );
+}
+
+#[test]
+fn strict_serial_execution_panic_returns_failed_receipt() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    fund_sender(&engine, &sender.address, 1_000_000);
+    let signed_tx = signed_transfer_from(&sender, 0);
+    let state = Arc::new(RwLock::new(engine.state_read().clone()));
+
+    FORCE_TX_EXECUTION_PANIC.store(true, Ordering::SeqCst);
+    let result =
+        engine.execute_tx_waves_strict_serial_with_receipts(vec![signed_tx], &state, Some(123), false);
+    FORCE_TX_EXECUTION_PANIC.store(false, Ordering::SeqCst);
+
+    let execution = result.expect("panic must be isolated into a failed receipt");
+    assert_eq!(execution.executed, 0);
+    assert_eq!(execution.failed, 1);
+    assert_eq!(execution.receipts.len(), 1);
+    assert!(!execution.receipts[0].success);
+    assert!(
+        execution.receipts[0]
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("transaction execution panicked"))
     );
 }
 

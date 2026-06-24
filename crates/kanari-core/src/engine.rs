@@ -28,7 +28,11 @@ use rayon::prelude::*;
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::num::NonZeroUsize;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 type ProofCache = LruCache<(u64, usize), (String, Vec<Vec<u8>>)>;
 
@@ -74,12 +78,25 @@ impl TransactionExecutionReceipt {
     }
 }
 
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TransactionBatchExecution {
     pub executed: usize,
     pub failed: usize,
     pub receipts: Vec<TransactionExecutionReceipt>,
 }
+
+#[cfg(test)]
+static FORCE_TX_EXECUTION_PANIC: AtomicBool = AtomicBool::new(false);
 
 impl TransactionBatchExecution {
     fn counts(&self) -> (usize, usize) {
@@ -883,14 +900,27 @@ impl BlockchainEngine {
             }
 
             for signed_tx in transactions {
-                let changeset = self.execute_transaction_with_runtime_internal(
+                let changeset = match self.execute_transaction_with_runtime_boundary(
                     &signed_tx.transaction,
                     &self.runtime_pool[0],
                     state_arc,
                     false,
                     timestamp,
                     persist_objects,
-                )?;
+                ) {
+                    Ok(changeset) => changeset,
+                    Err(error) => {
+                        log::warn!("Strict execution failed: {}", error);
+                        batch.failed += 1;
+                        batch.receipts.push(TransactionExecutionReceipt {
+                            transaction_hash: signed_tx.transaction_hash().to_vec(),
+                            success: false,
+                            gas_used: 0,
+                            error_message: Some(format!("Execution failed: {}", error)),
+                        });
+                        continue;
+                    }
+                };
 
                 let mut state_write = match state_arc.write() {
                     Ok(guard) => guard,
@@ -938,7 +968,7 @@ impl BlockchainEngine {
             let results: Vec<Result<ChangeSet>> = if has_module_publish {
                 wave.iter()
                     .map(|signed_tx| {
-                        self.execute_transaction_with_runtime_internal(
+                        self.execute_transaction_with_runtime_boundary(
                             &signed_tx.transaction,
                             &self.runtime_pool[0],
                             state_arc,
@@ -953,7 +983,7 @@ impl BlockchainEngine {
                     .enumerate()
                     .map(|(i, signed_tx)| {
                         let runtime = &self.runtime_pool[i % self.runtime_pool.len()];
-                        self.execute_transaction_with_runtime_internal(
+                        self.execute_transaction_with_runtime_boundary(
                             &signed_tx.transaction,
                             runtime,
                             state_arc,
@@ -1282,16 +1312,37 @@ impl BlockchainEngine {
         Ok(())
     }
 
-    fn execute_transaction_with_runtime(
+    fn execute_transaction_with_runtime_boundary(
         &self,
         tx: &Transaction,
         runtime: &kanari_move_runtime_v1::move_runtime::MoveRuntime,
         state_arc: &Arc<RwLock<StateManager>>,
+        validate_sequence: bool,
         timestamp: Option<u64>,
+        persist_runtime_state: bool,
     ) -> Result<ChangeSet> {
-        self.execute_transaction_with_runtime_internal(
-            tx, runtime, state_arc, true, timestamp, false,
-        )
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.execute_transaction_with_runtime_internal(
+                tx,
+                runtime,
+                state_arc,
+                validate_sequence,
+                timestamp,
+                persist_runtime_state,
+            )
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                let message = panic_payload_to_string(payload);
+                log::error!(
+                    "[ENGINE] Transaction execution panic isolated: sender={} type={} error={}",
+                    tx.sender_address(),
+                    tx.tx_type_label(),
+                    message
+                );
+                anyhow::bail!("transaction execution panicked: {}", message);
+            }
+        }
     }
 
     pub(crate) fn execute_transaction_with_runtime_internal(
@@ -1303,6 +1354,11 @@ impl BlockchainEngine {
         timestamp: Option<u64>,
         persist_runtime_state: bool,
     ) -> Result<ChangeSet> {
+        #[cfg(test)]
+        if FORCE_TX_EXECUTION_PANIC.load(Ordering::SeqCst) {
+            panic!("forced tx execution panic");
+        }
+
         let sender_addr = KanariAddress::parse_to_account_address(tx.sender_address())?;
         Self::validate_transaction_gas(tx)?;
         let mut gas_meter = GasMeter::new(tx.gas_limit(), tx.gas_price());

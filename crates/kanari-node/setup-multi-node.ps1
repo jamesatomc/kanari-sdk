@@ -160,6 +160,12 @@ if ($startNow -notmatch '^[Yy]') {
     exit 0
 }
 
+$stoppedNodes = Stop-KanariNodeProcesses -ExecutablePath $exePath
+if ($stoppedNodes -gt 0) {
+    Write-Host "Stopped $stoppedNodes existing kanari-node process(es) before launch." -ForegroundColor Yellow
+    Start-Sleep -Seconds 1
+}
+
 $scriptPath = Join-Path $PSScriptRoot 'start-node.ps1'
 $currentPS = (Get-Process -Id $PID).Path
 

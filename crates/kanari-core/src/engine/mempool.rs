@@ -228,8 +228,16 @@ impl BlockchainEngine {
             let runtime = self.runtime_pool[0]
                 .spawn_isolated_worker()
                 .context("Failed to create isolated runtime for immediate execution")?;
-            let changeset =
-                self.execute_transaction_with_runtime(&tx, &runtime, &state_arc, None)?;
+            let changeset = match self.execute_transaction_with_runtime_boundary(
+                &tx, &runtime, &state_arc, true, None, false,
+            ) {
+                Ok(changeset) => changeset,
+                Err(error) => {
+                    let mut changeset = ChangeSet::new();
+                    changeset.mark_failed(format!("Execution failed: {}", error));
+                    changeset
+                }
+            };
             runtime.clear_object_cache()?;
             changeset
         };

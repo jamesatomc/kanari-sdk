@@ -110,6 +110,48 @@ function Find-KanariNodeExecutable {
     throw "kanari-node executable not found"
 }
 
+function Get-ListeningProcessForPort {
+    param(
+        [int]$Port
+    )
+
+    $connection = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    if (-not $connection) {
+        return $null
+    }
+
+    Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
+}
+
+function Stop-KanariNodeProcesses {
+    param(
+        [string]$ExecutablePath = ""
+    )
+
+    $processes = @(Get-Process -Name "kanari-node" -ErrorAction SilentlyContinue)
+    if (-not $processes.Count) {
+        return 0
+    }
+
+    $stopped = 0
+    foreach ($process in $processes) {
+        if ($ExecutablePath -and $process.Path -and $process.Path -ne $ExecutablePath) {
+            continue
+        }
+
+        try {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+            $stopped++
+        } catch {
+            Write-Host "Warning: failed to stop kanari-node PID $($process.Id): $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    return $stopped
+}
+
 function Invoke-KanariJsonRpc {
     param(
         [string]$RpcUrl,

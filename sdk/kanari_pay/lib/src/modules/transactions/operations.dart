@@ -5,7 +5,6 @@ import 'package:http/http.dart' as http;
 import 'package:kanari_crypto/kanari_crypto.dart';
 
 import '../../core/bcs_utils.dart';
-import '../../core/token_utils.dart' as token_utils;
 import '../../core/rpc_utils.dart';
 import '../../kanari_wallet.dart';
 import '../../models/account.dart';
@@ -37,24 +36,13 @@ class TransactionOperations {
       'gas_price': Bcs.u64(),
       'sequence_number': Bcs.u64(),
     }),
-    'Transfer': Bcs.struct('Transfer', {
-      'from': Bcs.string(),
-      'to': Bcs.string(),
-      'amount': Bcs.u64(),
-      'gas_limit': Bcs.u64(),
-      'gas_price': Bcs.u64(),
-      'sequence_number': Bcs.u64(),
-    }),
-    'Burn': Bcs.struct('Burn', {
-      'from': Bcs.string(),
-      'amount': Bcs.u64(),
-      'gas_limit': Bcs.u64(),
-      'gas_price': Bcs.u64(),
-      'sequence_number': Bcs.u64(),
-    }),
   });
 
   TransactionOperations(this.url, this.queries, this.client);
+
+  int _effectiveGasPrice(int gasPrice) {
+    return gasPrice > 0 ? gasPrice : TransactionConstants.defaultGasPrice;
+  }
 
   String _getSenderForTx(KanariWallet wallet) => wallet.taggedAddress;
 
@@ -136,6 +124,7 @@ class TransactionOperations {
     int gasPrice = TransactionConstants.defaultGasPrice,
     bool? executeImmediate,
   }) async {
+    gasPrice = _effectiveGasPrice(gasPrice);
     final account = await queries.getAccount(wallet.address);
     final sender = _getSenderForTx(wallet);
     final txData = {
@@ -187,6 +176,7 @@ class TransactionOperations {
     required int gasLimit,
     required int gasPrice,
   }) async {
+    gasPrice = _effectiveGasPrice(gasPrice);
     final account = await queries.getAccount(wallet.address);
     final normalizedRecipient = BcsUtils.normalizeAddress(recipient);
     final wantedToken = BcsUtils.normalizeTokenType(tokenType);
@@ -228,6 +218,7 @@ class TransactionOperations {
     int gasLimit = TransactionConstants.defaultGasLimit,
     int gasPrice = TransactionConstants.defaultGasPrice,
   }) async {
+    gasPrice = _effectiveGasPrice(gasPrice);
     final account = await queries.getAccount(wallet.address);
     final sender = _getSenderForTx(wallet);
     final normalizedRecipient = BcsUtils.normalizeAddress(recipient);
@@ -272,9 +263,10 @@ class TransactionOperations {
     List<String> typeArgs = const [],
     List<List<int>> args = const [],
     int gasLimit = TransactionConstants.defaultGasLimit,
-    int gasPrice = 0,
+    int gasPrice = TransactionConstants.defaultGasPrice,
     bool? executeImmediate,
   }) async {
+    gasPrice = _effectiveGasPrice(gasPrice);
     final account = await queries.getAccount(wallet.address);
     final sender = _getSenderForTx(wallet);
     final packageAddress = BcsUtils.normalizeAnyAddress(package);
@@ -317,6 +309,7 @@ class TransactionOperations {
     int gasLimit = TransactionConstants.defaultGasLimit,
     int gasPrice = TransactionConstants.defaultGasPrice,
   }) async {
+    gasPrice = _effectiveGasPrice(gasPrice);
     final account = await queries.getAccount(wallet.address);
     final sender = _getSenderForTx(wallet);
     final txData = {
@@ -350,7 +343,7 @@ class TransactionOperations {
     required String tokenType,
     required int amount,
     int gasLimit = TransactionConstants.defaultGasLimit,
-    int gasPrice = 0,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) {
     return _transferCoinObject(
       wallet: wallet,
