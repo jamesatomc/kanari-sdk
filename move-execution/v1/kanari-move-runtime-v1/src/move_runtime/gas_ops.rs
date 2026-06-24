@@ -1,24 +1,27 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Gas metering and accounting operations
+// Gas metering operations. Monetary accounting and sequence advancement are
+// deliberately owned by kanari-core so every transaction is charged exactly
+// once, regardless of whether it uses a native fast path or MoveVM.
 use crate::changeset::ChangeSet;
-use anyhow::{Result, ensure};
-use kanari_types::GasConfig;
-use kanari_types::address::Address as KanariAddress;
-use kanari_types::{GasMeter, GasOperation};
+use anyhow::Result;
+use kanari_types::{GasConfig, GasMeter, GasOperation};
 use move_core_types::account_address::AccountAddress;
-
 use move_core_types::language_storage::ModuleId;
 use move_core_types::resolver::{ModuleResolver, ResourceResolver};
 
 impl super::MoveRuntime {
-    /// Helper to apply gas accounting to a ChangeSet. Handles sender debit + sequence increment
-    /// and credits gas to DAO. `sender` may be `None` for system-level calls.
+    /// Apply resource metering to a ChangeSet.
+    ///
+    /// This method validates the signed gas price, enforces the signed gas
+    /// limit, and records actual resource usage. It must not debit balances,
+    /// credit the DAO, or advance sequence numbers; kanari-core performs those
+    /// state transitions once after merging the runtime ChangeSet.
     pub(crate) fn apply_gas_info(
         &self,
         cs: &mut ChangeSet,
-        sender: Option<AccountAddress>,
+        _sender: Option<AccountAddress>,
         gas_limit: u64,
         gas_price: u64,
         gas_op: GasOperation,
@@ -30,49 +33,27 @@ impl super::MoveRuntime {
         let config = GasConfig::default();
         config.validate_price(gas_price)?;
 
-        // Charge at least the static admission cost and otherwise the actual
-        // MoveVM instruction/native work observed during execution.
+        // Charge at least the deterministic admission cost and otherwise the
+        // actual MoveVM instruction/native work observed during execution.
         meter.consume(gas_op.gas_units().max(vm_gas_used))?;
 
-        // Storage is free monetarily, but write-set size is still resource
-        // metered so a zero-price transaction cannot emit unbounded state.
+        // Storage and event output are converted into resource units. This
+        // remains enforced in zero-fee mode and therefore prevents an attacker
+        // from creating an unbounded write set with a zero monetary gas price.
+        // Deletions still require bounded processing, but receive a lower unit
+        // weight than newly written bytes.
         let storage_units = storage_written
             .checked_add(storage_deleted / 2)
             .ok_or_else(|| anyhow::anyhow!("Storage gas overflow"))?;
         meter.consume(storage_units)?;
+
+        // Preserve byte counters for diagnostics/estimation. Monetary charging
+        // is intentionally deferred to core and is based on the final metered
+        // gas usage, avoiding duplicate balance and DAO mutations.
         meter.charge_storage(storage_written, &config)?;
         meter.rebate_storage(storage_deleted);
 
-        // Calculate total cost: execution (in Mist) + net storage fee (in Mist)
-        // execution cost = meter.total_cost()
-        // net storage fee = meter.net_storage_fee(&config)
-        let execution_cost = meter.total_cost();
-        let storage_fee = meter.net_storage_fee(&config);
-
-        // Total cost can't be negative overall (though storage rebate could exceed storage cost)
-        // But execution cost should usually cover it. If total < 0, we cap at 0.
-        let total_cost_signed = (execution_cost as i128) + (storage_fee as i128);
-        let total_cost = if total_cost_signed < 0 {
-            0
-        } else {
-            u64::try_from(total_cost_signed).map_err(|_| anyhow::anyhow!("Gas cost overflow"))?
-        };
-        ensure!(
-            total_cost <= i64::MAX as u64,
-            "Gas cost exceeds the supported balance delta range"
-        );
-
-        if let Some(saddr) = sender {
-            let sender_change = cs.get_or_create_change(saddr);
-            sender_change.increment_sequence();
-            sender_change.debit(total_cost);
-        }
-
-        let dao_addr = AccountAddress::from_hex_literal(KanariAddress::DAO_ADDRESS)?;
-        cs.collect_gas(dao_addr, total_cost);
-
         cs.set_gas_used(meter.gas_used);
-
         Ok(())
     }
 
