@@ -9,13 +9,14 @@ from security_hardening import (
     phase2_consensus,
     phase2_replay,
     phase3_gas,
+    phase4_channels,
     phase4_persistence_network,
     phase5_auth,
     phase_known_fixups,
     phase_post,
 )
 
-PATCHSET_VERSION = 7
+PATCHSET_VERSION = 8
 
 
 def main() -> None:
@@ -24,6 +25,7 @@ def main() -> None:
     phase2_replay.apply()
     phase3_gas.apply()
     phase4_persistence_network.apply()
+    phase4_channels.apply()
     phase5_auth.apply()
     phase_post.apply()
     phase_known_fixups.apply()
