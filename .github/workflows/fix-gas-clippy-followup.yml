@@ -1,0 +1,57 @@
+name: Fix Gas Clippy Follow-up
+
+on:
+  push:
+    branches:
+      - fix/fix-gas-completion-20260624
+  pull_request:
+    branches:
+      - fix-gas
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-gas-clippy-followup-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/fix-gas-completion-20260624
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize clippy cleanup
+        run: |
+          python3 scripts/patch_fix_gas_clippy.py
+          cargo fmt --all
+
+      - name: Validate workspace clippy and core tests
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test -p kanari-core --lib checkpoint_gas_tests
+          cargo test -p kanari-core --lib checkpoint_shape_tests
+          cargo test -p kanari-core --features zero-gas --lib checkpoint_gas_tests
+
+      - name: Commit validated source
+        run: |
+          git config user.name "kanari-fix-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add crates/kanari-core/src/engine.rs
+          if git diff --cached --quiet; then
+            echo "Clippy cleanup is already materialized"
+          else
+            git commit -m "refactor(core): remove obsolete checkpoint persistence wrappers"
+            git push origin HEAD:fix/fix-gas-completion-20260624
+          fi
