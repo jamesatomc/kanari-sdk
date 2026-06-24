@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - fix/fix-gas-completion-20260624
+  pull_request:
+    branches:
+      - fix-gas
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: fix-gas-accounting-followup-${{ github.ref }}
+  group: fix-gas-accounting-followup-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,6 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: fix/fix-gas-completion-20260624
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
@@ -50,5 +54,5 @@ jobs:
             echo "Accounting patch is already materialized"
           else
             git commit -m "fix(gas): reserve maximum liability and charge failures safely"
-            git push origin HEAD:${GITHUB_REF_NAME}
+            git push origin HEAD:fix/fix-gas-completion-20260624
           fi
