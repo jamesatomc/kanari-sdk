@@ -10,7 +10,7 @@ from security_hardening import (
     phase_post,
 )
 
-PATCHSET_VERSION = 3
+PATCHSET_VERSION = 4
 
 
 def main() -> None:
