@@ -8,6 +8,7 @@ from security_hardening import (
     phase3_gas,
     phase4_persistence_network,
     phase5_auth,
+    phase_post,
 )
 
 
@@ -19,6 +20,7 @@ def main() -> None:
     phase3_gas.apply()
     phase4_persistence_network.apply()
     phase5_auth.apply()
+    phase_post.apply()
     print("security hardening patches applied")
 
 
