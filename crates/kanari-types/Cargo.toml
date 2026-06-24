@@ -12,8 +12,13 @@ repository.workspace = true
 description.workspace = true
 
 [features]
-default = []
-zero-gas = []
+# Gas implementation is selected once in kanari-types. gas-v1 explicitly
+# overrides the default gas-v2 selection when both features are unified.
+default = ["gas-v2"]
+gas-v1 = []
+gas-v2 = []
+# Backward-compatible alias for existing build commands.
+zero-gas = ["gas-v2"]
 
 [dependencies]
 move-core-types = { workspace = true}
