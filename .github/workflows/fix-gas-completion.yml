@@ -39,6 +39,7 @@ jobs:
           python3 scripts/patch_fix_gas_state.py
           python3 scripts/patch_fix_gas_runtime.py
           python3 scripts/patch_fix_gas_core.py
+          python3 scripts/patch_fix_gas_followups.py
           cargo fmt --all
 
       - name: Check types and scheduler
@@ -80,6 +81,7 @@ jobs:
             crates/kanari-core/src/engine.rs \
             crates/kanari-core/src/engine/apply_checkpoint.rs \
             crates/kanari-core/src/engine/produce_dag_vertex.rs \
+            crates/kanari-core/src/engine/queries.rs \
             move-execution/v1/kanari-move-runtime-v1/src/changeset.rs \
             move-execution/v1/kanari-move-runtime-v1/src/genesis.rs \
             move-execution/v1/kanari-move-runtime-v1/src/kanari_gas_meter.rs \
