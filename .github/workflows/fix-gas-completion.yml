@@ -1,0 +1,77 @@
+name: Fix Gas Completion
+
+on:
+  push:
+    branches:
+      - fix/fix-gas-completion-20260624
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-gas-completion-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout remediation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Restore cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Materialize remediation
+        run: |
+          python3 scripts/patch_fix_gas_state.py
+          python3 scripts/patch_fix_gas_runtime.py
+          python3 scripts/patch_fix_gas_core.py
+          cargo fmt --all
+
+      - name: Check types and scheduler
+        run: |
+          cargo check -p kanari-types --all-targets
+          cargo test -p kanari-move-runtime-v1 --lib scheduler
+
+      - name: Check runtime
+        run: cargo check -p kanari-move-runtime-v1 --all-targets
+
+      - name: Check core and checkpoint budget tests
+        run: |
+          cargo test -p kanari-core --lib checkpoint_gas_tests
+          cargo check -p kanari-core --all-targets
+
+      - name: Commit validated source patch
+        run: |
+          git config user.name "kanari-fix-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            crates/kanari-types/src/transaction.rs \
+            crates/kanari-core/src/engine.rs \
+            crates/kanari-core/src/engine/apply_checkpoint.rs \
+            crates/kanari-core/src/engine/produce_dag_vertex.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/changeset.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/genesis.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/kanari_gas_meter.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/move_runtime/gas_ops.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/move_runtime/mod.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/move_runtime/parsers.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/scheduler.rs \
+            move-execution/v1/kanari-move-runtime-v1/src/state.rs \
+            move-execution/v1/kanari-move-runtime-v1/tests/unit/scheduler_tests.rs
+          if git diff --cached --quiet; then
+            echo "Validated source patch is already materialized"
+          else
+            git commit -m "fix(gas): complete metering and atomic checkpoint flow"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
