@@ -1,0 +1,54 @@
+name: Fix Gas Accounting Follow-up
+
+on:
+  push:
+    branches:
+      - fix/fix-gas-completion-20260624
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-gas-accounting-followup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Materialize strict accounting patch
+        run: |
+          python3 scripts/patch_fix_gas_accounting.py
+          cargo fmt --all
+
+      - name: Validate default and zero-fee modes
+        run: |
+          cargo check -p kanari-move-runtime-v1 --all-targets
+          cargo check -p kanari-core --all-targets
+          cargo check -p kanari-core --features zero-gas --all-targets
+          cargo test -p kanari-core --lib checkpoint_gas_tests
+          cargo test -p kanari-core --features zero-gas --lib checkpoint_gas_tests
+
+      - name: Commit validated source
+        run: |
+          git config user.name "kanari-fix-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add crates/kanari-core/src/engine.rs
+          if git diff --cached --quiet; then
+            echo "Accounting patch is already materialized"
+          else
+            git commit -m "fix(gas): reserve maximum liability and charge failures safely"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
