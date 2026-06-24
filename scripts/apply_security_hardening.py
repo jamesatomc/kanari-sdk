@@ -11,6 +11,8 @@ from security_hardening import (
     phase_post,
 )
 
+PATCHSET_VERSION = 2
+
 
 def main() -> None:
     phase0_ci.apply()
@@ -21,7 +23,7 @@ def main() -> None:
     phase4_persistence_network.apply()
     phase5_auth.apply()
     phase_post.apply()
-    print("security hardening patches applied")
+    print(f"security hardening patchset v{PATCHSET_VERSION} applied")
 
 
 if __name__ == "__main__":
