@@ -44,15 +44,19 @@ jobs:
           cargo check -p kanari-core --features zero-gas --all-targets
           cargo test -p kanari-core --lib checkpoint_gas_tests
           cargo test -p kanari-core --features zero-gas --lib checkpoint_gas_tests
+          cargo test -p kanari-core --lib checkpoint_shape_tests
 
       - name: Commit validated source
         run: |
           git config user.name "kanari-fix-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add crates/kanari-core/src/engine.rs
+          git add \
+            crates/kanari-core/src/engine.rs \
+            crates/kanari-core/src/engine/apply_checkpoint.rs \
+            crates/kanari-core/src/engine/produce_dag_vertex.rs
           if git diff --cached --quiet; then
-            echo "Accounting patch is already materialized"
+            echo "Gas and checkpoint isolation patches are already materialized"
           else
-            git commit -m "fix(gas): reserve maximum liability and charge failures safely"
+            git commit -m "fix(gas): reserve liability and isolate opaque Move execution"
             git push origin HEAD:fix/fix-gas-completion-20260624
           fi
