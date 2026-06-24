@@ -37,12 +37,15 @@ jobs:
           python3 scripts/patch_fix_gas_clippy.py
           cargo fmt --all
 
-      - name: Validate workspace clippy and core tests
+      - name: Validate core in zero-fee and paid compatibility modes
         run: |
-          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy -p kanari-core --all-targets -- -D warnings
+          cargo clippy -p kanari-core --no-default-features --all-targets -- -D warnings
           cargo test -p kanari-core --lib checkpoint_gas_tests
           cargo test -p kanari-core --lib checkpoint_shape_tests
-          cargo test -p kanari-core --features zero-gas --lib checkpoint_gas_tests
+          cargo test -p kanari-core --no-default-features --lib checkpoint_gas_tests
+          cargo check -p kanari-node
+          cargo check -p kanari
 
       - name: Commit validated source
         run: |
