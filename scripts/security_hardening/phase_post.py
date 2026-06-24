@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from . import phase1_zero_fee
+from . import phase1_zero_fee, phase_supply_checks
 from .common import read, write
 
 
 def apply() -> None:
     phase1_zero_fee.apply()
+    phase_supply_checks.apply()
 
     path = "crates/kanari-node/src/sync.rs"
     text = read(path)
