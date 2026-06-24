@@ -57,7 +57,9 @@ jobs:
         run: |
           set -o pipefail
           cargo test -p kanari-core --lib checkpoint_gas_tests 2>&1 | tee core-diagnostics.log
+          cargo test -p kanari-core --features zero-gas --lib checkpoint_gas_tests 2>&1 | tee -a core-diagnostics.log
           cargo check -p kanari-core --all-targets 2>&1 | tee -a core-diagnostics.log
+          cargo check -p kanari-core --features zero-gas --all-targets 2>&1 | tee -a core-diagnostics.log
 
       - name: Upload core diagnostics
         if: always()
