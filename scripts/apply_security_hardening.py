@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from security_hardening import (
-    phase0_ci,
     phase1_financial,
     phase2_consensus,
     phase2_replay,
@@ -11,11 +10,10 @@ from security_hardening import (
     phase_post,
 )
 
-PATCHSET_VERSION = 2
+PATCHSET_VERSION = 3
 
 
 def main() -> None:
-    phase0_ci.apply()
     phase1_financial.apply()
     phase2_consensus.apply()
     phase2_replay.apply()
