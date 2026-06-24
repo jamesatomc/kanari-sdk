@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - fix/fix-gas-completion-20260624
+  pull_request:
+    branches:
+      - fix-gas
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: fix-gas-completion-${{ github.ref }}
+  group: fix-gas-completion-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -52,6 +55,7 @@ jobs:
           cargo check -p kanari-core --all-targets
 
       - name: Commit validated source patch
+        if: github.event_name == 'push'
         run: |
           git config user.name "kanari-fix-bot"
           git config user.email "actions@users.noreply.github.com"
