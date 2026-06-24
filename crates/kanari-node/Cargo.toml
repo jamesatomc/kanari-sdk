@@ -33,5 +33,6 @@ tempfile = { workspace = true }
 flate2 = { workspace = true }
 
 [features]
-default = []
+# Nodes enforce gas-unit limits but charge no monetary gas by default.
+default = ["zero-gas"]
 zero-gas = ["kanari-types/zero-gas", "kanari-core/zero-gas"]
