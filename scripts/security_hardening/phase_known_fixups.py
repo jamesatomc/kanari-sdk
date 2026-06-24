@@ -31,20 +31,28 @@ def apply() -> None:
 
     mempool_path = "crates/kanari-core/src/engine/mempool.rs"
     text = read(mempool_path)
-    old = '''        store
+    old_scan = '''        store
             .logical_entries()
             .ok()
             .is_some_and(|entries| entries.iter().any(|(entry_key, _)| entry_key == &key))'''
-    new = '''        store.contains_key(&key).unwrap_or(false)'''
-    if old not in text:
+    direct_lookup = '''        store.contains_key(&key).unwrap_or(false)'''
+    if old_scan not in text:
         raise RuntimeError("mempool replay scan not found")
-    write(mempool_path, text.replace(old, new, 1))
+    write(mempool_path, text.replace(old_scan, direct_lookup, 1))
 
     checkpoint_path = "crates/kanari-core/src/engine/apply_checkpoint.rs"
     text = read(checkpoint_path)
-    if old not in text:
+    if old_scan not in text:
         raise RuntimeError("checkpoint replay scan not found")
-    write(checkpoint_path, text.replace(old, new, 1))
+    text = text.replace(old_scan, direct_lookup, 1)
+    apply_marker = '''    pub fn apply_checkpoint(&self, checkpoint: Checkpoint) -> Result<()> {
+        info!('''
+    apply_replacement = '''    pub fn apply_checkpoint(&self, checkpoint: Checkpoint) -> Result<()> {
+        checkpoint.verify_certificate(&self.consensus_public_keys, self.authorities.len())?;
+        info!('''
+    if apply_marker not in text:
+        raise RuntimeError("direct checkpoint certificate guard insertion point not found")
+    write(checkpoint_path, text.replace(apply_marker, apply_replacement, 1))
 
     consensus_path = "crates/kanari-core/src/consensus.rs"
     text = read(consensus_path)
@@ -121,3 +129,17 @@ def apply() -> None:
     if text.count(old_budget) != 2:
         raise RuntimeError("expected two runtime gas budget call sites")
     write(engine_path, text.replace(old_budget, new_budget))
+
+    # `zero-gas` remains an accepted compatibility feature name, but it no longer
+    # compiles or selects a second consensus gas implementation.
+    lib_path = "crates/kanari-types/src/lib.rs"
+    text = read(lib_path)
+    selector = '''pub mod gas;
+mod gas_v1;
+#[cfg(feature = "zero-gas")]
+mod gas_v2;'''
+    replacement = '''pub mod gas;
+mod gas_v1;'''
+    if selector not in text:
+        raise RuntimeError("generated gas module selector not found")
+    write(lib_path, text.replace(selector, replacement, 1))
