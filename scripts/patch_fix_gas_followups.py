@@ -37,4 +37,10 @@ replace_once(
     """        self.apply_prepared_checkpoint(\n            checkpoint_to_apply,\n            verified_state,\n            receipts,\n            true,\n        )?;\n""",
 )
 
-print("patched checkpoint sync and genesis persistence call sites")
+replace_once(
+    "crates/kanari-core/src/engine/produce_dag_vertex.rs",
+    """            gas_limit,\n            gas_price: 0,\n            sequence_number: sequence,\n""",
+    """            gas_limit,\n            gas_price: GasConfig::default().min_gas_price,\n            sequence_number: sequence,\n""",
+)
+
+print("patched checkpoint sync, genesis persistence, and feature-neutral gas fixtures")
