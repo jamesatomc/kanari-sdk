@@ -454,10 +454,11 @@ impl DagEngine {
             }
             BlockchainEngine::validate_transaction_gas(&tx.transaction)?;
 
-            // Publishing mutates the resolver/module cache. Keep it in a
-            // checkpoint by itself until same-checkpoint overlay resolution is
-            // explicitly supported. This is deterministic and fail-closed.
-            if matches!(tx.transaction, Transaction::PublishModule { .. }) {
+            // Arbitrary Move execution has an opaque global/resource access
+            // set and the runtime resolver reads committed state rather than the
+            // speculative checkpoint overlay. Isolate it until overlay-aware
+            // resolution is supported. This is deterministic and fail-closed.
+            if !tx.transaction.has_complete_conflict_set() {
                 if selected.is_empty() {
                     selected.push(tx);
                 }
@@ -873,6 +874,19 @@ mod checkpoint_gas_tests {
         })
     }
 
+    fn opaque_tx(sender: &str, gas_limit: u64) -> SignedTransaction {
+        SignedTransaction::new(Transaction::ExecuteFunction {
+            sender: sender.to_string(),
+            module: "0x42::opaque".to_string(),
+            function: "touch_global".to_string(),
+            type_args: vec![],
+            args: vec![],
+            gas_limit,
+            gas_price: GasConfig::default().min_gas_price,
+            sequence_number: 0,
+        })
+    }
+
     #[test]
     fn checkpoint_budget_does_not_head_of_line_block_other_senders() {
         let selected = DagEngine::select_checkpoint_transactions_with_budget(
@@ -896,5 +910,18 @@ mod checkpoint_gas_tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].transaction.sender_address(), "0x1");
+    }
+
+    #[test]
+    fn opaque_move_transaction_isolated_in_its_checkpoint() {
+        let selected = DagEngine::select_checkpoint_transactions_with_budget(
+            vec![opaque_tx("0x1", 500), tx("0x2", 0, 100)],
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].transaction.sender_address(), "0x1");
+        assert!(!selected[0].transaction.has_complete_conflict_set());
     }
 }

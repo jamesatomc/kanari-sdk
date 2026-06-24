@@ -51,10 +51,23 @@ impl BlockchainEngine {
         );
     }
 
+    fn validate_checkpoint_execution_shape(transactions: &[SignedTransaction]) -> Result<()> {
+        let opaque_count = transactions
+            .iter()
+            .filter(|tx| !tx.transaction.has_complete_conflict_set())
+            .count();
+        anyhow::ensure!(
+            opaque_count == 0 || (opaque_count == 1 && transactions.len() == 1),
+            "Checkpoint contains an opaque Move transaction mixed with other transactions"
+        );
+        Ok(())
+    }
+
     pub(crate) fn prepare_checkpoint_state(
         &self,
         checkpoint: &Checkpoint,
     ) -> Result<PreparedCheckpointState> {
+        Self::validate_checkpoint_execution_shape(&checkpoint.transactions)?;
         let state_snapshot = self.state_read().clone();
         let state_arc = Arc::new(RwLock::new(state_snapshot));
         let to_execute: Vec<SignedTransaction> = {
@@ -231,5 +244,61 @@ impl BlockchainEngine {
             self.prepare_checkpoint_state(&checkpoint)?;
         self.ensure_checkpoint_root_matches(&checkpoint, &computed_root)?;
         self.apply_prepared_checkpoint(checkpoint, verified_state, receipts, true)
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_shape_tests {
+    use super::*;
+    use kanari_types::transaction::Transaction;
+
+    fn native_tx(sender: &str) -> SignedTransaction {
+        SignedTransaction::new(Transaction::ExecuteFunction {
+            sender: sender.to_string(),
+            module: Transaction::KANARI_MODULE.to_string(),
+            function: Transaction::BURN_AMOUNT_FUNCTION.to_string(),
+            type_args: vec![],
+            args: vec![bcs::to_bytes(&0u64).unwrap()],
+            gas_limit: 1_000,
+            gas_price: 0,
+            sequence_number: 0,
+        })
+    }
+
+    fn opaque_tx(sender: &str) -> SignedTransaction {
+        SignedTransaction::new(Transaction::ExecuteFunction {
+            sender: sender.to_string(),
+            module: "0x42::opaque".to_string(),
+            function: "touch_global".to_string(),
+            type_args: vec![],
+            args: vec![],
+            gas_limit: 1_000,
+            gas_price: 0,
+            sequence_number: 0,
+        })
+    }
+
+    #[test]
+    fn accepts_native_only_checkpoint() {
+        BlockchainEngine::validate_checkpoint_execution_shape(&[
+            native_tx("0x1"),
+            native_tx("0x2"),
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn accepts_single_opaque_transaction() {
+        BlockchainEngine::validate_checkpoint_execution_shape(&[opaque_tx("0x1")]).unwrap();
+    }
+
+    #[test]
+    fn rejects_opaque_transaction_mixed_with_other_work() {
+        let error = BlockchainEngine::validate_checkpoint_execution_shape(&[
+            opaque_tx("0x1"),
+            native_tx("0x2"),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("opaque Move transaction"));
     }
 }
