@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from . import phase1_zero_fee
 from .common import read, write
 
 
 def apply() -> None:
+    phase1_zero_fee.apply()
+
     path = "crates/kanari-node/src/sync.rs"
     text = read(path)
     before = """        let encoded_size = bcs::to_bytes(&checkpoint)
