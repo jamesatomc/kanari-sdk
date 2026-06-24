@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+
+sys.dont_write_bytecode = True
+
 from security_hardening import (
     phase1_financial,
     phase2_consensus,
@@ -7,10 +11,11 @@ from security_hardening import (
     phase3_gas,
     phase4_persistence_network,
     phase5_auth,
+    phase_known_fixups,
     phase_post,
 )
 
-PATCHSET_VERSION = 4
+PATCHSET_VERSION = 5
 
 
 def main() -> None:
@@ -21,6 +26,7 @@ def main() -> None:
     phase4_persistence_network.apply()
     phase5_auth.apply()
     phase_post.apply()
+    phase_known_fixups.apply()
     print(f"security hardening patchset v{PATCHSET_VERSION} applied")
 
 
