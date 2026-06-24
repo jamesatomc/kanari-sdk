@@ -981,6 +981,12 @@ impl StateManager {
         self.update_canonical_root_cache(key, None);
     }
 
+    /// Stage auxiliary metadata in the same atomic store batch as state.
+    /// Non-canonical keys are deliberately excluded from the state root.
+    pub fn stage_value<T: Serialize + ?Sized>(&mut self, key: &[u8], value: &T) -> Result<()> {
+        self.save_internal(key, value)
+    }
+
     // Helper to read from overlay then store
     pub(crate) fn load_internal<T: DeserializeOwned>(&self, key: &[u8]) -> Result<Option<T>> {
         if let Some(val_opt) = self.overlay.get(key) {
@@ -1506,6 +1512,24 @@ impl StateManager {
             );
         }
         let mut owners_to_recompute = self.owners_requiring_balance_recompute(changeset)?;
+
+        for (module_id, bytes) in &changeset.module_writes {
+            let module_key = format!(
+                "module:{}:{}",
+                module_id.address().to_hex_literal(),
+                module_id.name().as_str()
+            );
+            self.save_internal(module_key.as_bytes(), bytes)?;
+            self.add_to_index_list(b"module_index", module_key)?;
+        }
+
+        for (address, tag, bytes) in &changeset.resource_writes {
+            let resource_key = format!("resource:{}:{}", address.to_hex_literal(), tag);
+            match bytes {
+                Some(value) => self.save_internal(resource_key.as_bytes(), value)?,
+                None => self.delete_internal(resource_key.as_bytes()),
+            }
+        }
 
         for (address, change) in &changeset.account_changes {
             let mut account = self.load_account_or_default(*address)?;

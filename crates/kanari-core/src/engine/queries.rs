@@ -298,7 +298,7 @@ impl BlockchainEngine {
         }
 
         let checkpoint_to_apply = checkpoint.clone();
-        let (computed_root, verified_state, to_execute, receipts) =
+        let (computed_root, verified_state, receipts) =
             self.prepare_checkpoint_state(&checkpoint_to_apply)?;
 
         if !self.checkpoint_root_matches(
@@ -314,13 +314,7 @@ impl BlockchainEngine {
             );
         }
 
-        self.apply_prepared_checkpoint(
-            checkpoint_to_apply,
-            verified_state,
-            to_execute,
-            receipts,
-            true,
-        )?;
+        self.apply_prepared_checkpoint(checkpoint_to_apply, verified_state, receipts, true)?;
 
         info!(
             "Synced checkpoint #{} with {} transactions",

@@ -22,6 +22,7 @@ impl super::MoveRuntime {
         gas_limit: u64,
         gas_price: u64,
         gas_op: GasOperation,
+        vm_gas_used: u64,
         storage_written: u64,
         storage_deleted: u64,
     ) -> Result<()> {
@@ -29,10 +30,16 @@ impl super::MoveRuntime {
         let config = GasConfig::default();
         config.validate_price(gas_price)?;
 
-        // Charge execution gas
-        meter.consume(gas_op.gas_units())?;
+        // Charge at least the static admission cost and otherwise the actual
+        // MoveVM instruction/native work observed during execution.
+        meter.consume(gas_op.gas_units().max(vm_gas_used))?;
 
-        // Charge storage gas
+        // Storage is free monetarily, but write-set size is still resource
+        // metered so a zero-price transaction cannot emit unbounded state.
+        let storage_units = storage_written
+            .checked_add(storage_deleted / 2)
+            .ok_or_else(|| anyhow::anyhow!("Storage gas overflow"))?;
+        meter.consume(storage_units)?;
         meter.charge_storage(storage_written, &config)?;
         meter.rebate_storage(storage_deleted);
 
@@ -64,9 +71,7 @@ impl super::MoveRuntime {
         let dao_addr = AccountAddress::from_hex_literal(KanariAddress::DAO_ADDRESS)?;
         cs.collect_gas(dao_addr, total_cost);
 
-        // Use the gas units from GasOperation (calculated by our GasMeter), not from KanariGasMeter
-        // KanariGasMeter is only for DoS protection during VM execution
-        cs.set_gas_used(gas_op.gas_units());
+        cs.set_gas_used(meter.gas_used);
 
         Ok(())
     }

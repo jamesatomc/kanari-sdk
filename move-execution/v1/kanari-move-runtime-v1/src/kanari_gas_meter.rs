@@ -20,6 +20,10 @@ impl KanariGasMeter {
         }
     }
 
+    pub fn gas_used(&self) -> u64 {
+        self.gas_used
+    }
+
     /// Charge additional internal gas and fail once the limit is exceeded.
     #[inline]
     pub fn charge(&mut self, amount: u64) -> PartialVMResult<()> {

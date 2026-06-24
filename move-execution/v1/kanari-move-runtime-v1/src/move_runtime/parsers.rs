@@ -7,6 +7,7 @@ use kanari_types::event::Event;
 use kanari_types::object::{IDRecord, UIDRecord};
 use log::debug;
 use move_core_types::effects::Op as MoveOp;
+use move_core_types::language_storage::ModuleId;
 
 impl super::MoveRuntime {
     /// Parse Move VM ChangeSet and extract state changes into Kanari ChangeSet
@@ -28,12 +29,27 @@ impl super::MoveRuntime {
 
         for (addr, account_changes) in move_cs.accounts() {
             for (module_name, op) in account_changes.modules() {
-                if matches!(op, MoveOp::New(_) | MoveOp::Modify(_)) {
-                    kanari_cs.publish_module(*addr, module_name.to_string());
+                match op {
+                    MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
+                        kanari_cs.publish_module(*addr, module_name.to_string());
+                        kanari_cs.add_module_write(
+                            ModuleId::new(*addr, module_name.clone()),
+                            bytes.to_vec(),
+                        );
+                    }
+                    MoveOp::Delete => {}
                 }
             }
 
             for (struct_tag, op) in account_changes.resources() {
+                kanari_cs.add_resource_write(
+                    *addr,
+                    struct_tag.clone(),
+                    match op {
+                        MoveOp::New(bytes) | MoveOp::Modify(bytes) => Some(bytes.to_vec()),
+                        MoveOp::Delete => None,
+                    },
+                );
                 match op {
                     MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
                         // Extract UID from first 32 bytes if available (for Sui-style objects)

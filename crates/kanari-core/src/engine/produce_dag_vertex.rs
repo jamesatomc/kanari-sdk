@@ -56,7 +56,6 @@ pub struct CheckpointInfo {
 struct StagedCheckpoint {
     checkpoint: Checkpoint,
     verified_state: StateManager,
-    to_execute: Vec<SignedTransaction>,
     receipts: Vec<TransactionExecutionReceipt>,
     validate_supply: bool,
 }
@@ -428,12 +427,10 @@ impl DagEngine {
         self.engine.persist_dag_state(state)
     }
 
-    pub fn produce_vertex(&self) -> Result<CheckpointProductionInfo> {
-        let policy = {
-            let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
-            consensus.production_policy()
-        };
-        let mut transactions = self.engine.pending_transactions_snapshot();
+    fn select_checkpoint_transactions_with_budget(
+        mut transactions: Vec<SignedTransaction>,
+        block_gas_budget: u64,
+    ) -> Result<Vec<SignedTransaction>> {
         transactions.sort_by(|a, b| {
             a.transaction
                 .sender_address()
@@ -445,10 +442,66 @@ impl DagEngine {
                 })
                 .then_with(|| a.transaction_hash().cmp(b.transaction_hash()))
         });
-        let tx_count = transactions.len();
-        if tx_count == 0 {
+
+        let mut remaining = block_gas_budget;
+        let mut blocked_senders = HashSet::new();
+        let mut selected = Vec::new();
+
+        for tx in transactions {
+            let sender = tx.transaction.sender_address().to_string();
+            if blocked_senders.contains(&sender) {
+                continue;
+            }
+            BlockchainEngine::validate_transaction_gas(&tx.transaction)?;
+
+            // Publishing mutates the resolver/module cache. Keep it in a
+            // checkpoint by itself until same-checkpoint overlay resolution is
+            // explicitly supported. This is deterministic and fail-closed.
+            if matches!(tx.transaction, Transaction::PublishModule { .. }) {
+                if selected.is_empty() {
+                    selected.push(tx);
+                }
+                break;
+            }
+
+            let reserved = tx.transaction.gas_limit();
+            if reserved > remaining {
+                // Preserve this sender's sequence prefix, but continue looking
+                // for independent senders that fit the remaining budget.
+                blocked_senders.insert(sender);
+                continue;
+            }
+            remaining -= reserved;
+            selected.push(tx);
+        }
+
+        anyhow::ensure!(
+            !selected.is_empty(),
+            "No pending transaction fits the checkpoint gas budget"
+        );
+        Ok(selected)
+    }
+
+    fn select_checkpoint_transactions(
+        transactions: Vec<SignedTransaction>,
+    ) -> Result<Vec<SignedTransaction>> {
+        Self::select_checkpoint_transactions_with_budget(
+            transactions,
+            GasConfig::default().max_gas_per_block,
+        )
+    }
+
+    pub fn produce_vertex(&self) -> Result<CheckpointProductionInfo> {
+        let policy = {
+            let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
+            consensus.production_policy()
+        };
+        let pending = self.engine.pending_transactions_snapshot();
+        if pending.is_empty() {
             anyhow::bail!("No new transactions to checkpoint");
         }
+        let transactions = Self::select_checkpoint_transactions(pending)?;
+        let tx_count = transactions.len();
         let timestamp = {
             let chain = self
                 .engine
@@ -461,7 +514,7 @@ impl DagEngine {
                 .saturating_add(1)
                 .max(chain.height().saturating_add(1))
         };
-        let (state_root, executed, failed, verified_state, to_execute, receipts, validate_supply) = {
+        let (state_root, executed, failed, verified_state, receipts, validate_supply) = {
             let state_snapshot = self.engine.state_read().clone();
             let state_arc = Arc::new(RwLock::new(state_snapshot));
             self.engine
@@ -495,11 +548,6 @@ impl DagEngine {
                 execution.executed,
                 execution.failed,
                 verified_state,
-                if validate_supply {
-                    transactions.clone()
-                } else {
-                    Vec::new()
-                },
                 execution.receipts,
                 validate_supply,
             )
@@ -538,13 +586,7 @@ impl DagEngine {
             .to_bytes()
             .to_vec();
 
-        self.stage_locally_produced_vertex(
-            &vertex,
-            verified_state,
-            to_execute,
-            receipts,
-            validate_supply,
-        )?;
+        self.stage_locally_produced_vertex(&vertex, verified_state, receipts, validate_supply)?;
         let checkpoint = self.finalize_staged_checkpoint(vertex.id)?;
         let checkpoint_info = Some(CheckpointInfo {
             sequence: checkpoint.sequence,
@@ -573,7 +615,6 @@ impl DagEngine {
         &self,
         vertex: &DagVertex,
         verified_state: StateManager,
-        to_execute: Vec<SignedTransaction>,
         receipts: Vec<TransactionExecutionReceipt>,
         validate_supply: bool,
     ) -> Result<Checkpoint> {
@@ -608,7 +649,6 @@ impl DagEngine {
             StagedCheckpoint {
                 checkpoint: checkpoint.clone(),
                 verified_state,
-                to_execute,
                 receipts,
                 validate_supply,
             },
@@ -632,7 +672,6 @@ impl DagEngine {
         self.engine.apply_prepared_checkpoint(
             staged.checkpoint.clone(),
             staged.verified_state,
-            staged.to_execute,
             staged.receipts,
             staged.validate_supply,
         )?;
@@ -816,3 +855,46 @@ impl BlockchainEngine {
 #[cfg(test)]
 #[path = "../../tests/unit/produce_dag_vertex_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod checkpoint_gas_tests {
+    use super::*;
+
+    fn tx(sender: &str, sequence: u64, gas_limit: u64) -> SignedTransaction {
+        SignedTransaction::new(Transaction::ExecuteFunction {
+            sender: sender.to_string(),
+            module: Transaction::KANARI_MODULE.to_string(),
+            function: Transaction::BURN_AMOUNT_FUNCTION.to_string(),
+            type_args: vec![],
+            args: vec![bcs::to_bytes(&0u64).unwrap()],
+            gas_limit,
+            gas_price: GasConfig::default().min_gas_price,
+            sequence_number: sequence,
+        })
+    }
+
+    #[test]
+    fn checkpoint_budget_does_not_head_of_line_block_other_senders() {
+        let selected = DagEngine::select_checkpoint_transactions_with_budget(
+            vec![tx("0x1", 0, 900), tx("0x1", 1, 200), tx("0x2", 0, 100)],
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].transaction.sender_address(), "0x1");
+        assert_eq!(selected[1].transaction.sender_address(), "0x2");
+    }
+
+    #[test]
+    fn checkpoint_budget_preserves_sender_sequence_prefix() {
+        let selected = DagEngine::select_checkpoint_transactions_with_budget(
+            vec![tx("0x1", 0, 800), tx("0x2", 0, 300), tx("0x2", 1, 100)],
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].transaction.sender_address(), "0x1");
+    }
+}

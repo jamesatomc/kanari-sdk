@@ -8,6 +8,7 @@ use kanari_types::object::IDRecord;
 use kanari_types::object::UIDRecord;
 use kanari_types::{balance::BalanceRecord, event::Event};
 use move_core_types::account_address::AccountAddress;
+use move_core_types::language_storage::{ModuleId, StructTag};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -85,6 +86,10 @@ pub struct ChangeSet {
     pub added_dynamic_fields: Vec<(String, Vec<u8>, Vec<u8>)>,
     /// (object_id, name_bytes)
     pub removed_dynamic_fields: Vec<(String, Vec<u8>)>,
+    /// Canonical Move module writes captured from the VM session.
+    pub module_writes: Vec<(ModuleId, Vec<u8>)>,
+    /// Canonical Move resource writes. None represents deletion.
+    pub resource_writes: Vec<(AccountAddress, StructTag, Option<Vec<u8>>)>,
     pub gas_used: u64,
     pub success: bool,
     pub error_message: Option<String>,
@@ -102,6 +107,8 @@ impl ChangeSet {
             deleted_objects: Vec::new(),
             added_dynamic_fields: Vec::new(),
             removed_dynamic_fields: Vec::new(),
+            module_writes: Vec::new(),
+            resource_writes: Vec::new(),
             gas_used,
             success,
             error_message,
@@ -171,6 +178,8 @@ impl ChangeSet {
             && self.deleted_objects.is_empty()
             && self.added_dynamic_fields.is_empty()
             && self.removed_dynamic_fields.is_empty()
+            && self.module_writes.is_empty()
+            && self.resource_writes.is_empty()
             && self.gas_used == 0
             && self.success
             && self.error_message.is_none()
@@ -206,8 +215,10 @@ impl ChangeSet {
             .append(&mut other.added_dynamic_fields);
         self.removed_dynamic_fields
             .append(&mut other.removed_dynamic_fields);
+        self.module_writes.append(&mut other.module_writes);
+        self.resource_writes.append(&mut other.resource_writes);
 
-        self.gas_used += other.gas_used;
+        self.gas_used = self.gas_used.saturating_add(other.gas_used);
         if !other.success {
             self.success = false;
             self.error_message = other.error_message;
@@ -216,6 +227,25 @@ impl ChangeSet {
 
     pub fn add_event(&mut self, event: Event) {
         self.events.push(event);
+    }
+
+    pub fn add_module_write(&mut self, module_id: ModuleId, bytes: Vec<u8>) {
+        self.module_writes
+            .retain(|(existing, _)| existing != &module_id);
+        self.module_writes.push((module_id, bytes));
+    }
+
+    pub fn add_resource_write(
+        &mut self,
+        address: AccountAddress,
+        tag: StructTag,
+        bytes: Option<Vec<u8>>,
+    ) {
+        self.resource_writes
+            .retain(|(existing_address, existing_tag, _)| {
+                existing_address != &address || existing_tag != &tag
+            });
+        self.resource_writes.push((address, tag, bytes));
     }
 
     pub fn add_deleted_object(&mut self, object_id: String) {

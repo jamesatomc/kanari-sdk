@@ -259,6 +259,13 @@ impl Transaction {
         }
     }
 
+    /// Returns true only when the complete mutable access set can be
+    /// derived before Move bytecode execution. Arbitrary Move calls may touch
+    /// globals and dynamic fields that are not represented in their arguments.
+    pub fn has_complete_conflict_set(&self) -> bool {
+        matches!(self, Transaction::ExecuteFunction { .. }) && self.native_call().is_some()
+    }
+
     /// Get conflict keys for this transaction.
     /// Transactions with overlapping conflict keys must be executed sequentially.
     pub fn get_conflict_keys(&self) -> Vec<String> {

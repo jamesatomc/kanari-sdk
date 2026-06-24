@@ -4,8 +4,7 @@
 use kanari_types::transaction::SignedTransaction;
 use std::collections::HashMap;
 
-/// Transaction Scheduler for parallel execution
-/// Organizes transactions into "waves" where transactions in the same wave can be executed in parallel.
+/// Transaction scheduler for deterministic conflict-safe execution waves.
 pub struct TransactionScheduler;
 
 impl TransactionScheduler {
@@ -17,42 +16,43 @@ impl TransactionScheduler {
             .unwrap_or(0)
     }
 
-    /// Schedule transactions into parallel execution waves based on object conflicts.
-    /// Uses a "Earliest Wave" algorithm to maximize parallelism.
+    /// Schedule transactions into deterministic execution waves.
     ///
-    /// Algorithm:
-    /// 1. Track the last wave index assigned to each conflict key (Object ID/Address).
-    /// 2. For each transaction, determine the earliest possible wave index:
-    ///    `wave_idx = max(last_wave_index[key] for key in tx_keys) + 1`
-    /// 3. Assign the transaction to that wave.
-    /// 4. Update last_wave_index for all keys involved in the transaction.
-    ///
-    /// This ensures that:
-    /// - Transactions with conflicts are ordered sequentially (preserving causal order).
-    /// - Transactions without conflicts are placed in the earliest possible wave (maximizing parallelism).
+    /// A transaction is parallelized only when its complete mutable access set
+    /// is known before execution. An arbitrary Move call or module publish is a
+    /// serial barrier: it executes after every preceding wave and every later
+    /// transaction executes after it. This fail-closed rule prevents hidden
+    /// global/dynamic-field conflicts from producing divergent state roots.
     pub fn schedule(transactions: Vec<SignedTransaction>) -> Vec<Vec<SignedTransaction>> {
         let mut waves: Vec<Vec<SignedTransaction>> = Vec::new();
-        // Map: Conflict Key -> Index of the last wave that touched this key
-        // We use isize here to represent "no wave yet" as -1, so the first wave is 0.
-        // Actually, let's just use usize and 0-based indexing.
         let mut key_last_wave: HashMap<String, usize> =
-            HashMap::with_capacity(transactions.len() * 2);
+            HashMap::with_capacity(transactions.len().saturating_mul(2));
+        let mut serial_barrier_wave: Option<usize> = None;
 
         for tx in transactions {
+            let complete_access_set = tx.transaction.has_complete_conflict_set();
             let keys = tx.transaction.get_conflict_keys();
-            let target_wave_idx = Self::target_wave_idx(&keys, &key_last_wave);
 
-            // Ensure the wave exists
+            let target_wave_idx = if complete_access_set {
+                let conflict_wave = Self::target_wave_idx(&keys, &key_last_wave);
+                serial_barrier_wave
+                    .map(|barrier| conflict_wave.max(barrier.saturating_add(1)))
+                    .unwrap_or(conflict_wave)
+            } else {
+                // A fresh wave after all preceding work isolates unknown access.
+                waves.len()
+            };
+
             while waves.len() <= target_wave_idx {
                 waves.push(Vec::new());
             }
-
-            // Add transaction to the wave
             waves[target_wave_idx].push(tx);
 
-            // Update the last wave index for all keys
             for key in keys {
                 key_last_wave.insert(key, target_wave_idx);
+            }
+            if !complete_access_set {
+                serial_barrier_wave = Some(target_wave_idx);
             }
         }
 

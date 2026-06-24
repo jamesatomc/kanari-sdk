@@ -304,6 +304,13 @@ impl MoveRuntime {
 
     /// Rebuild the VM instance so cached module state is refreshed.
     pub fn reload_vm_cache(&self) -> Result<()> {
+        let refreshed_modules: HashSet<ModuleId> =
+            self.state.get_all_module_ids()?.into_iter().collect();
+        *self
+            .published_modules
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = refreshed_modules;
+
         let new_vm = MoveVM::new(self.all_natives.as_ref().clone())
             .map_err(|e| anyhow::anyhow!("Failed to reload MoveVM: {:?}", e))?;
 
@@ -442,8 +449,7 @@ impl MoveRuntime {
         let module_id = compiled.self_id();
         self.verify_module_publish_safety(sender, &module_id, &compiled, &module_bytes)?;
 
-        let (move_changeset, events) = {
-            // Separate lock into a variable first to prevent it from being dropped immediately
+        let (move_changeset, events, vm_gas_used) = {
             let vm_guard = self.read_vm();
             let mut session = self.create_session_with_storage_ext(&vm_guard);
 
@@ -453,8 +459,9 @@ impl MoveRuntime {
             session
                 .publish_module(module_bytes.clone(), sender, &mut metered_gas)
                 .map_err(|e| anyhow::anyhow!("{:?}", e))?;
-
-            session.finish().0.map_err(|e| anyhow::anyhow!("{:?}", e))?
+            let vm_gas_used = metered_gas.gas_used();
+            let (changeset, events) = session.finish().0.map_err(|e| anyhow::anyhow!("{:?}", e))?;
+            (changeset, events, vm_gas_used)
         };
 
         if persist_runtime_state {
@@ -480,6 +487,7 @@ impl MoveRuntime {
                 gas_limit,
                 gas_price,
                 gas_op,
+                vm_gas_used,
                 written,
                 deleted,
             )?;
@@ -789,7 +797,7 @@ impl MoveRuntime {
             .push((object_id.to_string(), updated_obj));
     }
 
-    pub fn persist_created_objects(&self, cs: &ChangeSet) {
+    pub fn persist_created_objects(&self, cs: &ChangeSet) -> Result<()> {
         for (id, created) in &cs.created_objects {
             let stored = StoredObject {
                 id: id.clone(),
@@ -798,14 +806,20 @@ impl MoveRuntime {
                 data: created.data.clone(),
                 version: created.version,
             };
-            let _ = self.object_storage.store_object(stored);
+            self.object_storage
+                .store_object(stored)
+                .map_err(|error| anyhow::anyhow!("Failed to persist object {id}: {error}"))?;
         }
+        Ok(())
     }
 
-    pub fn persist_deleted_objects(&self, cs: &ChangeSet) {
+    pub fn persist_deleted_objects(&self, cs: &ChangeSet) -> Result<()> {
         for obj_id in &cs.deleted_objects {
-            let _ = self.object_storage.delete_object(obj_id);
+            self.object_storage
+                .delete_object(obj_id)
+                .map_err(|error| anyhow::anyhow!("Failed to delete object {obj_id}: {error}"))?;
         }
+        Ok(())
     }
 
     pub fn preload_object_snapshot(
@@ -852,8 +866,8 @@ impl MoveRuntime {
         )?;
 
         state.apply_changeset(&cs)?;
-        self.persist_created_objects(&cs);
-        self.persist_deleted_objects(&cs);
+        self.persist_created_objects(&cs)?;
+        self.persist_deleted_objects(&cs)?;
 
         let (object_id, _) = cs
             .created_objects
@@ -1163,25 +1177,29 @@ impl MoveRuntime {
 
         // Extensions are already added by create_session_with_storage_ext() - no need to add again
 
-        let execution_result = if bypass_entry_check {
+        let (execution_result, vm_gas_used) = if bypass_entry_check {
             let mut unmetered_gas = UnmeteredGasMeter;
-            session.execute_function_bypass_visibility(
-                module_id,
-                ident,
-                ty_args_loaded,
-                final_args,
-                &mut unmetered_gas,
+            (
+                session.execute_function_bypass_visibility(
+                    module_id,
+                    ident,
+                    ty_args_loaded,
+                    final_args,
+                    &mut unmetered_gas,
+                ),
+                0,
             )
         } else {
             let provided_gas_limit = gas_info.map(|(limit, _)| limit).unwrap_or(1_000_000);
             let mut metered_gas = crate::kanari_gas_meter::KanariGasMeter::new(provided_gas_limit);
-            session.execute_entry_function(
+            let result = session.execute_entry_function(
                 module_id,
                 ident,
                 ty_args_loaded,
                 final_args,
                 &mut metered_gas,
-            )
+            );
+            (result, metered_gas.gas_used())
         };
 
         let mut cs = ChangeSet::new();
@@ -1327,13 +1345,20 @@ impl MoveRuntime {
                     let gas_op = GasOperation::ExecuteFunction { complexity };
                     let (written, deleted) = self.calculate_storage_impact(&move_changeset, &cs);
                     self.apply_gas_info(
-                        &mut cs, sender, gas_limit, gas_price, gas_op, written, deleted,
+                        &mut cs,
+                        sender,
+                        gas_limit,
+                        gas_price,
+                        gas_op,
+                        vm_gas_used,
+                        written,
+                        deleted,
                     )?;
                 }
 
                 if persist_runtime_state {
-                    self.persist_created_objects(&cs);
-                    self.persist_deleted_objects(&cs);
+                    self.persist_created_objects(&cs)?;
+                    self.persist_deleted_objects(&cs)?;
                 }
 
                 Ok(cs)
@@ -1349,11 +1374,12 @@ impl MoveRuntime {
                         GasOperation::ExecuteFunction {
                             complexity: penalty_complexity,
                         },
+                        vm_gas_used,
                         0,
                         0,
                     );
                     if persist_runtime_state {
-                        self.persist_created_objects(&cs);
+                        self.persist_created_objects(&cs)?;
                     }
                 }
                 Err(anyhow::anyhow!("exec error: {:?}", e))

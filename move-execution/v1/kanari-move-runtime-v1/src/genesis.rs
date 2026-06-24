@@ -97,8 +97,8 @@ pub fn init_genesis(state: &mut StateManager) -> Result<()> {
 
                 // Persist state and object side effects for this module publish.
                 state.apply_changeset(&changeset)?;
-                runtime.persist_created_objects(&changeset);
-                runtime.persist_deleted_objects(&changeset);
+                runtime.persist_created_objects(&changeset)?;
+                runtime.persist_deleted_objects(&changeset)?;
 
                 // Run `kanari::init()` after publishing the main kanari module.
                 if *module_name == "kanari.mv" {
@@ -149,8 +149,8 @@ pub fn init_genesis(state: &mut StateManager) -> Result<()> {
                             }
 
                             state.apply_changeset(&init_changeset)?;
-                            runtime.persist_created_objects(&init_changeset);
-                            runtime.persist_deleted_objects(&init_changeset);
+                            runtime.persist_created_objects(&init_changeset)?;
+                            runtime.persist_deleted_objects(&init_changeset)?;
                         }
                         Err(e) => {
                             log::error!("   ❌ Failed to execute kanari::init(): {:?}", e);

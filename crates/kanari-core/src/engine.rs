@@ -902,8 +902,8 @@ impl BlockchainEngine {
 
                 if persist_objects {
                     let runtime = &self.runtime_pool[0];
-                    runtime.persist_created_objects(&changeset);
-                    runtime.persist_deleted_objects(&changeset);
+                    runtime.persist_created_objects(&changeset)?;
+                    runtime.persist_deleted_objects(&changeset)?;
                 }
 
                 state_write
@@ -974,8 +974,8 @@ impl BlockchainEngine {
 
                     if persist_objects {
                         let runtime = &self.runtime_pool[0];
-                        runtime.persist_created_objects(&cs);
-                        runtime.persist_deleted_objects(&cs);
+                        runtime.persist_created_objects(&cs)?;
+                        runtime.persist_deleted_objects(&cs)?;
                     }
 
                     if cs.success {
@@ -1020,8 +1020,8 @@ impl BlockchainEngine {
                         Ok(cs) => {
                             if persist_objects {
                                 let runtime = &self.runtime_pool[0];
-                                runtime.persist_created_objects(&cs);
-                                runtime.persist_deleted_objects(&cs);
+                                runtime.persist_created_objects(&cs)?;
+                                runtime.persist_deleted_objects(&cs)?;
                             }
 
                             let mut receipt =
@@ -1091,7 +1091,7 @@ impl BlockchainEngine {
 
         let dao_addr = AccountAddress::from_hex_literal(KanariAddress::DAO_ADDRESS)?;
         changeset.collect_gas(dao_addr, gas_cost);
-        changeset.set_gas_used(gas_used);
+        changeset.set_gas_used(changeset.gas_used.max(gas_used));
         Ok(())
     }
 
@@ -1378,7 +1378,7 @@ impl BlockchainEngine {
                 match runtime.publish_module_with_context_and_persistence(
                     module_bytes.clone(),
                     KanariAddress::parse_to_account_address(sender)?,
-                    None,
+                    Some((tx.gas_limit(), tx.gas_price())),
                     timestamp,
                     Some(tx.hash()),
                     persist_runtime_state,
@@ -1460,7 +1460,7 @@ impl BlockchainEngine {
                     type_tags,
                     args.clone(),
                     Some(sender_addr),
-                    None,
+                    Some((tx.gas_limit(), tx.gas_price())),
                     timestamp,
                     Some(tx.hash()),
                     persist_runtime_state,
@@ -1473,7 +1473,11 @@ impl BlockchainEngine {
             }
         }
 
-        Self::apply_gas_and_sequence(&mut changeset, sender_addr, gas_cost, gas_meter.gas_used)?;
+        let final_gas_used = changeset.gas_used.max(gas_meter.gas_used);
+        let final_gas_cost = final_gas_used
+            .checked_mul(tx.gas_price())
+            .ok_or_else(|| anyhow::anyhow!("Gas cost overflow"))?;
+        Self::apply_gas_and_sequence(&mut changeset, sender_addr, final_gas_cost, final_gas_used)?;
         Ok(changeset)
     }
 
