@@ -1,0 +1,52 @@
+name: Apply security hardening
+
+on:
+  push:
+    branches:
+      - security/fix-all-audit-phases
+    paths:
+      - scripts/apply_security_hardening.py
+      - scripts/security_hardening/**
+      - .github/workflows/apply-security-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/fix-all-audit-phases
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply audited hardening patches
+        run: python3 scripts/apply_security_hardening.py
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Validate patch whitespace
+        run: git diff --check
+
+      - name: Compile security-critical crates
+        run: cargo check -p kanari-types -p kanari-core -p kanari-auth -p kanari-node --all-targets --all-features
+
+      - name: Commit generated hardening changes
+        run: |
+          if git diff --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(security): apply full audit hardening"
+          git push origin HEAD:security/fix-all-audit-phases
