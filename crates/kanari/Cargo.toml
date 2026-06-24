@@ -58,7 +58,8 @@ kanari-system-natives = { workspace = true }
 rpassword = { workspace = true }
 
 [features]
-default = []
+# Transaction construction and estimates use zero monetary gas by default.
+default = ["zero-gas"]
 zero-gas = ["kanari-types/zero-gas", "kanari-faucet/zero-gas"]
 
 [[bin]]
