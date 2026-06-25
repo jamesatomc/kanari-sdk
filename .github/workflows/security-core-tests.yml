@@ -8,6 +8,8 @@ on:
       - .github/workflows/security-core-tests.yml
       - crates/kanari-core/**
       - crates/kanari-types/**
+      - crates/kanari-frameworks/**
+      - crates/kanari-framework-builder/**
       - move-execution/v1/kanari-move-runtime-v1/**
 
 permissions:
@@ -25,6 +27,8 @@ jobs:
           fetch-depth: 0
           show-progress: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Build Move frameworks
+        run: cargo build -p kanari-framework-builder
       - name: Core tests
         env:
           RUST_BACKTRACE: '1'
