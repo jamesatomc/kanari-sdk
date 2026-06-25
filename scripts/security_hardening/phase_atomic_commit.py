@@ -262,8 +262,12 @@ def apply() -> None:
             *chain = next_chain;
         }
         for runtime in &self.runtime_pool {
-            runtime.clear_object_cache()?;
-            runtime.reload_vm_cache()?;
+            if let Err(error) = runtime.clear_object_cache() {
+                log::error!("Failed to clear runtime object cache after committed checkpoint: {}", error);
+            }
+            if let Err(error) = runtime.reload_vm_cache() {
+                log::error!("Failed to reload runtime cache after committed checkpoint: {}", error);
+            }
         }
 
         let mut mempool = self.mempool_write();
