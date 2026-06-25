@@ -1,0 +1,59 @@
+name: Materialize security source
+
+on:
+  push:
+    branches:
+      - security/fix-all-audit-phases
+    paths:
+      - scripts/apply_security_hardening.py
+      - scripts/security_hardening/**
+      - .github/workflows/materialize-security-source.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/fix-all-audit-phases
+          fetch-depth: 0
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply hardening
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 scripts/apply_security_hardening.py
+      - name: Complete node channel migration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/kanari-node/src/app.rs')
+          s = p.read_text().replace('UnboundedSender<P2PMessage>', 'Sender<P2PMessage>')
+          s = s.replace('match network_tx.send(msg)', 'match network_tx.try_send(msg)', 1)
+          p.write_text(s)
+          p = Path('crates/kanari-node/Cargo.toml')
+          s = p.read_text()
+          if 'bcs = { workspace = true }' not in s:
+              s = s.replace('bincode = { workspace = true }', 'bincode = { workspace = true }\nbcs = { workspace = true }')
+          p.write_text(s)
+          for name in ('crates/kanari-node/tests/unit/test_support.rs', 'crates/kanari-node/tests/unit/sync_tests.rs'):
+              p = Path(name)
+              p.write_text(p.read_text().replace('mpsc::unbounded_channel()', 'mpsc::channel(32)'))
+          PY
+      - run: cargo fmt --all
+      - run: cargo check -p kanari-types -p kanari-core -p kanari-auth -p kanari-node --all-targets --all-features
+      - run: git diff --check
+      - name: Commit generated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(security): materialize audited hardening source"
+          git push origin HEAD:security/fix-all-audit-phases
