@@ -26,13 +26,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Apply hardening phases
+      - name: Generate, format and compile
+        id: validate
+        continue-on-error: true
         env:
+          CARGO_TERM_COLOR: never
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 scripts/apply_security_hardening.py
-      - name: Complete bounded-channel call sites
         run: |
-          python3 - <<'PY'
+          set -o pipefail
+          {
+            python3 scripts/apply_security_hardening.py
+            python3 - <<'PY'
           from pathlib import Path
           p = Path('crates/kanari-node/src/app.rs')
           s = p.read_text().replace('UnboundedSender<P2PMessage>', 'Sender<P2PMessage>')
@@ -47,27 +51,23 @@ jobs:
               p = Path(name)
               p.write_text(p.read_text().replace('mpsc::unbounded_channel()', 'mpsc::channel(32)'))
           PY
-      - run: cargo fmt --all
-      - name: Compile security-critical crates
-        id: check
-        continue-on-error: true
-        env:
-          CARGO_TERM_COLOR: never
-        run: cargo check -p kanari-types -p kanari-core -p kanari-auth -p kanari-node --all-targets --all-features > /tmp/security-check.log 2>&1
-      - name: Export compiler errors
-        if: steps.check.outcome == 'failure'
+            cargo fmt --all
+            cargo check -p kanari-types -p kanari-core -p kanari-auth -p kanari-node --all-targets --all-features
+            git diff --check
+          } > /tmp/security-check.log 2>&1
+      - name: Export generation or compiler errors
+        if: steps.validate.outcome == 'failure'
         run: |
-          grep -n -B 4 -A 20 -E '^error|could not compile' /tmp/security-check.log | tail -n 600 > SECURITY_COMPILER_ERRORS.txt || true
-          if [ ! -s SECURITY_COMPILER_ERRORS.txt ]; then tail -n 240 /tmp/security-check.log > SECURITY_COMPILER_ERRORS.txt; fi
+          grep -n -B 6 -A 24 -E 'Traceback|RuntimeError|error\[|^error:|could not compile|missing patch marker' /tmp/security-check.log | tail -n 800 > SECURITY_COMPILER_ERRORS.txt || true
+          if [ ! -s SECURITY_COMPILER_ERRORS.txt ]; then tail -n 320 /tmp/security-check.log > SECURITY_COMPILER_ERRORS.txt; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add SECURITY_COMPILER_ERRORS.txt
-          git commit -m "chore(security): export compiler diagnostics"
+          git commit -m "chore(security): export hardening diagnostics"
           git push --force origin HEAD:security/hardening-errors
           exit 1
-      - run: git diff --check
       - name: Commit generated source
-        if: steps.check.outcome == 'success'
+        if: steps.validate.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
