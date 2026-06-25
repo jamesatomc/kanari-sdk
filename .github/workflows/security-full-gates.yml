@@ -27,7 +27,7 @@ jobs:
         with:
           components: rustfmt,clippy
 
-      - name: Remove obsolete warning-only paths
+      - name: Patch warning-only compatibility paths
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -54,26 +54,44 @@ jobs:
               '    pub(crate) fn execute_tx_waves_strict_serial(',
               '    pub(crate) fn execute_tx_waves_deterministic_parallel_with_receipts(',
           ):
-              if signature in text and f'    #[allow(dead_code)]\n{signature}' not in text:
-                  text = text.replace(signature, f'    #[allow(dead_code)]\n{signature}', 1)
+              annotated = f'    #[allow(dead_code)]\n{signature}'
+              if signature in text and annotated not in text:
+                  text = text.replace(signature, annotated, 1)
           engine.write_text(text)
           PY
 
-      - name: Format and validate diff
+      - name: Run complete release gates
+        id: gates
+        continue-on-error: true
+        env:
+          CARGO_TERM_COLOR: never
+          RUST_BACKTRACE: '1'
         run: |
-          cargo fmt --all
-          git diff --check
+          set -o pipefail
+          {
+            cargo fmt --all
+            git diff --check
+            cargo check --workspace --all-targets --all-features
+            cargo test --workspace --all-targets --all-features
+            cargo clippy --workspace --all-targets --all-features -- -D warnings
+          } > /tmp/security-full-gates.log 2>&1
 
-      - name: Workspace check
-        run: cargo check --workspace --all-targets --all-features
-
-      - name: Workspace tests
-        run: cargo test --workspace --all-targets --all-features
-
-      - name: Workspace clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Publish gate diagnostics
+        if: steps.gates.outcome == 'failure'
+        run: |
+          grep -n -B 12 -A 40 -E '^error|error\[|FAILED|failures:|panicked at|could not compile|warning:' /tmp/security-full-gates.log | tail -n 2200 > SECURITY_FULL_GATE_ERRORS.txt || true
+          if [ ! -s SECURITY_FULL_GATE_ERRORS.txt ]; then
+            tail -n 900 /tmp/security-full-gates.log > SECURITY_FULL_GATE_ERRORS.txt
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SECURITY_FULL_GATE_ERRORS.txt
+          git commit -m "chore(security): publish full-gate diagnostics"
+          git push --force origin HEAD:security/full-gate-errors
+          exit 1
 
       - name: Commit passing source
+        if: steps.gates.outcome == 'success'
         run: |
           printf 'workspace-check=passed\nworkspace-test=passed\nworkspace-clippy=passed\nsource=%s\n' "$GITHUB_SHA" > SECURITY_FULL_GATE_STATUS.txt
           git config user.name "github-actions[bot]"
