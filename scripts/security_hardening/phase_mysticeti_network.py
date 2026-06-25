@@ -46,15 +46,22 @@ def apply():
             .map(mysticeti_reference_to_vertex_id)
             .collect::<Vec<_>>();
         anyhow::ensure!(parents == vertex.parents, "Mysticeti parent set mismatch");
-        let expected = signed_tx_batch_to_mysticeti_transaction(
-            vertex.transactions.as_ref(),
-            vertex.timestamp,
-        );
-        anyhow::ensure!(block.transactions().len() == 1, "Mysticeti adapter block has invalid payload count");
-        anyhow::ensure!(
-            block.transactions()[0].as_bytes() == expected.as_bytes(),
-            "Mysticeti adapter transaction commitment mismatch"
-        );
+        if vertex.transactions.is_empty() {
+            anyhow::ensure!(
+                block.transactions().is_empty(),
+                "Empty Kanari vertex carries an unexpected Mysticeti transaction commitment"
+            );
+        } else {
+            let expected = signed_tx_batch_to_mysticeti_transaction(
+                vertex.transactions.as_ref(),
+                vertex.timestamp,
+            );
+            anyhow::ensure!(block.transactions().len() == 1, "Mysticeti adapter block has invalid payload count");
+            anyhow::ensure!(
+                block.transactions()[0].as_bytes() == expected.as_bytes(),
+                "Mysticeti adapter transaction commitment mismatch"
+            );
+        }
         info!(
             "[DAG v2 SYNC] Accepted authenticated Mysticeti vertex {} round {} txs {}",
             hex::encode(vertex.id),
