@@ -66,4 +66,42 @@ def apply():
     if marker not in text:
         raise RuntimeError("DAG vertex handler marker not found")
     text = text.replace(marker, helpers + marker, 1)
+    text = text.replace(
+        '''            match self.engine.add_network_dag_vertex(vertex.clone()) {
+                Ok(()) => {
+                    info!(
+                        "Successfully added DAG vertex {} to local consensus",
+                        hex::encode(vertex.id)
+                    );
+                    self.retry_buffered_dag_vertices();
+                }''',
+        '''            match self.engine.add_network_dag_vertex(vertex.clone()) {
+                Ok(update) => {
+                    info!(
+                        "Successfully added DAG vertex {} to local consensus",
+                        hex::encode(vertex.id)
+                    );
+                    self.broadcast_consensus_update(update);
+                    self.retry_buffered_dag_vertices();
+                }''',
+        1,
+    )
+    text = text.replace(
+        '''            match self.engine.add_network_dag_vertex(vertex.clone()) {
+                Ok(()) => {
+                    info!(
+                        "[DAG SYNC] Applied buffered DAG vertex {} (round {})",
+                        vertex_id, vertex.round
+                    );
+                }''',
+        '''            match self.engine.add_network_dag_vertex(vertex.clone()) {
+                Ok(update) => {
+                    info!(
+                        "[DAG SYNC] Applied buffered DAG vertex {} (round {})",
+                        vertex_id, vertex.round
+                    );
+                    self.broadcast_consensus_update(update);
+                }''',
+        1,
+    )
     write(path, text)
