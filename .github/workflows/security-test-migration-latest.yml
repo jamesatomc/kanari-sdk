@@ -30,8 +30,26 @@ jobs:
           python3 scripts/migrate_security_tests.py
           cargo fmt --all
           git diff --check
-      - run: cargo test -p kanari-core --lib
+      - name: Run core tests
+        id: core
+        continue-on-error: true
+        env:
+          RUST_BACKTRACE: '0'
+          CARGO_TERM_COLOR: never
+        run: cargo test -p kanari-core --lib > /tmp/core-tests.log 2>&1
+      - name: Publish core diagnostics
+        if: steps.core.outcome == 'failure'
+        run: |
+          grep -n -B 6 -A 22 -E ' FAILED$|failures:|panicked at|assertion failed|called `Result::unwrap\(\)`|error\[' /tmp/core-tests.log | tail -n 1200 > CORE_TEST_ERRORS.txt || true
+          if [ ! -s CORE_TEST_ERRORS.txt ]; then tail -n 500 /tmp/core-tests.log > CORE_TEST_ERRORS.txt; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CORE_TEST_ERRORS.txt
+          git commit -m "chore(security): publish core test diagnostics"
+          git push --force origin HEAD:security/core-test-errors
+          exit 1
       - name: Commit validated test migration
+        if: steps.core.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
