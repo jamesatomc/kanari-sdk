@@ -20,6 +20,12 @@ def apply() -> None:
         );
 '''
     text = text.replace(freeze, "", 1)
+    policy = '''        let policy = {
+            let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
+            consensus.production_policy()
+        };
+'''
+    text = text.replace(policy, "", 1)
     text = text.replace(
         '''        if tx_count == 0 {
             anyhow::bail!("No new transactions to checkpoint");
