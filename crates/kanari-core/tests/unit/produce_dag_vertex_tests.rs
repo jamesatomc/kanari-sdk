@@ -31,10 +31,6 @@ fn signed_network_vertex(
     vertex
         .bind_mysticeti_block(block.serialized_block, block.vertex_id)
         .unwrap();
-    // Some rejection tests deliberately override the outer round/parents after
-    // binding so validation fails before the raw-block consistency stage.
-    vertex.round = round;
-    vertex.parents = parents;
     use ed25519_dalek::Signer;
     vertex.signature = signing_key
         .sign(&vertex.signing_digest().unwrap())
