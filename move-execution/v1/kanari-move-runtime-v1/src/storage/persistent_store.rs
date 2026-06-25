@@ -6,9 +6,14 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::storage::shared_db::get_or_open_db;
 use rocksdb::{DB, IteratorMode, WriteBatch};
+
+#[cfg(test)]
+static FAIL_NEXT_RAW_BATCH: AtomicBool = AtomicBool::new(false);
 
 /// Custom error type for PersistentStore operations
 #[derive(Debug)]
@@ -161,8 +166,6 @@ impl PersistentStore {
 
     /// Flush all pending writes to the backing store synchronously.
     pub fn flush(&self) -> std::result::Result<(), PersistentStoreError> {
-        // RocksDB writes are synchronous in this implementation
-        // In-memory writes are immediate
         Ok(())
     }
 
@@ -206,6 +209,13 @@ impl PersistentStore {
         updates: &[(Vec<u8>, Vec<u8>)],
         deletes: &[Vec<u8>],
     ) -> std::result::Result<(), PersistentStoreError> {
+        #[cfg(test)]
+        if FAIL_NEXT_RAW_BATCH.swap(false, Ordering::SeqCst) {
+            return Err(PersistentStoreError::Internal(
+                "injected atomic batch failure".to_string(),
+            ));
+        }
+
         if let Some(db) = &self.db {
             let mut batch = WriteBatch::default();
             for (key, value) in updates {
@@ -227,6 +237,11 @@ impl PersistentStore {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub fn fail_next_raw_batch_for_test() {
+        FAIL_NEXT_RAW_BATCH.store(true, Ordering::SeqCst);
+    }
+
     /// Expose underlying RocksDB instance for other components (e.g. SMT)
     pub fn get_db(&self) -> Option<Arc<DB>> {
         self.db.clone()
@@ -245,12 +260,38 @@ impl PersistentStore {
         if let Some(db) = &self.db {
             db.write(batch)?;
         }
-        // Note: In-memory batch application is not supported directly via RocksDB batch type
-        // For in-memory, callers should use save_raw individually or implement a custom batch
         Ok(())
     }
 
     fn is_internal_smt_key(key: &[u8]) -> bool {
         key.starts_with(b"n:") || key.starts_with(b"d:")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn injected_batch_failure_leaves_all_keys_unchanged() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        store.save(b"keep", &1u64).unwrap();
+        store.save(b"delete", &2u64).unwrap();
+
+        PersistentStore::fail_next_raw_batch_for_test();
+        let error = store
+            .apply_raw_changes(
+                &[
+                    (b"keep".to_vec(), bcs::to_bytes(&9u64).unwrap()),
+                    (b"new".to_vec(), bcs::to_bytes(&3u64).unwrap()),
+                ],
+                &[b"delete".to_vec()],
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("injected atomic batch failure"));
+
+        assert_eq!(store.load::<u64>(b"keep").unwrap(), Some(1));
+        assert_eq!(store.load::<u64>(b"delete").unwrap(), Some(2));
+        assert_eq!(store.load::<u64>(b"new").unwrap(), None);
     }
 }
