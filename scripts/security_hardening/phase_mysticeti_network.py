@@ -4,6 +4,31 @@ from .common import read, write
 def apply():
     path = "crates/kanari-core/src/engine/produce_dag_vertex.rs"
     text = read(path)
+    text = text.replace(
+        '''        let expected_parent_round = vertex.round - 1;
+        let mut parent_authors = HashSet::new();''',
+        '''        let mut parent_authors = HashSet::new();''',
+        1,
+    )
+    text = text.replace(
+        '''            if parent.round != expected_parent_round {
+                anyhow::bail!(
+                    "Invalid parent round for DAG vertex {}: expected {}, got {}",
+                    hex::encode(vertex.id),
+                    expected_parent_round,
+                    parent.round
+                );
+            }''',
+        '''            if parent.round >= vertex.round {
+                anyhow::bail!(
+                    "Invalid parent round for DAG vertex {}: parent {} is not earlier than round {}",
+                    hex::encode(vertex.id),
+                    parent.round,
+                    vertex.round
+                );
+            }''',
+        1,
+    )
     old = '''    pub fn add_network_vertex(&self, vertex: DagVertex) -> Result<()> {
         let mut consensus = self.consensus.write().unwrap_or_else(|e| e.into_inner());
         if consensus.known_vertex(&vertex.id) {
@@ -43,6 +68,7 @@ def apply():
         let parents = block
             .includes()
             .iter()
+            .filter(|reference| reference.round > 0)
             .map(mysticeti_reference_to_vertex_id)
             .collect::<Vec<_>>();
         anyhow::ensure!(parents == vertex.parents, "Mysticeti parent set mismatch");
