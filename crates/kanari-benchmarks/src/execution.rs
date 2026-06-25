@@ -69,6 +69,7 @@ fn mode_info(vertex_id: &str, executed: usize, failed: usize) -> CheckpointProdu
         failed,
         events: vec![],
         checkpoint: None,
+        checkpoint_votes: vec![],
         vertex: None,
     }
 }
