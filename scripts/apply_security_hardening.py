@@ -21,12 +21,17 @@ from security_hardening import (
     phase_move_parser,
     phase_mysticeti_backend,
     phase_mysticeti_digest,
+    phase_mysticeti_network,
+    phase_mysticeti_production,
     phase_mysticeti_vertex,
     phase_post,
     phase_runtime_reload,
+    phase_vote_accept,
+    phase_vote_fields,
+    phase_vote_prepare,
 )
 
-PATCHSET_VERSION = 13
+PATCHSET_VERSION = 14
 
 
 def main() -> None:
@@ -48,6 +53,11 @@ def main() -> None:
     phase_mysticeti_digest.apply()
     phase_mysticeti_vertex.apply()
     phase_mysticeti_backend.apply()
+    phase_vote_fields.apply()
+    phase_mysticeti_production.apply()
+    phase_vote_prepare.apply()
+    phase_vote_accept.apply()
+    phase_mysticeti_network.apply()
     phase_atomic_commit.apply()
     print(f"security hardening patchset v{PATCHSET_VERSION} applied")
 
