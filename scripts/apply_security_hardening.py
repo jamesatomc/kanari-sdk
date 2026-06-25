@@ -29,6 +29,7 @@ from security_hardening import (
     phase_mysticeti_vertex,
     phase_node_consensus_loop,
     phase_post,
+    phase_protocol_limits,
     phase_runtime_reload,
     phase_vote_accept,
     phase_vote_fields,
@@ -37,7 +38,7 @@ from security_hardening import (
     phase_vote_transport,
 )
 
-PATCHSET_VERSION = 16
+PATCHSET_VERSION = 17
 
 
 def main() -> None:
@@ -70,6 +71,7 @@ def main() -> None:
     phase_vote_transport.apply()
     phase_vote_sync.apply()
     phase_node_consensus_loop.apply()
+    phase_protocol_limits.apply()
     phase_atomic_commit.apply()
     print(f"security hardening patchset v{PATCHSET_VERSION} applied")
 
