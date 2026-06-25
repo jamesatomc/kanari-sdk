@@ -119,6 +119,7 @@ mod tests {
                 failed: 0,
                 events: vec![],
                 checkpoint: None,
+                checkpoint_votes: vec![],
                 vertex: None,
             },
             duration_secs: 0.5,
