@@ -2,6 +2,15 @@ from .common import read, write
 
 
 def apply():
+    path = "crates/kanari-core/src/engine.rs"
+    text = read(path)
+    text = text.replace(
+        "pub use produce_dag_vertex::{CheckpointProductionInfo, DagEngine};",
+        "pub use produce_dag_vertex::{CheckpointProductionInfo, ConsensusUpdate, DagEngine};",
+        1,
+    )
+    write(path, text)
+
     path = "crates/kanari-core/src/lib.rs"
     text = read(path)
     text = text.replace(
