@@ -7,6 +7,8 @@ on:
     paths:
       - .github/workflows/security-test-migration-latest.yml
       - scripts/migrate_security_tests.py
+      - crates/kanari-frameworks/**
+      - crates/kanari-framework-builder/**
       - move-execution/v1/kanari-move-runtime-v1/src/storage/persistent_store.rs
 
 permissions:
@@ -30,6 +32,8 @@ jobs:
           python3 scripts/migrate_security_tests.py
           cargo fmt --all
           git diff --check
+      - name: Build Move frameworks
+        run: cargo build -p kanari-framework-builder
       - name: Run core tests
         id: core
         continue-on-error: true
