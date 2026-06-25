@@ -104,7 +104,7 @@ def apply():
                 &self.local_signing_key,
                 &self.authority_public_keys,
             )?;
-            let checkpoint_id = vote.checkpoint_id()?;
+            let checkpoint_id = vote.checkpoint_id;
             self.staged_checkpoints
                 .write()
                 .unwrap_or_else(|error| error.into_inner())
