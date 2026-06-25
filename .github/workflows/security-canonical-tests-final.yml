@@ -1,0 +1,47 @@
+name: Security canonical tests final
+
+on:
+  pull_request:
+    branches:
+      - fix-gas
+    paths:
+      - .github/workflows/security-canonical-tests-final.yml
+      - scripts/migrate_security_tests.py
+      - scripts/migrate_security_tests_round2.py
+      - crates/kanari-core/tests/unit/queries_tests.rs
+      - move-execution/v1/kanari-move-runtime-v1/src/storage/persistent_store.rs
+
+permissions:
+  contents: write
+
+jobs:
+  canonical-tests:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply canonical test migrations
+        run: |
+          python3 scripts/migrate_security_tests.py
+          python3 scripts/migrate_security_tests_round2.py
+          cargo fmt --all
+          git diff --check
+      - name: Build Move frameworks
+        run: cargo build -p kanari-framework-builder
+      - name: Run kanari-core tests
+        run: cargo test -p kanari-core --lib
+      - name: Commit validated canonical tests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/kanari-core/tests/unit/engine_tests.rs
+          git commit -m "test(security): align engine tests with canonical protocol"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
