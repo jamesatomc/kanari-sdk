@@ -5,7 +5,9 @@ use crate::p2p::{
     CheckpointRequestMsg, CheckpointResponseMsg, DagVertexMsg, DagVertexRequestMsg,
     DagVertexResponseMsg, P2PMessage, PeerInfoMsg,
 };
-use kanari_core::{BlockchainEngine, CheckpointSyncData, DagVertex};
+use kanari_core::{
+    BlockchainEngine, CheckpointSyncData, CheckpointVote, ConsensusUpdate, DagVertex,
+};
 use kanari_types::transaction::SignedTransaction;
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, VecDeque};
@@ -35,7 +37,7 @@ struct DivergentPeerInfo {
 
 pub struct SyncManager {
     engine: Arc<BlockchainEngine>,
-    network_tx: mpsc::UnboundedSender<P2PMessage>,
+    network_tx: mpsc::Sender<P2PMessage>,
     local_peer_id: String,
     /// Optional indexer for blockchain data indexing
     indexer: Option<Arc<Mutex<kanari_indexer::Indexer>>>,
@@ -52,8 +54,10 @@ pub struct SyncManager {
     /// DAG vertices that arrived before their parents. Gossip delivery is unordered,
     /// so retry these after each successful vertex import.
     dag_vertex_buffer: Mutex<VecDeque<DagVertex>>,
-    /// Maximum number of checkpoints to keep in buffer to prevent memory exhaustion
+    /// Maximum number and encoded bytes of checkpoints retained before verification.
     max_buffer_size: usize,
+    max_buffer_bytes: usize,
+    buffered_checkpoint_bytes: Mutex<usize>,
     max_dag_vertex_buffer_size: usize,
 }
 
@@ -115,7 +119,7 @@ impl SyncManager {
 
     pub fn new(
         engine: Arc<BlockchainEngine>,
-        network_tx: mpsc::UnboundedSender<P2PMessage>,
+        network_tx: mpsc::Sender<P2PMessage>,
         local_peer_id: String,
         indexer: Option<Arc<Mutex<kanari_indexer::Indexer>>>,
     ) -> Self {
@@ -130,8 +134,10 @@ impl SyncManager {
             pending_checkpoint_requests: Mutex::new(BTreeMap::new()),
             pending_dag_vertex_requests: Mutex::new(BTreeMap::new()),
             dag_vertex_buffer: Mutex::new(VecDeque::new()),
-            max_buffer_size: 1000, // Limit buffer to 1000 checkpoints for 200-node networks
-            max_dag_vertex_buffer_size: 2048,
+            max_buffer_size: 64,
+            max_buffer_bytes: 32 * 1024 * 1024,
+            buffered_checkpoint_bytes: Mutex::new(0),
+            max_dag_vertex_buffer_size: 512,
         }
     }
 
@@ -177,6 +183,10 @@ impl SyncManager {
             P2PMessage::NewDagVertex(vertex_data) => {
                 info!("[P2P] Received NewDagVertex");
                 self.handle_new_dag_vertex(vertex_data).await;
+            }
+            P2PMessage::CheckpointVote(vote_data) => {
+                info!("[P2P] Received CheckpointVote");
+                self.handle_checkpoint_vote(vote_data).await;
             }
             P2PMessage::DagVertexRebroadcast(msg) => {
                 if msg.sender_peer_id == self.local_peer_id {
@@ -277,10 +287,17 @@ impl SyncManager {
     }
 
     fn send_network_message(&self, msg: P2PMessage, context: &str) -> bool {
-        match self.network_tx.send(msg) {
+        match self.network_tx.try_send(msg) {
             Ok(_) => true,
-            Err(e) => {
-                error!("{}: {}", context, e);
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!(
+                    "{}: bounded outgoing P2P queue is full; dropping message",
+                    context
+                );
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                error!("{}: outgoing P2P queue is closed", context);
                 false
             }
         }
@@ -462,9 +479,26 @@ impl SyncManager {
         label: &str,
     ) -> Option<usize> {
         let sequence = checkpoint.checkpoint.sequence;
+        let current_height = self.engine.get_stats().height;
+        if sequence > current_height.saturating_add(MAX_CHECKPOINTS_PER_REQUEST) {
+            warn!(
+                "[SYNC] Dropping checkpoint #{} too far ahead of local height {}",
+                sequence, current_height
+            );
+            return None;
+        }
+        let encoded_size = bcs::to_bytes(&checkpoint)
+            .map(|bytes| bytes.len())
+            .unwrap_or(self.max_buffer_bytes);
         let mut buffer = self.checkpoint_buffer_guard();
+        let mut byte_count = self
+            .buffered_checkpoint_bytes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let candidate_count: usize = buffer.values().map(VecDeque::len).sum();
-        if candidate_count >= self.max_buffer_size {
+        if candidate_count >= self.max_buffer_size
+            || byte_count.saturating_add(encoded_size) > self.max_buffer_bytes
+        {
             warn!(
                 "[SYNC] Checkpoint buffer full (max: {}). Dropping checkpoint #{}",
                 self.max_buffer_size, sequence
@@ -487,6 +521,7 @@ impl SyncManager {
             checkpoint,
             source_peer_id: source_peer_id.map(str::to_owned),
         });
+        *byte_count = byte_count.saturating_add(encoded_size);
         let candidate_count = candidate_count + 1;
         info!(
             "[SYNC] Buffered {} #{}. Candidates for sequence: {}, total buffered: {}/{}",
@@ -509,6 +544,16 @@ impl SyncManager {
         let next_candidate = buffer
             .get_mut(&next_sequence)
             .and_then(|candidates| candidates.pop_front());
+        if let Some(candidate) = &next_candidate {
+            let removed = bcs::to_bytes(&candidate.checkpoint)
+                .map(|bytes| bytes.len())
+                .unwrap_or(0);
+            let mut byte_count = self
+                .buffered_checkpoint_bytes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *byte_count = byte_count.saturating_sub(removed);
+        }
         let should_remove = buffer
             .get(&next_sequence)
             .map(|candidates| candidates.is_empty())
@@ -686,11 +731,12 @@ impl SyncManager {
 
             let vertex_id = hex::encode(vertex.id);
             match self.engine.add_network_dag_vertex(vertex.clone()) {
-                Ok(()) => {
+                Ok(update) => {
                     info!(
                         "[DAG SYNC] Applied buffered DAG vertex {} (round {})",
                         vertex_id, vertex.round
                     );
+                    self.broadcast_consensus_update(update);
                 }
                 Err(e) => {
                     let error_text = e.to_string();
@@ -943,6 +989,47 @@ impl SyncManager {
         }
     }
 
+    fn broadcast_consensus_update(&self, update: ConsensusUpdate) {
+        for vote in update.checkpoint_votes {
+            match serde_json::to_string(&vote) {
+                Ok(data) => {
+                    self.send_network_message(
+                        P2PMessage::CheckpointVote(data),
+                        "[CONSENSUS] Failed to queue checkpoint vote",
+                    );
+                }
+                Err(error) => warn!("[CONSENSUS] Failed to serialize checkpoint vote: {}", error),
+            }
+        }
+        for checkpoint in update.finalized_checkpoints {
+            if let Some(checkpoint_data) = self.engine.get_checkpoint_sync(checkpoint.sequence) {
+                match serde_json::to_string(&checkpoint_data) {
+                    Ok(data) => {
+                        self.send_network_message(
+                            P2PMessage::NewCheckpoint(data),
+                            "[CONSENSUS] Failed to queue certified checkpoint",
+                        );
+                    }
+                    Err(error) => warn!(
+                        "[CONSENSUS] Failed to serialize certified checkpoint: {}",
+                        error
+                    ),
+                }
+            }
+        }
+    }
+
+    async fn handle_checkpoint_vote(&self, vote_data: String) {
+        let Some(vote) = Self::parse_message::<CheckpointVote>(&vote_data, "checkpoint vote")
+        else {
+            return;
+        };
+        match self.engine.submit_checkpoint_vote(vote) {
+            Ok(update) => self.broadcast_consensus_update(update),
+            Err(error) => warn!("[CONSENSUS] Rejected checkpoint vote: {}", error),
+        }
+    }
+
     async fn handle_new_dag_vertex(&self, vertex_data: String) {
         // DAG vertices are serialized as kanari_core::DagVertex,
         // not as the higher-level block metadata wrapper.
@@ -956,11 +1043,12 @@ impl SyncManager {
             );
 
             match self.engine.add_network_dag_vertex(vertex.clone()) {
-                Ok(()) => {
+                Ok(update) => {
                     info!(
                         "Successfully added DAG vertex {} to local consensus",
                         hex::encode(vertex.id)
                     );
+                    self.broadcast_consensus_update(update);
                     self.retry_buffered_dag_vertices();
                 }
                 Err(e) => {

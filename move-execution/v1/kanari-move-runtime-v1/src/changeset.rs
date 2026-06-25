@@ -77,6 +77,8 @@ pub struct ChangeSet {
     )>,
     /// Per-account token balance additions: (owner, token_type, BalanceRecord)
     pub token_balance_sets: Vec<(AccountAddress, String, BalanceRecord)>,
+    pub move_modules: Vec<(AccountAddress, String, Option<Vec<u8>>)>,
+    pub move_resources: Vec<(AccountAddress, String, Option<Vec<u8>>)>,
     /// Objects created during execution. Each entry is (object_id, CreatedObject)
     pub created_objects: Vec<(String, CreatedObject)>,
     /// Objects deleted during execution. Each entry is object_id
@@ -98,6 +100,8 @@ impl ChangeSet {
             treasuries: Vec::new(),
             nft_caps: Vec::new(),
             token_balance_sets: Vec::new(),
+            move_modules: Vec::new(),
+            move_resources: Vec::new(),
             created_objects: Vec::new(),
             deleted_objects: Vec::new(),
             added_dynamic_fields: Vec::new(),
@@ -167,6 +171,8 @@ impl ChangeSet {
             && self.events.is_empty()
             && self.treasuries.is_empty()
             && self.token_balance_sets.is_empty()
+            && self.move_modules.is_empty()
+            && self.move_resources.is_empty()
             && self.created_objects.is_empty()
             && self.deleted_objects.is_empty()
             && self.added_dynamic_fields.is_empty()
@@ -199,6 +205,8 @@ impl ChangeSet {
             self.add_token_balance_set(owner, token_type, amount.value());
         }
 
+        self.move_modules.append(&mut other.move_modules);
+        self.move_resources.append(&mut other.move_resources);
         self.created_objects.extend(other.created_objects);
         self.deleted_objects.extend(other.deleted_objects);
 
@@ -216,6 +224,22 @@ impl ChangeSet {
 
     pub fn add_event(&mut self, event: Event) {
         self.events.push(event);
+    }
+
+    pub fn write_move_module(&mut self, address: AccountAddress, name: String, bytes: Vec<u8>) {
+        self.move_modules.push((address, name, Some(bytes)));
+    }
+
+    pub fn delete_move_module(&mut self, address: AccountAddress, name: String) {
+        self.move_modules.push((address, name, None));
+    }
+
+    pub fn write_move_resource(&mut self, address: AccountAddress, tag: String, bytes: Vec<u8>) {
+        self.move_resources.push((address, tag, Some(bytes)));
+    }
+
+    pub fn delete_move_resource(&mut self, address: AccountAddress, tag: String) {
+        self.move_resources.push((address, tag, None));
     }
 
     pub fn add_deleted_object(&mut self, object_id: String) {

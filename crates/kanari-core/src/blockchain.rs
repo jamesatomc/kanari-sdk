@@ -147,14 +147,10 @@ impl Blockchain {
         self.track_checkpoint_transactions(&checkpoint);
         self.dag_checkpoints.push_back(checkpoint);
 
-        if self.dag_checkpoints.len() > MAX_RETAINED_BLOCKS
-            && let Some(evicted) = self.dag_checkpoints.pop_front()
-        {
-            for tx in evicted.transactions.iter() {
-                let hash = tx.transaction_hash().to_vec();
-                self.executed_tx_hashes.remove(&hash);
-                self.tx_location_index.remove(&hash);
-            }
+        if self.dag_checkpoints.len() > MAX_RETAINED_BLOCKS {
+            self.dag_checkpoints.pop_front();
+            // Block bodies may be pruned, but replay markers are never removed here.
+            // Durable tx_index entries remain authoritative across restarts.
         }
         Ok(())
     }

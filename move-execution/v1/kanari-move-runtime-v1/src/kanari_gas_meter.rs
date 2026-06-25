@@ -20,6 +20,10 @@ impl KanariGasMeter {
         }
     }
 
+    pub fn gas_used(&self) -> u64 {
+        self.gas_used
+    }
+
     /// Charge additional internal gas and fail once the limit is exceeded.
     #[inline]
     pub fn charge(&mut self, amount: u64) -> PartialVMResult<()> {
@@ -235,18 +239,27 @@ impl GasMeter for KanariGasMeter {
 
     fn charge_native_function(
         &mut self,
-        _amount: InternalGas,
-        _ret_vals: Option<impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>>,
+        amount: InternalGas,
+        ret_vals: Option<impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>>,
     ) -> PartialVMResult<()> {
-        self.charge(NATIVE_FUNCTION_BASE_COST)
+        let return_cost = ret_vals.map(|values| values.len() as u64).unwrap_or(0);
+        self.charge(
+            NATIVE_FUNCTION_BASE_COST
+                .saturating_add(u64::from(amount))
+                .saturating_add(return_cost),
+        )
     }
 
     fn charge_native_function_before_execution(
         &mut self,
-        _ty_args: impl ExactSizeIterator<Item = impl move_vm_types::views::TypeView>,
-        _args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
+        ty_args: impl ExactSizeIterator<Item = impl move_vm_types::views::TypeView>,
+        args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge(NATIVE_FUNCTION_PRE_EXEC_COST)
+        self.charge(
+            NATIVE_FUNCTION_PRE_EXEC_COST
+                .saturating_add(ty_args.len() as u64)
+                .saturating_add(args.len() as u64),
+        )
     }
 
     fn charge_drop_frame(

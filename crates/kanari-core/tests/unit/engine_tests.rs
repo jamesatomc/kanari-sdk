@@ -619,8 +619,12 @@ fn strict_serial_execution_panic_returns_failed_receipt() {
     let state = Arc::new(RwLock::new(engine.state_read().clone()));
 
     FORCE_TX_EXECUTION_PANIC.store(true, Ordering::SeqCst);
-    let result =
-        engine.execute_tx_waves_strict_serial_with_receipts(vec![signed_tx], &state, Some(123), false);
+    let result = engine.execute_tx_waves_strict_serial_with_receipts(
+        vec![signed_tx],
+        &state,
+        Some(123),
+        false,
+    );
     FORCE_TX_EXECUTION_PANIC.store(false, Ordering::SeqCst);
 
     let execution = result.expect("panic must be isolated into a failed receipt");

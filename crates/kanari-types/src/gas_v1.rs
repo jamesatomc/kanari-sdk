@@ -3,6 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Version of the deterministic, consensus-critical gas schedule.
+pub const GAS_SCHEDULE_VERSION: u64 = 1;
+
 /// Gas configuration and pricing for the Kanari blockchain
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasConfig {
@@ -35,24 +38,43 @@ impl GasConfig {
     }
 
     pub fn validate_price(&self, gas_price: u64) -> Result<(), GasError> {
-        if gas_price < self.min_gas_price {
-            return Err(GasError::PriceTooLow {
+        if gas_price != 0 {
+            return Err(GasError::PriceMismatch {
                 provided: gas_price,
-                minimum: self.min_gas_price,
+                required: 0,
             });
         }
         Ok(())
+    }
+
+    /// Stable digest committed into every checkpoint.
+    pub fn consensus_hash(&self) -> [u8; 32] {
+        let bytes = bcs::to_bytes(&(
+            b"kanari:gas-schedule:v1".as_slice(),
+            GAS_SCHEDULE_VERSION,
+            self.base_price,
+            self.max_gas_per_tx,
+            self.max_gas_per_block,
+            self.min_gas_price,
+            self.storage_price_per_byte,
+            self.storage_rebate_rate,
+        ))
+        .expect("gas schedule serialization is infallible");
+        let digest = kanari_crypto::hash_data_blake3(&bytes);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        out
     }
 }
 
 impl Default for GasConfig {
     fn default() -> Self {
         Self {
-            base_price: 1,                // 1 Mist per gas unit (extremely low)
+            base_price: 0,                // execution is metered but protocol fees are zero
             max_gas_per_tx: 100_000,      // 100K gas per transaction
             max_gas_per_block: 1_000_000, // 1M gas per block
-            min_gas_price: 1,             // 1 Mist minimum
-            storage_price_per_byte: 1,    // 1 Mist per byte (extremely low)
+            min_gas_price: 0,             // every transaction must declare zero price
+            storage_price_per_byte: 0,    // storage is bounded by gas/byte limits, not token fees
             storage_rebate_rate: 99,      // 99% rebate (Sui-like)
         }
     }
@@ -231,6 +253,7 @@ pub enum GasError {
     OutOfGas { required: u64, limit: u64 },
     InsufficientBalance { required: u64, available: u64 },
     PriceTooLow { provided: u64, minimum: u64 },
+    PriceMismatch { provided: u64, required: u64 },
     Overflow,
 }
 
@@ -259,6 +282,13 @@ impl std::fmt::Display for GasError {
                     f,
                     "Gas price too low: provided {} but minimum is {}",
                     provided, minimum
+                )
+            }
+            GasError::PriceMismatch { provided, required } => {
+                write!(
+                    f,
+                    "Invalid gas price: provided {} but protocol requires {}",
+                    provided, required
                 )
             }
             GasError::Overflow => write!(f, "Gas calculation overflow"),
@@ -316,14 +346,14 @@ mod tests {
     }
 
     #[test]
-    fn gas_config_rejects_price_below_minimum() {
+    fn gas_config_requires_zero_protocol_price() {
         let config = GasConfig::default();
 
+        assert!(config.validate_price(0).is_ok());
         assert!(matches!(
-            config.validate_price(0),
-            Err(GasError::PriceTooLow { .. })
+            config.validate_price(1),
+            Err(GasError::PriceMismatch { .. })
         ));
-        assert!(config.validate_price(config.min_gas_price).is_ok());
     }
 
     #[test]

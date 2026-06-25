@@ -162,11 +162,11 @@ fn genesis_root_info(engine: &BlockchainEngine) -> (String, usize) {
 }
 
 fn queue_network_message(
-    network_tx: &tokio::sync::mpsc::UnboundedSender<P2PMessage>,
+    network_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
     msg: P2PMessage,
     failure_context: &str,
 ) -> bool {
-    match network_tx.send(msg) {
+    match network_tx.try_send(msg) {
         Ok(_) => true,
         Err(e) => {
             tracing::warn!("{}: {}", failure_context, e);
@@ -176,7 +176,7 @@ fn queue_network_message(
 }
 
 fn serialize_and_queue_message<T: Serialize>(
-    network_tx: &tokio::sync::mpsc::UnboundedSender<P2PMessage>,
+    network_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
     value: &T,
     wrap: impl FnOnce(String) -> P2PMessage,
     serialize_context: &str,
@@ -256,8 +256,10 @@ pub async fn run_node(
         "System addresses"
     );
 
-    let (p2p_msg_tx, mut p2p_msg_rx) = tokio::sync::mpsc::unbounded_channel::<P2PMessage>();
-    let (network_tx, network_rx) = tokio::sync::mpsc::unbounded_channel::<P2PMessage>();
+    const P2P_CHANNEL_CAPACITY: usize = 1024;
+    let (p2p_msg_tx, mut p2p_msg_rx) =
+        tokio::sync::mpsc::channel::<P2PMessage>(P2P_CHANNEL_CAPACITY);
+    let (network_tx, network_rx) = tokio::sync::mpsc::channel::<P2PMessage>(P2P_CHANNEL_CAPACITY);
 
     let keypair = Keypair::generate_ed25519();
     let peer_id = keypair.public().to_peer_id().to_string();
@@ -385,7 +387,7 @@ pub async fn run_node(
             move |signed_tx| {
                 let payload = serde_json::to_string(&signed_tx)?;
                 network_tx_for_rpc
-                    .send(P2PMessage::NewTransaction(payload))
+                    .try_send(P2PMessage::NewTransaction(payload))
                     .map_err(|e| anyhow::anyhow!("failed to queue transaction broadcast: {}", e))?;
                 Ok(())
             },
@@ -410,6 +412,7 @@ pub async fn run_node(
     let mut last_stats_log = Instant::now() - Duration::from_secs(2);
     let mut last_pending_count = ready_stats.pending_transactions;
     let mut pending_gossip_ready_at: Option<Instant> = None;
+    let mut last_consensus_step = Instant::now() - Duration::from_secs(1);
 
     loop {
         let stats = engine.get_stats();
@@ -452,9 +455,13 @@ pub async fn run_node(
             idle_delay = Duration::from_millis(10);
         }
 
-        let should_produce_pending = stats.pending_transactions > 0 && pending_gossip_ready;
+        let consensus_due = last_consensus_step.elapsed() >= Duration::from_millis(250)
+            && engine.dag_needs_progress().unwrap_or(false);
+        let should_produce =
+            (stats.pending_transactions > 0 && pending_gossip_ready) || consensus_due;
 
-        if should_produce_pending {
+        if should_produce {
+            last_consensus_step = Instant::now();
             match engine.produce_checkpoint() {
                 Ok(block_info) => {
                     did_work = true;
@@ -485,6 +492,16 @@ pub async fn run_node(
                         }
                     } else {
                         tracing::warn!("No vertex in block_info to broadcast");
+                    }
+
+                    for vote in block_info.checkpoint_votes {
+                        serialize_and_queue_message(
+                            &network_tx,
+                            &vote,
+                            P2PMessage::CheckpointVote,
+                            "Failed to serialize checkpoint vote",
+                            "Failed to queue checkpoint vote",
+                        );
                     }
 
                     if let Some(ref node_idx) = node_indexer {

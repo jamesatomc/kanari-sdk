@@ -6,7 +6,52 @@ use ahash::AHashSet;
 
 type VerifiedMempoolTransaction = (SignedTransaction, Vec<u8>, String, u64);
 
+const MAX_TRANSACTION_BYTES: usize = 64 * 1024;
+const MAX_TRANSACTION_ARGS: usize = 128;
+const MAX_TRANSACTION_ARG_BYTES: usize = 64 * 1024;
+const MAX_TRANSACTION_TYPE_ARGS: usize = 32;
+
 impl BlockchainEngine {
+    fn persisted_transaction_exists(&self, tx_hash: &[u8]) -> bool {
+        let Some(store) = &self.persistent_store else {
+            return false;
+        };
+        let mut key = b"tx_index/".to_vec();
+        key.extend_from_slice(hex::encode(tx_hash).as_bytes());
+        store.contains_key(&key).unwrap_or(false)
+    }
+
+    fn validate_transaction_shape(tx: &Transaction) -> Result<()> {
+        let encoded = bcs::to_bytes(tx)?;
+        anyhow::ensure!(
+            encoded.len() <= MAX_TRANSACTION_BYTES,
+            "transaction exceeds byte limit"
+        );
+        if let Transaction::ExecuteFunction {
+            type_args, args, ..
+        } = tx
+        {
+            anyhow::ensure!(
+                type_args.len() <= MAX_TRANSACTION_TYPE_ARGS,
+                "too many type arguments"
+            );
+            anyhow::ensure!(
+                args.len() <= MAX_TRANSACTION_ARGS,
+                "too many transaction arguments"
+            );
+            anyhow::ensure!(
+                args.iter()
+                    .all(|arg| arg.len() <= MAX_TRANSACTION_ARG_BYTES),
+                "transaction argument exceeds byte limit"
+            );
+        }
+        anyhow::ensure!(
+            !tx.is_legacy_native_balance_call(),
+            "legacy account-ledger KANARI transfer/burn is disabled; use a Coin<KANARI> object call"
+        );
+        Ok(())
+    }
+
     pub fn submit_transactions_batch(
         &self,
         signed_txs: Vec<SignedTransaction>,
@@ -44,6 +89,7 @@ impl BlockchainEngine {
             .map(|signed_tx| -> Result<VerifiedMempoolTransaction> {
                 let verified = signed_tx.into_verified()?;
                 Self::validate_transaction_gas(verified.transaction())?;
+                Self::validate_transaction_shape(verified.transaction())?;
                 let tx_hash = verified.hash().to_vec();
                 let sender = verified.transaction().sender_address();
                 let normalized_sender = sender_cache
@@ -143,7 +189,9 @@ impl BlockchainEngine {
                     hex::encode(tx_hash)
                 );
             }
-            if chain.is_transaction_hash_executed(tx_hash) {
+            if chain.is_transaction_hash_executed(tx_hash)
+                || self.persisted_transaction_exists(tx_hash)
+            {
                 anyhow::bail!("Transaction {} already executed", hex::encode(tx_hash));
             }
         }

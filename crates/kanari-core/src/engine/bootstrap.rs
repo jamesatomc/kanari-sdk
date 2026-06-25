@@ -58,6 +58,17 @@ impl BlockchainEngine {
         persistent_store: Option<Arc<PersistentStore>>,
         enable_in_memory_smt: bool,
     ) -> Result<Self> {
+        if let Some(store) = &persistent_store {
+            if let Some(checkpoint) = store
+                .load::<Checkpoint>(b"pending_checkpoint_commit")
+                .context("Failed to inspect checkpoint commit journal")?
+            {
+                anyhow::bail!(
+                    "unclean checkpoint commit detected at sequence {}; refusing startup until recovery is performed",
+                    checkpoint.sequence
+                );
+            }
+        }
         tracing::info!("Loading blockchain checkpoints");
         let mut blockchain = Self::load_blockchain(&persistent_store);
         tracing::info!("Loading Mysticeti DAG state");

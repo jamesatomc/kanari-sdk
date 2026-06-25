@@ -6,12 +6,12 @@ pub mod consensus;
 pub mod engine;
 
 pub use consensus::{
-    Checkpoint, ConsensusRuntimeProtocol, DagProductionPolicy, DagVertex, PersistentDagState,
-    VertexId,
+    Checkpoint, CheckpointVote, ConsensusRuntimeProtocol, DagProductionPolicy, DagVertex,
+    PersistentDagState, VertexId,
 };
 pub use engine::{
     BlockData, BlockchainEngine, BlockchainStats, CheckpointProductionInfo, CheckpointSyncData,
-    FullBlockData, TransactionExecutionReceipt,
+    ConsensusUpdate, FullBlockData, TransactionExecutionReceipt,
 };
 
 pub use kanari_move_runtime_v1;

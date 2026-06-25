@@ -6,6 +6,7 @@ use kanari_crypto::hash_data_blake3;
 use kanari_types::transaction::SignedTransaction;
 use mysticeti_consensus::protocol::Protocol as MysticetiProtocol;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 pub type VertexId = [u8; 32];
@@ -33,6 +34,8 @@ pub struct DagVertex {
     pub transactions: TransactionBatch,
     pub timestamp: u64,
     pub signature: Vec<u8>,
+    #[serde(default)]
+    pub mysticeti_block: Vec<u8>,
     pub metadata: VertexMetadata,
     #[serde(skip)]
     pub cached_serialized_data: Option<Vec<u8>>,
@@ -62,6 +65,7 @@ impl DagVertex {
             tx_hashes,
             self.timestamp,
             &self.metadata.state_root,
+            &self.mysticeti_block,
         ))?;
         Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
     }
@@ -82,6 +86,7 @@ impl DagVertex {
             &self.metadata.state_root,
             self.metadata.is_checkpoint,
             self.metadata.checkpoint_seq,
+            &self.mysticeti_block,
         ))?;
         Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
     }
@@ -139,6 +144,7 @@ impl DagVertex {
             transactions,
             timestamp,
             signature: Vec::new(),
+            mysticeti_block: Vec::new(),
             metadata,
             cached_serialized_data: None,
             cached_hash: None,
@@ -155,6 +161,14 @@ impl DagVertex {
             return Ok(vertex_id_from_hash_bytes(hash));
         }
         self.compute_hash_uncached()
+    }
+
+    pub fn bind_mysticeti_block(&mut self, block: Vec<u8>, block_id: VertexId) -> Result<()> {
+        self.mysticeti_block = block;
+        self.cached_hash = Some(self.compute_hash_uncached()?.to_vec());
+        self.id = block_id;
+        self.cached_signing_digest = None;
+        Ok(())
     }
 
     /// Bind the externally assigned Mysticeti block id to the full Kanari vertex payload.
@@ -186,6 +200,91 @@ impl DagVertex {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointAuthoritySignature {
+    pub authority: AuthorityId,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointCertificate {
+    pub epoch: u64,
+    pub round: u64,
+    pub committee_digest: Vec<u8>,
+    pub signatures: Vec<CheckpointAuthoritySignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointVote {
+    pub checkpoint_id: VertexId,
+    pub sequence: u64,
+    pub epoch: u64,
+    pub round: u64,
+    pub authority: AuthorityId,
+    pub signature: Vec<u8>,
+}
+
+impl CheckpointVote {
+    pub fn new(
+        mut checkpoint: Checkpoint,
+        epoch: u64,
+        round: u64,
+        authority: AuthorityId,
+        signing_key: &ed25519_dalek::SigningKey,
+        public_keys: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<Self> {
+        use ed25519_dalek::Signer;
+        checkpoint.certificate = None;
+        let committee_digest = Checkpoint::committee_digest(public_keys)?;
+        let digest = checkpoint.certificate_signing_digest(epoch, round, &committee_digest)?;
+        let checkpoint_id = vertex_id_from_hash_bytes(&checkpoint.hash()?);
+        Ok(Self {
+            checkpoint_id,
+            sequence: checkpoint.sequence,
+            epoch,
+            round,
+            authority,
+            signature: signing_key.sign(&digest).to_bytes().to_vec(),
+        })
+    }
+
+    pub fn verify_for_checkpoint(
+        &self,
+        checkpoint: &Checkpoint,
+        public_keys: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            vertex_id_from_hash_bytes(&checkpoint.hash()?) == self.checkpoint_id,
+            "checkpoint vote digest does not match the local draft"
+        );
+        anyhow::ensure!(
+            checkpoint.sequence == self.sequence,
+            "checkpoint vote sequence mismatch"
+        );
+        let public_key = public_keys
+            .get(&self.authority)
+            .ok_or_else(|| anyhow::anyhow!("unknown checkpoint voter {}", self.authority))?;
+        let public_key: [u8; 32] = public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid checkpoint voter public key length"))?;
+        let signature: [u8; 64] = self
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid checkpoint vote signature length"))?;
+        let committee_digest = Checkpoint::committee_digest(public_keys)?;
+        let digest =
+            checkpoint.certificate_signing_digest(self.epoch, self.round, &committee_digest)?;
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)?;
+        let signature = ed25519_dalek::Signature::from_bytes(&signature);
+        use ed25519_dalek::Verifier;
+        key.verify(&digest, &signature)
+            .map_err(|_| anyhow::anyhow!("invalid checkpoint vote signature"))?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub sequence: u64,
@@ -194,6 +293,10 @@ pub struct Checkpoint {
     pub state_root: Vec<u8>,
     pub timestamp: u64,
     pub prev_checkpoint_hash: Vec<u8>,
+    #[serde(default)]
+    pub gas_schedule_hash: Vec<u8>,
+    #[serde(default)]
+    pub certificate: Option<CheckpointCertificate>,
 }
 
 impl Checkpoint {
@@ -215,18 +318,132 @@ impl Checkpoint {
             state_root,
             timestamp,
             prev_checkpoint_hash,
+            gas_schedule_hash: kanari_types::GasConfig::default().consensus_hash().to_vec(),
+            certificate: None,
         }
     }
 
     pub fn hash(&self) -> Result<Vec<u8>> {
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
         let serialized = bcs::to_bytes(&(
+            b"kanari:checkpoint:v2".as_slice(),
             self.sequence,
+            &self.vertices,
             &tx_hashes,
             &self.state_root,
+            self.timestamp,
             &self.prev_checkpoint_hash,
+            &self.gas_schedule_hash,
         ))?;
         Ok(hash_data_blake3(&serialized))
+    }
+
+    pub fn certificate_signing_digest(
+        &self,
+        epoch: u64,
+        round: u64,
+        committee_digest: &[u8],
+    ) -> Result<[u8; 32]> {
+        let checkpoint_hash = self.hash()?;
+        let bytes = bcs::to_bytes(&(
+            b"kanari:checkpoint-certificate:v2".as_slice(),
+            checkpoint_hash,
+            epoch,
+            round,
+            committee_digest,
+        ))?;
+        Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
+    }
+
+    pub fn committee_digest(public_keys: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+        let bytes = bcs::to_bytes(&(b"kanari:committee:v1".as_slice(), public_keys))?;
+        Ok(hash_data_blake3(&bytes))
+    }
+
+    pub fn attach_single_authority_certificate(
+        &mut self,
+        authority: String,
+        key: &ed25519_dalek::SigningKey,
+        public_keys: &BTreeMap<String, Vec<u8>>,
+        epoch: u64,
+        round: u64,
+    ) -> Result<()> {
+        use ed25519_dalek::Signer;
+        let committee_digest = Self::committee_digest(public_keys)?;
+        let digest = self.certificate_signing_digest(epoch, round, &committee_digest)?;
+        self.certificate = Some(CheckpointCertificate {
+            epoch,
+            round,
+            committee_digest,
+            signatures: vec![CheckpointAuthoritySignature {
+                authority,
+                signature: key.sign(&digest).to_bytes().to_vec(),
+            }],
+        });
+        Ok(())
+    }
+
+    pub fn verify_certificate(
+        &self,
+        public_keys: &BTreeMap<String, Vec<u8>>,
+        authority_count: usize,
+    ) -> Result<()> {
+        if self.sequence == 0 {
+            return Ok(());
+        }
+        anyhow::ensure!(authority_count > 0, "checkpoint committee is empty");
+        anyhow::ensure!(
+            self.gas_schedule_hash.as_slice()
+                == kanari_types::GasConfig::default()
+                    .consensus_hash()
+                    .as_slice(),
+            "checkpoint gas schedule does not match the local protocol schedule"
+        );
+        let certificate = self
+            .certificate
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("checkpoint is missing a quorum certificate"))?;
+        let expected_committee_digest = Self::committee_digest(public_keys)?;
+        anyhow::ensure!(
+            certificate.committee_digest == expected_committee_digest,
+            "checkpoint committee digest mismatch"
+        );
+        let quorum = authority_count.saturating_mul(2) / 3 + 1;
+        let digest = self.certificate_signing_digest(
+            certificate.epoch,
+            certificate.round,
+            &certificate.committee_digest,
+        )?;
+        let mut seen = HashSet::new();
+        let mut valid = 0usize;
+        for authority_signature in &certificate.signatures {
+            if !seen.insert(authority_signature.authority.clone()) {
+                anyhow::bail!("duplicate checkpoint certificate signer");
+            }
+            let key_bytes = public_keys
+                .get(&authority_signature.authority)
+                .ok_or_else(|| anyhow::anyhow!("unknown checkpoint certificate signer"))?;
+            let key_bytes: [u8; 32] = key_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("invalid checkpoint public key length"))?;
+            let signature_bytes: [u8; 64] = authority_signature
+                .signature
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("invalid checkpoint signature length"))?;
+            let key = ed25519_dalek::VerifyingKey::from_bytes(&key_bytes)?;
+            let signature = ed25519_dalek::Signature::from_bytes(&signature_bytes);
+            use ed25519_dalek::Verifier;
+            key.verify(&digest, &signature)
+                .map_err(|_| anyhow::anyhow!("invalid checkpoint certificate signature"))?;
+            valid += 1;
+        }
+        anyhow::ensure!(
+            valid >= quorum,
+            "checkpoint certificate has {valid} signatures; quorum is {quorum}"
+        );
+        Ok(())
     }
 
     pub fn genesis() -> Self {
@@ -237,6 +454,8 @@ impl Checkpoint {
             state_root: smt::default_hashes()[0].to_vec(),
             timestamp: 0,
             prev_checkpoint_hash: vec![0u8; 32],
+            gas_schedule_hash: kanari_types::GasConfig::default().consensus_hash().to_vec(),
+            certificate: None,
         }
     }
 }

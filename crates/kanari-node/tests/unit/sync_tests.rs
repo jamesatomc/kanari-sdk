@@ -101,7 +101,7 @@ fn test_buffered_empty_checkpoint_is_not_applied_when_gap_is_filled() {
     let checkpoint_two = checkpoint_sync(source_engine.as_ref(), 2);
 
     let engine = new_test_engine();
-    let (network_tx, _network_rx) = mpsc::unbounded_channel();
+    let (network_tx, _network_rx) = mpsc::channel(32);
     let sync = SyncManager::new(engine.clone(), network_tx, "local-peer".to_string(), None);
 
     assert!(

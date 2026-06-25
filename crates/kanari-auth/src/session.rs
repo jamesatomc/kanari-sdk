@@ -218,8 +218,13 @@ impl SessionManager {
             && user_sessions.len() >= self.max_sessions_per_user
         {
             // Removing the oldest session drops it and zeroizes its private key.
-            if let Some(oldest_id) = user_sessions.first() {
-                self.sessions.remove(oldest_id);
+            if let Some(oldest_id) = user_sessions.first().cloned() {
+                if let Some(mut old_session) = self.sessions.remove(&oldest_id) {
+                    old_session.invalidate();
+                }
+                if let Some(ids) = self.email_sessions.get_mut(&email) {
+                    ids.retain(|id| id != &oldest_id);
+                }
             }
         }
 
@@ -252,16 +257,18 @@ impl SessionManager {
     /// # Returns
     /// Reference to the session if valid, error otherwise
     pub fn validate_session(&mut self, session_id: &str) -> Result<&Session, AuthError> {
-        let session = self
+        let expired = self
             .sessions
             .get(session_id)
-            .ok_or(AuthError::InvalidSession)?;
-
-        if session.is_expired() {
+            .ok_or(AuthError::InvalidSession)?
+            .is_expired();
+        if expired {
+            let _ = self.invalidate_session(session_id);
             return Err(AuthError::SessionExpired);
         }
-
-        Ok(session)
+        self.sessions
+            .get(session_id)
+            .ok_or(AuthError::InvalidSession)
     }
 
     /// Get mutable reference to a session and update activity

@@ -42,7 +42,7 @@ mod mempool;
 mod produce_dag_vertex;
 mod queries;
 mod runtime_guards;
-pub use produce_dag_vertex::{CheckpointProductionInfo, DagEngine};
+pub use produce_dag_vertex::{CheckpointProductionInfo, ConsensusUpdate, DagEngine};
 pub use runtime_guards::{RuntimeGuardConfig, RuntimeHealthReport};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -50,7 +50,7 @@ pub struct CheckpointSyncData {
     pub checkpoint: Checkpoint,
 }
 
-const MAX_MEMPOOL_SIZE: usize = 1_000_000;
+const MAX_MEMPOOL_SIZE: usize = 50_000;
 const MAX_PERSISTED_RECENT_TX_HASHES: usize = 100_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -138,6 +138,23 @@ pub struct BlockchainEngine {
 
 // Basic recursive parser for simple type-argument strings used by RPC/tests.
 fn parse_type_tag(s: &str) -> Option<TypeTag> {
+    if s.len() > 4096 {
+        return None;
+    }
+    let mut nesting = 0usize;
+    for byte in s.bytes() {
+        match byte {
+            b'<' => {
+                nesting = nesting.saturating_add(1);
+                if nesting > 16 {
+                    return None;
+                }
+            }
+            b'>' => nesting = nesting.saturating_sub(1),
+            _ => {}
+        }
+    }
+
     fn split_top_level_commas(s: &str) -> Vec<&str> {
         let mut parts = Vec::new();
         let mut depth: usize = 0;
@@ -259,14 +276,9 @@ impl BlockchainEngine {
     }
 
     fn checkpoint_without_transactions(checkpoint: &Checkpoint) -> Checkpoint {
-        Checkpoint::new(
-            checkpoint.sequence,
-            checkpoint.vertices.clone(),
-            Vec::new(),
-            checkpoint.state_root.clone(),
-            checkpoint.timestamp,
-            checkpoint.prev_checkpoint_hash.clone(),
-        )
+        let mut slim = checkpoint.clone();
+        slim.transactions = Vec::new().into();
+        slim
     }
 
     fn vertex_without_transactions(vertex: &DagVertex) -> DagVertex {
@@ -1369,8 +1381,15 @@ impl BlockchainEngine {
         let required_amount = Self::required_native_amount_for_transaction(tx);
 
         gas_meter.consume(gas_op.gas_units())?;
-        let gas_cost = gas_meter.total_cost();
-        let total_required = required_amount.saturating_add(gas_cost);
+        let base_gas_used = gas_meter.gas_used;
+        let reserved_gas_cost = tx
+            .gas_limit()
+            .checked_mul(tx.gas_price())
+            .ok_or_else(|| anyhow::anyhow!("Gas cost overflow"))?;
+        let gas_cost = base_gas_used
+            .checked_mul(tx.gas_price())
+            .ok_or_else(|| anyhow::anyhow!("Gas cost overflow"))?;
+        let total_required = required_amount.saturating_add(reserved_gas_cost);
 
         if validate_sequence || total_required > 0 {
             let state = match state_arc.read() {
@@ -1434,7 +1453,7 @@ impl BlockchainEngine {
                 match runtime.publish_module_with_context_and_persistence(
                     module_bytes.clone(),
                     KanariAddress::parse_to_account_address(sender)?,
-                    None,
+                    Some((tx.gas_limit().saturating_sub(base_gas_used), tx.gas_price())),
                     timestamp,
                     Some(tx.hash()),
                     persist_runtime_state,
@@ -1442,6 +1461,7 @@ impl BlockchainEngine {
                     Ok(move_cs) => changeset.merge(move_cs),
                     Err(e) => {
                         changeset.mark_failed(format!("Publish failed: {}", e));
+                        changeset.set_gas_used(tx.gas_limit().saturating_sub(base_gas_used));
                     }
                 }
             }
@@ -1516,7 +1536,7 @@ impl BlockchainEngine {
                     type_tags,
                     args.clone(),
                     Some(sender_addr),
-                    None,
+                    Some((tx.gas_limit().saturating_sub(base_gas_used), tx.gas_price())),
                     timestamp,
                     Some(tx.hash()),
                     persist_runtime_state,
@@ -1524,12 +1544,25 @@ impl BlockchainEngine {
                     Ok(move_cs) => changeset.merge(move_cs),
                     Err(e) => {
                         changeset.mark_failed(format!("Execution failed: {}", e));
+                        changeset.set_gas_used(tx.gas_limit().saturating_sub(base_gas_used));
                     }
                 }
             }
         }
 
-        Self::apply_gas_and_sequence(&mut changeset, sender_addr, gas_cost, gas_meter.gas_used)?;
+        let vm_gas_used = changeset.gas_used;
+        let actual_gas_used = base_gas_used
+            .saturating_add(vm_gas_used)
+            .min(tx.gas_limit());
+        let actual_gas_cost = actual_gas_used
+            .checked_mul(tx.gas_price())
+            .ok_or_else(|| anyhow::anyhow!("Gas cost overflow"))?;
+        Self::apply_gas_and_sequence(
+            &mut changeset,
+            sender_addr,
+            actual_gas_cost,
+            actual_gas_used,
+        )?;
         Ok(changeset)
     }
 
@@ -1564,14 +1597,11 @@ impl BlockchainEngine {
     }
 
     pub fn produce_checkpoint(&self) -> Result<CheckpointProductionInfo> {
-        let dag_engine = self.dag_engine_instance()?;
-        let has_pending_transactions = self.pending_transaction_len() > 0;
+        self.dag_engine_instance()?.produce_vertex()
+    }
 
-        if !has_pending_transactions {
-            anyhow::bail!("No new transactions to checkpoint");
-        }
-
-        dag_engine.produce_vertex()
+    pub fn dag_needs_progress(&self) -> Result<bool> {
+        Ok(self.dag_engine_instance()?.needs_progress())
     }
 
     pub fn dag_production_policy(&self) -> Result<DagProductionPolicy> {
@@ -1591,8 +1621,18 @@ impl BlockchainEngine {
         Ok(self.dag_engine_instance()?.latest_own_vertices(limit))
     }
 
-    pub fn add_network_dag_vertex(&self, vertex: DagVertex) -> Result<()> {
+    pub fn add_network_dag_vertex(
+        &self,
+        vertex: DagVertex,
+    ) -> Result<crate::engine::produce_dag_vertex::ConsensusUpdate> {
         self.dag_engine_instance()?.add_network_vertex(vertex)
+    }
+
+    pub fn submit_checkpoint_vote(
+        &self,
+        vote: crate::consensus::CheckpointVote,
+    ) -> Result<crate::engine::produce_dag_vertex::ConsensusUpdate> {
+        self.dag_engine_instance()?.submit_checkpoint_vote(vote)
     }
 
     fn clone_for_dag(&self) -> BlockchainEngine {

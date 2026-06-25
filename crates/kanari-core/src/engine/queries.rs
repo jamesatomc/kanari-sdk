@@ -274,6 +274,26 @@ impl BlockchainEngine {
             );
         }
 
+        checkpoint.verify_certificate(&self.consensus_public_keys, self.authorities.len())?;
+        let latest_timestamp = self
+            .blockchain
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .latest_checkpoint()
+            .timestamp;
+        anyhow::ensure!(
+            checkpoint.timestamp >= latest_timestamp,
+            "checkpoint timestamp moved backwards"
+        );
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        anyhow::ensure!(
+            checkpoint.timestamp <= now_ms.saturating_add(5 * 60 * 1000),
+            "checkpoint timestamp exceeds allowed future drift"
+        );
+
         info!(
             "[SYNC] Verifying {} transaction signatures from checkpoint #{}",
             checkpoint.transactions.len(),

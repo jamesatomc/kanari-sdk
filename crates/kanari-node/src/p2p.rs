@@ -28,7 +28,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
 const LARGE_MESSAGE_COMPRESSION_THRESHOLD: usize = 100_000;
-const MAX_DECOMPRESSED_PAYLOAD_SIZE: usize = 8 * 1024 * 1024;
+const MAX_DECOMPRESSED_PAYLOAD_SIZE: usize = 2 * 1024 * 1024;
 
 /// P2P message types
 #[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
@@ -36,6 +36,7 @@ pub enum P2PMessage {
     NewTransaction(String), // Serialized transaction
     NewCheckpoint(String),  // Serialized committed checkpoint sync payload
     NewDagVertex(String),   // Serialized DAG vertex for multi-node sync
+    CheckpointVote(String), // Serialized vote for a committed checkpoint draft
     DagVertexRebroadcast(DagVertexMsg),
     DagVertexRequest(DagVertexRequestMsg),
     DagVertexResponse(DagVertexResponseMsg),
@@ -181,7 +182,7 @@ impl P2PNetwork {
             .mesh_n_high(24) // Allow up to 24 peers in mesh
             .gossip_factor(0.25) // Gossip 25% of known messages to mesh peers
             .heartbeat_initial_delay(Duration::from_millis(100))
-            .max_transmit_size(1_000_000) // Increase max message size to 1MB for checkpoint payloads
+            .max_transmit_size(512_000) // Increase max message size to 1MB for checkpoint payloads
             .do_px() // Enable peer exchange for better discovery
             // Add flood publishing for critical messages (checkpoints, vertices)
             .flood_publish(true)
@@ -267,6 +268,7 @@ impl P2PNetwork {
     fn message_topic(&self, msg: &P2PMessage) -> &IdentTopic {
         match msg {
             P2PMessage::NewCheckpoint(_)
+            | P2PMessage::CheckpointVote(_)
             | P2PMessage::CheckpointResponse(_)
             | P2PMessage::CheckpointRequest(_, _)
             | P2PMessage::TargetedCheckpointRequest(_)
@@ -459,14 +461,14 @@ pub fn decompress_payload(compressed_data: &[u8]) -> Result<String> {
 
 pub struct P2PEventHandler {
     pub network: P2PNetwork,
-    pub message_tx: mpsc::UnboundedSender<P2PMessage>,
-    pub outgoing_rx: Option<mpsc::UnboundedReceiver<P2PMessage>>,
+    pub message_tx: mpsc::Sender<P2PMessage>,
+    pub outgoing_rx: Option<mpsc::Receiver<P2PMessage>>,
     pub peer_store: Option<std::sync::Arc<tokio::sync::Mutex<crate::peer_store::PeerStore>>>,
     message_forwarding_closed: bool,
 }
 
 impl P2PEventHandler {
-    pub fn new(network: P2PNetwork, message_tx: mpsc::UnboundedSender<P2PMessage>) -> Self {
+    pub fn new(network: P2PNetwork, message_tx: mpsc::Sender<P2PMessage>) -> Self {
         Self {
             network,
             message_tx,
@@ -476,7 +478,7 @@ impl P2PEventHandler {
         }
     }
 
-    pub fn with_outgoing(mut self, outgoing_rx: mpsc::UnboundedReceiver<P2PMessage>) -> Self {
+    pub fn with_outgoing(mut self, outgoing_rx: mpsc::Receiver<P2PMessage>) -> Self {
         self.outgoing_rx = Some(outgoing_rx);
         self
     }
@@ -524,13 +526,17 @@ impl P2PEventHandler {
             return false;
         }
 
-        match self.message_tx.send(msg) {
+        match self.message_tx.try_send(msg) {
             Ok(_) => true,
-            Err(e) => {
+            Err(mpsc::error::TrySendError::Full(_)) => {
                 warn!(
-                    "{}: {}; suppressing further incoming P2P forwards",
-                    context, e
+                    "{}: bounded incoming P2P queue is full; dropping message",
+                    context
                 );
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                warn!("{}: receiver channel is closed", context);
                 self.message_forwarding_closed = true;
                 false
             }

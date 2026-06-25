@@ -314,37 +314,27 @@ impl Transaction {
         keys
     }
 
+    /// Legacy account-ledger balance calls are intentionally disabled.
+    ///
+    /// Native KANARI balances are canonical `Coin<KANARI>` objects. Intercepting
+    /// `transfer_amount` or `burn_amount` in Rust would mutate account balances
+    /// without mutating the backing coin object and permits payment reversal.
     pub fn native_call(&self) -> Option<NativeCall> {
-        let Transaction::ExecuteFunction {
-            module,
-            function,
-            args,
-            ..
-        } = self
-        else {
-            return None;
-        };
+        None
+    }
 
-        if module != Self::KANARI_MODULE {
-            return None;
-        }
-
-        match function.as_str() {
-            Self::TRANSFER_AMOUNT_FUNCTION if args.len() >= 2 => {
-                let amount = bcs::from_bytes::<u64>(&args[0]).ok()?;
-                let recipient = bcs::from_bytes::<String>(&args[1]).ok()?;
-                Some(NativeCall::TransferAmount { recipient, amount })
-            }
-            Self::BURN_AMOUNT_FUNCTION if !args.is_empty() => {
-                let amount = bcs::from_bytes::<u64>(&args[0]).ok()?;
-                Some(NativeCall::BurnAmount { amount })
-            }
-            _ => None,
-        }
+    pub fn is_legacy_native_balance_call(&self) -> bool {
+        matches!(
+            self,
+            Transaction::ExecuteFunction { module, function, args, .. }
+                if module == Self::KANARI_MODULE
+                    && ((function == Self::TRANSFER_AMOUNT_FUNCTION && args.len() == 2)
+                        || (function == Self::BURN_AMOUNT_FUNCTION && args.len() == 1))
+        )
     }
 
     pub fn is_native_balance_call(&self) -> bool {
-        self.native_call().is_some()
+        false
     }
 
     pub fn tx_type_label(&self) -> &'static str {
@@ -385,6 +375,52 @@ impl Transaction {
             function: Self::TRANSFER_AMOUNT_FUNCTION.to_string(),
             type_args: vec![],
             args: vec![
+                bcs::to_bytes(&amount).unwrap_or_default(),
+                bcs::to_bytes(&to).unwrap_or_default(),
+            ],
+            gas_limit,
+            gas_price,
+            sequence_number,
+        }
+    }
+
+    /// Build a canonical Move-object transfer. The object id identifies the
+    /// sender-owned `Coin<KANARI>` that will be split by `kanari::transfer_amount`.
+    pub fn new_object_transfer(
+        from: String,
+        coin_object_id: AccountAddress,
+        to: AccountAddress,
+        amount: u64,
+        sequence_number: u64,
+    ) -> Self {
+        let gas = crate::gas::GasConfig::default();
+        Self::new_object_transfer_with_gas(
+            from,
+            coin_object_id,
+            to,
+            amount,
+            sequence_number,
+            gas.default_transaction_gas_limit(),
+            gas.default_transaction_gas_price(),
+        )
+    }
+
+    pub fn new_object_transfer_with_gas(
+        from: String,
+        coin_object_id: AccountAddress,
+        to: AccountAddress,
+        amount: u64,
+        sequence_number: u64,
+        gas_limit: u64,
+        gas_price: u64,
+    ) -> Self {
+        Self::ExecuteFunction {
+            sender: from,
+            module: Self::KANARI_MODULE.to_string(),
+            function: Self::TRANSFER_AMOUNT_FUNCTION.to_string(),
+            type_args: vec![],
+            args: vec![
+                bcs::to_bytes(&coin_object_id).unwrap_or_default(),
                 bcs::to_bytes(&amount).unwrap_or_default(),
                 bcs::to_bytes(&to).unwrap_or_default(),
             ],
@@ -453,22 +489,18 @@ mod tests {
             Transaction::PublishModule { .. } => panic!("transfer helper must build a call"),
         }
 
-        assert_eq!(
-            tx.native_call(),
-            Some(NativeCall::TransferAmount {
-                recipient: "0x2".to_string(),
-                amount: 42,
-            })
-        );
-        assert_eq!(tx.tx_type_label(), "transfer");
+        assert!(tx.native_call().is_none());
+        assert!(tx.is_legacy_native_balance_call());
+        assert_eq!(tx.tx_type_label(), "call");
     }
 
     #[test]
     fn burn_helper_builds_native_execute_function() {
         let tx = Transaction::new_burn("0x1".to_string(), 9, 3);
 
-        assert_eq!(tx.native_call(), Some(NativeCall::BurnAmount { amount: 9 }));
-        assert_eq!(tx.tx_type_label(), "burn");
+        assert!(tx.native_call().is_none());
+        assert!(tx.is_legacy_native_balance_call());
+        assert_eq!(tx.tx_type_label(), "call");
     }
 
     #[test]

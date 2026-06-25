@@ -304,6 +304,11 @@ impl MoveRuntime {
 
     /// Rebuild the VM instance so cached module state is refreshed.
     pub fn reload_vm_cache(&self) -> Result<()> {
+        let modules: HashSet<ModuleId> = self.state.get_all_module_ids()?.into_iter().collect();
+        *self
+            .published_modules
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = modules;
         let new_vm = MoveVM::new(self.all_natives.as_ref().clone())
             .map_err(|e| anyhow::anyhow!("Failed to reload MoveVM: {:?}", e))?;
 
@@ -442,19 +447,20 @@ impl MoveRuntime {
         let module_id = compiled.self_id();
         self.verify_module_publish_safety(sender, &module_id, &compiled, &module_bytes)?;
 
-        let (move_changeset, events) = {
-            // Separate lock into a variable first to prevent it from being dropped immediately
+        let (move_changeset, events, vm_gas_used) = {
             let vm_guard = self.read_vm();
             let mut session = self.create_session_with_storage_ext(&vm_guard);
-
-            let provided_gas_limit = gas_info.map(|(limit, _)| limit).unwrap_or(1_000_000);
+            let provided_gas_limit = gas_info.map(|(limit, _)| limit).unwrap_or(100_000);
             let mut metered_gas = crate::kanari_gas_meter::KanariGasMeter::new(provided_gas_limit);
-
+            metered_gas
+                .charge(module_bytes.len() as u64)
+                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
             session
                 .publish_module(module_bytes.clone(), sender, &mut metered_gas)
                 .map_err(|e| anyhow::anyhow!("{:?}", e))?;
-
-            session.finish().0.map_err(|e| anyhow::anyhow!("{:?}", e))?
+            let used = metered_gas.gas_used();
+            let (changes, events) = session.finish().0.map_err(|e| anyhow::anyhow!("{:?}", e))?;
+            (changes, events, used)
         };
 
         if persist_runtime_state {
@@ -469,22 +475,7 @@ impl MoveRuntime {
         self.parse_move_changeset(&move_changeset, &mut cs);
         self.parse_move_events(&events, &mut cs);
 
-        if let Some((gas_limit, gas_price)) = gas_info {
-            let gas_op = GasOperation::PublishModule {
-                module_size: module_bytes.len(),
-            };
-            let (written, deleted) = self.calculate_storage_impact(&move_changeset, &cs);
-            self.apply_gas_info(
-                &mut cs,
-                Some(sender),
-                gas_limit,
-                gas_price,
-                gas_op,
-                written,
-                deleted,
-            )?;
-        }
-
+        cs.set_gas_used(vm_gas_used);
         Ok(cs)
     }
 
@@ -1163,25 +1154,37 @@ impl MoveRuntime {
 
         // Extensions are already added by create_session_with_storage_ext() - no need to add again
 
-        let execution_result = if bypass_entry_check {
+        let preprocessing_gas = final_args
+            .iter()
+            .fold(ty_args_loaded.len() as u64, |total, arg| {
+                total.saturating_add(arg.len() as u64)
+            });
+        let (execution_result, vm_gas_used) = if bypass_entry_check {
             let mut unmetered_gas = UnmeteredGasMeter;
-            session.execute_function_bypass_visibility(
-                module_id,
-                ident,
-                ty_args_loaded,
-                final_args,
-                &mut unmetered_gas,
+            (
+                session.execute_function_bypass_visibility(
+                    module_id,
+                    ident,
+                    ty_args_loaded,
+                    final_args,
+                    &mut unmetered_gas,
+                ),
+                0,
             )
         } else {
-            let provided_gas_limit = gas_info.map(|(limit, _)| limit).unwrap_or(1_000_000);
+            let provided_gas_limit = gas_info.map(|(limit, _)| limit).unwrap_or(100_000);
             let mut metered_gas = crate::kanari_gas_meter::KanariGasMeter::new(provided_gas_limit);
-            session.execute_entry_function(
+            metered_gas
+                .charge(preprocessing_gas)
+                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+            let result = session.execute_entry_function(
                 module_id,
                 ident,
                 ty_args_loaded,
                 final_args,
                 &mut metered_gas,
-            )
+            );
+            (result, metered_gas.gas_used())
         };
 
         let mut cs = ChangeSet::new();
@@ -1322,14 +1325,7 @@ impl MoveRuntime {
                         .push((object_id, name_bytes, value_bytes));
                 }
 
-                if let Some((gas_limit, gas_price)) = gas_info {
-                    let complexity = 1 + (total_merge_reads as u32 / 10);
-                    let gas_op = GasOperation::ExecuteFunction { complexity };
-                    let (written, deleted) = self.calculate_storage_impact(&move_changeset, &cs);
-                    self.apply_gas_info(
-                        &mut cs, sender, gas_limit, gas_price, gas_op, written, deleted,
-                    )?;
-                }
+                cs.set_gas_used(vm_gas_used.saturating_add(total_merge_reads));
 
                 if persist_runtime_state {
                     self.persist_created_objects(&cs);
@@ -1339,23 +1335,7 @@ impl MoveRuntime {
                 Ok(cs)
             }
             Err(e) => {
-                if let Some((gas_limit, gas_price)) = gas_info {
-                    let penalty_complexity = 5 + (total_merge_reads as u32);
-                    let _ = self.apply_gas_info(
-                        &mut cs,
-                        sender,
-                        gas_limit,
-                        gas_price,
-                        GasOperation::ExecuteFunction {
-                            complexity: penalty_complexity,
-                        },
-                        0,
-                        0,
-                    );
-                    if persist_runtime_state {
-                        self.persist_created_objects(&cs);
-                    }
-                }
+                cs.set_gas_used(vm_gas_used.max(1));
                 Err(anyhow::anyhow!("exec error: {:?}", e))
             }
         }

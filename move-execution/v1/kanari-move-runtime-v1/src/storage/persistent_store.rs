@@ -154,6 +154,11 @@ impl PersistentStore {
         }
     }
 
+    /// Check key existence without deserializing or scanning the database.
+    pub fn contains_key(&self, key: &[u8]) -> std::result::Result<bool, PersistentStoreError> {
+        Ok(self.read_raw(key)?.is_some())
+    }
+
     /// Flush all pending writes to the backing store synchronously.
     pub fn flush(&self) -> std::result::Result<(), PersistentStoreError> {
         // RocksDB writes are synchronous in this implementation

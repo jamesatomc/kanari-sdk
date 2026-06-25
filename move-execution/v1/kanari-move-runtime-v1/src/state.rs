@@ -677,6 +677,27 @@ impl StateManager {
             .ensure_smt_initialized()
             .context("Failed to initialize state SMT")?;
 
+        if let Some(tree) = &state.smt {
+            let expected = smt::compute_sparse_root(
+                &state
+                    .canonical_root_entries
+                    .clone()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            );
+            if tree
+                .root_hash()
+                .map(|root| root.to_vec())
+                .unwrap_or_default()
+                != expected
+            {
+                log::warn!(
+                    "Persisted SMT cache differs from canonical state; using materialized roots"
+                );
+                state.smt_dirty = true;
+            }
+        }
+
         if persisted_total_supply == 0 && recovered_total_supply > 0 {
             state
                 .save_internal(b"total_supply", &recovered_total_supply)
@@ -936,38 +957,47 @@ impl StateManager {
         Ok(())
     }
 
-    /// Commit pending overlay changes to the persistent store and update SMT
-    pub fn commit(&mut self) -> Result<()> {
-        let mut updates = Vec::new();
-        let mut deletes = Vec::new();
-
-        for (key, val_opt) in &self.overlay {
-            if let Some(val) = val_opt {
-                updates.push((key.clone(), val.clone()));
-            } else {
-                deletes.push(key.clone());
+    /// Commit canonical state and checkpoint metadata in one backend batch.
+    pub fn commit_with_extra_raw_changes(
+        &mut self,
+        extra_updates: &[(Vec<u8>, Vec<u8>)],
+        extra_deletes: &[Vec<u8>],
+    ) -> Result<()> {
+        let mut updates = Vec::with_capacity(self.overlay.len() + extra_updates.len());
+        let mut deletes = Vec::with_capacity(self.overlay.len() + extra_deletes.len());
+        for (key, value) in &self.overlay {
+            match value {
+                Some(value) => updates.push((key.clone(), value.clone())),
+                None => deletes.push(key.clone()),
             }
         }
+        updates.extend_from_slice(extra_updates);
+        deletes.extend_from_slice(extra_deletes);
 
+        let (smt_updates, smt_deletes) = self.smt_changes_from_pending_delta();
         self.store.apply_raw_changes(&updates, &deletes)?;
 
-        // Update SMT if available. For large in-memory batches, the incremental
-        // path is slower than a full recompute, so mark it dirty and let
-        // `compute_state_root` fall back to materialization.
-        if let Some(smt) = &self.smt {
-            let (smt_updates, smt_deletes) = self.smt_changes_from_pending_delta();
-            let is_in_memory = self.store.get_db().is_none();
-            let change_count = smt_updates.len().saturating_add(smt_deletes.len());
-            if is_in_memory && change_count > IN_MEMORY_SMT_INCREMENTAL_THRESHOLD {
-                self.smt_dirty = true;
-            } else {
-                if !smt_updates.is_empty() {
-                    smt.insert(&smt_updates)?;
+        if !self.smt_dirty {
+            if let Some(smt) = &self.smt {
+                let is_in_memory = self.store.get_db().is_none();
+                let change_count = smt_updates.len().saturating_add(smt_deletes.len());
+                if is_in_memory && change_count > IN_MEMORY_SMT_INCREMENTAL_THRESHOLD {
+                    self.smt_dirty = true;
+                } else if let Err(error) = (|| -> Result<()> {
+                    if !smt_updates.is_empty() {
+                        smt.insert(&smt_updates)?;
+                    }
+                    if !smt_deletes.is_empty() {
+                        smt.delete(&smt_deletes)?;
+                    }
+                    Ok(())
+                })() {
+                    log::error!(
+                        "SMT cache update failed after canonical batch commit: {}",
+                        error
+                    );
+                    self.smt_dirty = true;
                 }
-                if !smt_deletes.is_empty() {
-                    smt.delete(&smt_deletes)?;
-                }
-                self.smt_dirty = false;
             }
         }
 
@@ -975,6 +1005,10 @@ impl StateManager {
         self.pending_smt_changes.clear();
         self.overlay.clear();
         Ok(())
+    }
+
+    pub fn commit(&mut self) -> Result<()> {
+        self.commit_with_extra_raw_changes(&[], &[])
     }
 
     // Helper to write to overlay (pub for genesis module)
@@ -1349,7 +1383,8 @@ impl StateManager {
     }
 
     fn startup_supply_tracking_token_types(&self) -> BTreeSet<String> {
-        let mut token_types: BTreeSet<String> = self.global_token_supplies.keys().cloned().collect();
+        let mut token_types: BTreeSet<String> =
+            self.global_token_supplies.keys().cloned().collect();
         token_types.insert(KANARI_TOKEN_TYPE.to_string());
         token_types
     }
@@ -1603,6 +1638,25 @@ impl StateManager {
 
         self.add_many_to_index_list(ACCOUNT_INDEX_KEY, account_index_additions)?;
 
+        for (address, name, bytes) in &changeset.move_modules {
+            let key = format!("module:{}:{}", address.to_hex_literal(), name);
+            if let Some(bytes) = bytes {
+                self.save_internal(key.as_bytes(), bytes)?;
+                self.add_to_index_list(b"module_index", key)?;
+            } else {
+                self.delete_internal(key.as_bytes());
+                self.remove_from_index_list(b"module_index", &key)?;
+            }
+        }
+        for (address, tag, bytes) in &changeset.move_resources {
+            let key = format!("resource:{}:{}", address.to_hex_literal(), tag);
+            if let Some(bytes) = bytes {
+                self.save_internal(key.as_bytes(), bytes)?;
+            } else {
+                self.delete_internal(key.as_bytes());
+            }
+        }
+
         // Update total supply if there was mint/burn (supply_delta != 0)
         if supply_delta != 0 {
             if supply_delta > 0 {
@@ -1775,7 +1829,10 @@ impl StateManager {
                 .get(&owner)
                 .map(|change| change.balance_delta)
                 .unwrap_or(0);
-            let touched_token_types = recompute_token_touches.get(&owner).cloned().unwrap_or_default();
+            let touched_token_types = recompute_token_touches
+                .get(&owner)
+                .cloned()
+                .unwrap_or_default();
             if self.recompute_token_balances_for_owner(
                 owner,
                 native_balance_delta,
@@ -1814,8 +1871,11 @@ impl StateManager {
             self.delete_internal(&df_key);
         }
 
-        if validate_supply && let Err(e) = self.validate_supply_invariants() {
-            Self::report_supply_invariant_violation("after apply_changeset", &e);
+        if validate_supply {
+            if let Err(error) = self.validate_supply_invariants() {
+                Self::report_supply_invariant_violation("after apply_changeset", &error);
+                return Err(error).context("Supply invariant failed after applying changeset");
+            }
         }
 
         Ok(())
@@ -1858,7 +1918,7 @@ impl StateManager {
         if let Some(smt) = &self.smt {
             let (updates, deletes) = self.smt_changes_from_pending_delta();
             let use_incremental_smt = if self.store.get_db().is_some() {
-                true
+                !self.smt_dirty
             } else {
                 !self.smt_dirty
                     && updates.len().saturating_add(deletes.len())

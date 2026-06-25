@@ -13,7 +13,7 @@ pub fn new_test_engine() -> Arc<BlockchainEngine> {
 
 pub fn new_sync_manager() -> SyncManager {
     let engine = new_test_engine();
-    let (network_tx, _network_rx) = mpsc::unbounded_channel();
+    let (network_tx, _network_rx) = mpsc::channel(32);
     SyncManager::new(engine, network_tx, "local-peer".to_string(), None)
 }
 

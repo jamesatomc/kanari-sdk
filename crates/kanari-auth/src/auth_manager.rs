@@ -13,7 +13,7 @@ use kanari_crypto::{keys::CurveType, wallet};
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use move_core_types::account_address::AccountAddress;
 
-use crate::private_key_crypto::{decrypt_private_key, encrypt_private_key};
+use crate::private_key_crypto::{decrypt_private_key, encrypt_private_key, payload_needs_upgrade};
 use crate::{
     AuthError, AuthResult, Session, UserStore, email_validator, session::SessionManager,
     user_store::UserRecord,
@@ -187,12 +187,19 @@ impl AuthManager {
             user.record_successful_login();
             self.user_store.update_user(&user)?;
 
-            let decrypted_private_key = decrypt_private_key(
-                user.encrypted_private_key.as_deref().ok_or_else(|| {
+            let encrypted_payload = user
+                .encrypted_private_key
+                .as_deref()
+                .ok_or_else(|| {
                     AuthError::CryptoError("Encrypted private key not found".to_string())
-                })?,
-                password,
-            )?;
+                })?
+                .to_string();
+            let decrypted_private_key = decrypt_private_key(&encrypted_payload, password)?;
+            if payload_needs_upgrade(&encrypted_payload) {
+                user.encrypted_private_key =
+                    Some(encrypt_private_key(&decrypted_private_key, password)?);
+                self.user_store.update_user(&user)?;
+            }
             let curve_type = CurveType::from_str(&user.curve_type)
                 .map_err(|e| AuthError::CryptoError(format!("Invalid stored curve type: {e}")))?;
 
@@ -351,7 +358,7 @@ impl AuthManager {
         } = &mut transaction
         {
             *tx_gas_limit = gas_limit.unwrap_or(100_000);
-            *tx_gas_price = gas_price.unwrap_or(1_000);
+            *tx_gas_price = gas_price.unwrap_or(0);
         }
 
         self.sign_transaction(session, transaction)

@@ -28,14 +28,25 @@ impl super::MoveRuntime {
 
         for (addr, account_changes) in move_cs.accounts() {
             for (module_name, op) in account_changes.modules() {
-                if matches!(op, MoveOp::New(_) | MoveOp::Modify(_)) {
-                    kanari_cs.publish_module(*addr, module_name.to_string());
+                match op {
+                    MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
+                        kanari_cs.publish_module(*addr, module_name.to_string());
+                        kanari_cs.write_move_module(*addr, module_name.to_string(), bytes.to_vec());
+                    }
+                    MoveOp::Delete => {
+                        kanari_cs.delete_move_module(*addr, module_name.to_string());
+                    }
                 }
             }
 
             for (struct_tag, op) in account_changes.resources() {
                 match op {
                     MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
+                        kanari_cs.write_move_resource(
+                            *addr,
+                            struct_tag.to_string(),
+                            bytes.to_vec(),
+                        );
                         // Extract UID from first 32 bytes if available (for Sui-style objects)
                         let uid_opt = if bytes.len() >= 32 {
                             let mut arr = [0u8; 32];
@@ -71,19 +82,30 @@ impl super::MoveRuntime {
                             continue;
                         };
 
-                        kanari_cs.add_created_object(
-                            *addr,
-                            format!("{}", struct_tag),
-                            bytes.to_vec(),
-                            0,
-                            uid_opt,
-                            id_opt,
-                            Some(final_object_id),
-                        );
+                        // Ordinary global resources are not objects. Only mirror a
+                        // resource write when it is a writeback of an already-known object.
+                        // Newly created objects arrive through the SavedObjects native extension.
+                        if self.object_storage.get_object(&final_object_id).is_some() {
+                            kanari_cs.add_created_object(
+                                *addr,
+                                format!("{}", struct_tag),
+                                bytes.to_vec(),
+                                0,
+                                uid_opt,
+                                id_opt,
+                                Some(final_object_id),
+                            );
+                        } else {
+                            debug!(
+                                "[PARSER] skipping non-object global resource: addr={} type={}",
+                                addr, struct_tag
+                            );
+                        }
                     }
                     MoveOp::Delete => {
+                        kanari_cs.delete_move_resource(*addr, struct_tag.to_string());
                         debug!(
-                            "[PARSER] skipping delete without concrete object id: addr={} type={}",
+                            "[PARSER] recorded Move resource deletion: addr={} type={}",
                             addr.to_hex_literal(),
                             struct_tag
                         );
