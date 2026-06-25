@@ -9,12 +9,11 @@ def apply():
     }
 '''
     methods = '''    fn accept_checkpoint_vote(&self, vote: CheckpointVote) -> Result<ConsensusUpdate> {
-        vote.verify(&self.authority_public_keys)?;
         anyhow::ensure!(
             self.authority_public_keys.contains_key(&vote.authority),
             "Checkpoint vote is from a non-committee authority"
         );
-        let checkpoint_id = vote.checkpoint_id()?;
+        let checkpoint_id = vote.checkpoint_id;
         {
             let staged = self
                 .staged_checkpoints
@@ -24,13 +23,10 @@ def apply():
                 .get(&checkpoint_id)
                 .ok_or_else(|| anyhow::anyhow!("Checkpoint vote has no locally committed draft"))?;
             anyhow::ensure!(
-                expected.checkpoint.hash()? == vote.checkpoint.hash()?,
-                "Checkpoint vote draft differs from local committed draft"
-            );
-            anyhow::ensure!(
                 expected.epoch == vote.epoch && expected.round == vote.round,
                 "Checkpoint vote epoch or round mismatch"
             );
+            vote.verify_for_checkpoint(&expected.checkpoint, &self.authority_public_keys)?;
         }
         let vote_count = {
             let mut all_votes = self
