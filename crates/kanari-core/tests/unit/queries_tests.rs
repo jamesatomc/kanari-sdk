@@ -10,10 +10,15 @@ mod test_support;
 
 use test_support::{secure_consensus_keys, signed_transfer};
 
-fn configure_single_authority(engine: &mut BlockchainEngine) -> (ed25519_dalek::SigningKey, std::collections::BTreeMap<String, Vec<u8>>) {
-    let authorities = vec!["auth1".to_string()];
-    engine.set_authorities("auth1".to_string(), authorities.clone());
-    let (key, public_keys) = secure_consensus_keys(&authorities, "auth1");
+fn configure_single_authority(
+    engine: &mut BlockchainEngine,
+) -> (
+    ed25519_dalek::SigningKey,
+    std::collections::BTreeMap<String, Vec<u8>>,
+) {
+    let authorities = vec!["0x1".to_string()];
+    engine.set_authorities("0x1".to_string(), authorities.clone());
+    let (key, public_keys) = secure_consensus_keys(&authorities, "0x1");
     engine
         .set_consensus_signing_key(key.clone(), public_keys.clone())
         .unwrap();
@@ -92,7 +97,7 @@ fn sync_checkpoint_from_data_rejects_empty_checkpoint() {
     let mut checkpoint = Checkpoint::new(1, vec![], vec![], state_root, 42, prev_hash);
     checkpoint
         .attach_single_authority_certificate(
-            "auth1".to_string(),
+            "0x1".to_string(),
             &key,
             &public_keys,
             0,
@@ -119,11 +124,17 @@ fn sync_checkpoint_from_data_rejects_root_mismatch() {
         chain.latest_checkpoint().hash().unwrap()
     };
     let signed_tx = signed_transfer(0);
-    let mut checkpoint =
-        Checkpoint::new(1, vec![[7u8; 32]], vec![signed_tx], vec![9u8; 32], 42, prev_hash);
+    let mut checkpoint = Checkpoint::new(
+        1,
+        vec![[7u8; 32]],
+        vec![signed_tx],
+        vec![9u8; 32],
+        42,
+        prev_hash,
+    );
     checkpoint
         .attach_single_authority_certificate(
-            "auth1".to_string(),
+            "0x1".to_string(),
             &key,
             &public_keys,
             0,
