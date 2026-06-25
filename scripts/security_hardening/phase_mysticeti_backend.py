@@ -131,13 +131,15 @@ def apply() -> None:
         let block = MysticetiData::<MysticetiBlock>::from_bytes(
             minibytes::Bytes::from(serialized_block.to_vec()),
         )?;
-        block.verify(
-            &self._committee,
-            self.core.quorum_threshold(),
-            &self.core.verifier(),
-        )?;
+        block
+            .verify(
+                &self._committee,
+                self.core.quorum_threshold(),
+                &self.core.verifier(),
+            )
+            .map_err(|error| anyhow::anyhow!("Mysticeti block verification failed: {error:?}"))?;
         let mut processed = self.core.add_blocks(vec![block]);
-        anyhow::ensure!(processed.len() == 1, "Mysticeti block was rejected or has missing parents");
+        anyhow::ensure!(processed.len() == 1, "Missing parent or rejected Mysticeti block");
         let imported = processed.remove(0);
         let committed = self.try_advance();
         Ok((imported, committed))
