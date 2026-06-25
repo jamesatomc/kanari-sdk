@@ -27,6 +27,7 @@ from security_hardening import (
     phase_mysticeti_network,
     phase_mysticeti_production,
     phase_mysticeti_vertex,
+    phase_node_channel_fixups,
     phase_node_consensus_loop,
     phase_post,
     phase_protocol_limits,
@@ -38,7 +39,7 @@ from security_hardening import (
     phase_vote_transport,
 )
 
-PATCHSET_VERSION = 17
+PATCHSET_VERSION = 18
 
 
 def main() -> None:
@@ -49,6 +50,7 @@ def main() -> None:
     phase3_native_fix.apply()
     phase4_persistence_network.apply()
     phase4_channels.apply()
+    phase_node_channel_fixups.apply()
     phase5_auth.apply()
     phase_post.apply()
     phase_known_fixups.apply()
