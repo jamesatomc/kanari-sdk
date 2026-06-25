@@ -21,6 +21,7 @@ from security_hardening import (
     phase_move_changeset,
     phase_move_overlay,
     phase_move_parser,
+    phase_mysticeti_authority,
     phase_mysticeti_backend,
     phase_mysticeti_digest,
     phase_mysticeti_network,
@@ -36,7 +37,7 @@ from security_hardening import (
     phase_vote_transport,
 )
 
-PATCHSET_VERSION = 15
+PATCHSET_VERSION = 16
 
 
 def main() -> None:
@@ -58,6 +59,7 @@ def main() -> None:
     phase_mysticeti_digest.apply()
     phase_mysticeti_vertex.apply()
     phase_mysticeti_backend.apply()
+    phase_mysticeti_authority.apply()
     phase_vote_fields.apply()
     phase_mysticeti_production.apply()
     phase_vote_prepare.apply()
