@@ -71,14 +71,17 @@ def apply() -> None:
         let committed_vertices = subdags
             .iter()
             .map(|subdag| {
-                subdag
-                    .blocks
-                    .iter()
-                    .filter(|block| block.round() > 0)
-                    .map(|block| mysticeti_reference_to_vertex_id(block.reference()))
-                    .collect::<Vec<_>>()
+                let anchor = mysticeti_reference_to_vertex_id(&subdag.anchor);
+                let mut vertices = vec![anchor];
+                vertices.extend(
+                    subdag
+                        .blocks
+                        .iter()
+                        .filter(|block| block.round() > 0 && block.reference() != &subdag.anchor)
+                        .map(|block| mysticeti_reference_to_vertex_id(block.reference())),
+                );
+                vertices
             })
-            .filter(|vertices| !vertices.is_empty())
             .collect::<Vec<_>>();
         self.core.handle_committed_subdag(subdags);
         committed_vertices
