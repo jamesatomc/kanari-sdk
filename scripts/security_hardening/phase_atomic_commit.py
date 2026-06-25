@@ -99,3 +99,221 @@ def apply() -> None:
         raise RuntimeError("SMT startup marker was not found")
     text = text.replace(startup_marker, startup_replacement, 1)
     write(path, text)
+
+    path = "crates/kanari-core/src/engine.rs"
+    text = read(path)
+    old = '''    fn checkpoint_without_transactions(checkpoint: &Checkpoint) -> Checkpoint {
+        Checkpoint::new(
+            checkpoint.sequence,
+            checkpoint.vertices.clone(),
+            Vec::new(),
+            checkpoint.state_root.clone(),
+            checkpoint.timestamp,
+            checkpoint.prev_checkpoint_hash.clone(),
+        )
+    }'''
+    new = '''    fn checkpoint_without_transactions(checkpoint: &Checkpoint) -> Checkpoint {
+        let mut slim = checkpoint.clone();
+        slim.transactions = Vec::new().into();
+        slim
+    }'''
+    if old not in text:
+        raise RuntimeError("checkpoint_without_transactions helper was not found")
+    write(path, text.replace(old, new, 1))
+
+    path = "crates/kanari-core/src/engine/apply_checkpoint.rs"
+    text = read(path)
+    text = text.replace(
+        "use super::{BlockchainEngine, TransactionExecutionReceipt};",
+        "use super::{BlockchainEngine, PersistedTransactionLocation, TransactionExecutionReceipt, MAX_PERSISTED_RECENT_TX_HASHES};",
+        1,
+    )
+    text = text.replace(
+        "use crate::consensus::Checkpoint;",
+        "use crate::{blockchain::Blockchain, consensus::Checkpoint};",
+        1,
+    )
+    text, removed = re.subn(
+        r"\n    fn requires_runtime_side_effect_persistence\(transactions: &\[SignedTransaction\]\) -> bool \{.*?\n    \}\n",
+        "\n",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if removed != 1:
+        raise RuntimeError("runtime side-effect helper was not found")
+
+    marker = "    /// Helper: Common steps for finalizing Checkpoint to database\n"
+    helper = '''    fn atomic_checkpoint_updates(
+        &self,
+        checkpoint: &Checkpoint,
+        receipts: &[TransactionExecutionReceipt],
+        next_chain: &Blockchain,
+        store: &kanari_move_runtime_v1::storage::persistent_store::PersistentStore,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let mut updates = Vec::new();
+        updates.push((
+            Self::checkpoint_metadata_key(checkpoint.sequence),
+            bcs::to_bytes(&Self::checkpoint_without_transactions(checkpoint))?,
+        ));
+        if checkpoint.sequence > 0 && !checkpoint.transactions.is_empty() {
+            updates.push((
+                Self::checkpoint_transactions_key(checkpoint.sequence),
+                bcs::to_bytes(&checkpoint.transactions)?,
+            ));
+        }
+
+        let mut recent_hashes = store
+            .load::<Vec<Vec<u8>>>(Self::recent_transaction_hashes_key())?
+            .unwrap_or_default();
+        let mut recent_set: HashSet<Vec<u8>> = recent_hashes.iter().cloned().collect();
+        for transaction in checkpoint.transactions.iter() {
+            let transaction_hash = transaction.transaction_hash().to_vec();
+            updates.push((
+                Self::transaction_payload_key(&transaction_hash),
+                bcs::to_bytes(transaction)?,
+            ));
+            updates.push((
+                Self::transaction_index_key(&transaction_hash),
+                bcs::to_bytes(&PersistedTransactionLocation {
+                    checkpoint_sequence: checkpoint.sequence,
+                    state_root: checkpoint.state_root.clone(),
+                })?,
+            ));
+            if recent_set.insert(transaction_hash.clone()) {
+                recent_hashes.push(transaction_hash);
+            }
+        }
+        if recent_hashes.len() > MAX_PERSISTED_RECENT_TX_HASHES {
+            let remove = recent_hashes.len() - MAX_PERSISTED_RECENT_TX_HASHES;
+            recent_hashes.drain(0..remove);
+        }
+        updates.push((
+            Self::recent_transaction_hashes_key().to_vec(),
+            bcs::to_bytes(&recent_hashes)?,
+        ));
+        for receipt in receipts {
+            updates.push((
+                Self::transaction_receipt_key(&receipt.transaction_hash),
+                bcs::to_bytes(receipt)?,
+            ));
+        }
+
+        let mut slim_chain = next_chain.clone();
+        for persisted in &mut slim_chain.dag_checkpoints {
+            *persisted = Self::checkpoint_without_transactions(persisted);
+        }
+        updates.push((b"blockchain".to_vec(), bcs::to_bytes(&slim_chain)?));
+        Ok(updates)
+    }
+
+'''
+    if marker not in text:
+        raise RuntimeError("checkpoint finalization marker was not found")
+    text = text.replace(marker, helper + marker, 1)
+
+    block_pattern = re.compile(
+        r"    /// Helper: Common steps for finalizing Checkpoint to database\n"
+        r"    fn finalize_checkpoint\(.*?\n"
+        r"    fn finalize_checkpoint_metadata\(.*?\n"
+        r"    \}\n"
+        r"    pub\(crate\) fn apply_prepared_checkpoint",
+        re.S,
+    )
+    block_replacement = '''    /// Atomically commit state, transaction indexes, receipts and checkpoint metadata.
+    fn finalize_checkpoint(
+        &self,
+        checkpoint: Checkpoint,
+        mut new_state: StateManager,
+        receipts: Vec<TransactionExecutionReceipt>,
+        validate_supply: bool,
+    ) -> Result<()> {
+        if validate_supply {
+            new_state
+                .validate_supply_invariants()
+                .context("Supply invariants failed before checkpoint commit")?;
+        }
+
+        let mut next_chain = self
+            .blockchain
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        next_chain.add_checkpoint_with_validation(checkpoint.clone(), true)?;
+        let updates = self.atomic_checkpoint_updates(
+            &checkpoint,
+            &receipts,
+            &next_chain,
+            new_state.store.as_ref(),
+        )?;
+        new_state
+            .commit_with_extra_raw_changes(
+                &updates,
+                &[b"pending_checkpoint_commit".to_vec()],
+            )
+            .context("Failed to atomically commit checkpoint state and metadata")?;
+
+        {
+            let mut state = self.state_write();
+            *state = new_state;
+        }
+        {
+            let mut chain = self.blockchain.write().unwrap_or_else(|error| error.into_inner());
+            *chain = next_chain;
+        }
+        for runtime in &self.runtime_pool {
+            runtime.clear_object_cache()?;
+            runtime.reload_vm_cache()?;
+        }
+
+        let mut mempool = self.mempool_write();
+        let committed_hashes: HashSet<_> = checkpoint
+            .transactions
+            .iter()
+            .map(|transaction| transaction.transaction_hash().to_vec())
+            .collect();
+        mempool
+            .pending_txs
+            .retain(|transaction| !committed_hashes.contains(transaction.transaction_hash()));
+        mempool
+            .pending_tx_hashes
+            .retain(|hash| !committed_hashes.contains(hash));
+        Self::remove_pending_sender_counts(
+            &mut mempool.pending_sender_counts,
+            checkpoint.transactions.as_ref(),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn apply_prepared_checkpoint'''
+    text, count = block_pattern.subn(block_replacement, text, count=1)
+    if count != 1:
+        raise RuntimeError("checkpoint finalization block was not found")
+
+    prepared_pattern = re.compile(
+        r"    pub\(crate\) fn apply_prepared_checkpoint\(\n"
+        r"        &self,\n"
+        r"        checkpoint: Checkpoint,\n"
+        r"        verified_state: StateManager,\n"
+        r"        to_execute: Vec<SignedTransaction>,\n"
+        r"        receipts: Vec<TransactionExecutionReceipt>,\n"
+        r"        validate_supply: bool,\n"
+        r"    \) -> Result<\(\)> \{.*?\n"
+        r"        self\.finalize_checkpoint\(checkpoint, verified_state, receipts, validate_supply\)\n"
+        r"    \}",
+        re.S,
+    )
+    prepared_replacement = '''    pub(crate) fn apply_prepared_checkpoint(
+        &self,
+        checkpoint: Checkpoint,
+        verified_state: StateManager,
+        _to_execute: Vec<SignedTransaction>,
+        receipts: Vec<TransactionExecutionReceipt>,
+        validate_supply: bool,
+    ) -> Result<()> {
+        self.finalize_checkpoint(checkpoint, verified_state, receipts, validate_supply)
+    }'''
+    text, count = prepared_pattern.subn(prepared_replacement, text, count=1)
+    if count != 1:
+        raise RuntimeError("prepared checkpoint block was not found")
+    write(path, text)
