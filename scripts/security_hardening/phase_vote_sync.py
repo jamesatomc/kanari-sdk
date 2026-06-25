@@ -24,4 +24,46 @@ def apply():
             }''',
         1,
     )
+    marker = '''    async fn handle_new_dag_vertex(&self, vertex_data: String) {'''
+    helpers = '''    fn broadcast_consensus_update(&self, update: ConsensusUpdate) {
+        for vote in update.checkpoint_votes {
+            match serde_json::to_string(&vote) {
+                Ok(data) => {
+                    self.send_network_message(
+                        P2PMessage::CheckpointVote(data),
+                        "[CONSENSUS] Failed to queue checkpoint vote",
+                    );
+                }
+                Err(error) => warn!("[CONSENSUS] Failed to serialize checkpoint vote: {}", error),
+            }
+        }
+        for checkpoint in update.finalized_checkpoints {
+            if let Some(checkpoint_data) = self.engine.get_checkpoint_sync(checkpoint.sequence) {
+                match serde_json::to_string(&checkpoint_data) {
+                    Ok(data) => {
+                        self.send_network_message(
+                            P2PMessage::NewCheckpoint(data),
+                            "[CONSENSUS] Failed to queue certified checkpoint",
+                        );
+                    }
+                    Err(error) => warn!("[CONSENSUS] Failed to serialize certified checkpoint: {}", error),
+                }
+            }
+        }
+    }
+
+    async fn handle_checkpoint_vote(&self, vote_data: String) {
+        let Some(vote) = Self::parse_message::<CheckpointVote>(&vote_data, "checkpoint vote") else {
+            return;
+        };
+        match self.engine.submit_checkpoint_vote(vote) {
+            Ok(update) => self.broadcast_consensus_update(update),
+            Err(error) => warn!("[CONSENSUS] Rejected checkpoint vote: {}", error),
+        }
+    }
+
+'''
+    if marker not in text:
+        raise RuntimeError("DAG vertex handler marker not found")
+    text = text.replace(marker, helpers + marker, 1)
     write(path, text)
