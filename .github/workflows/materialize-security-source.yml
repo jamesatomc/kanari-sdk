@@ -47,6 +47,145 @@ jobs:
               p = Path(name)
               p.write_text(p.read_text().replace('mpsc::unbounded_channel()', 'mpsc::channel(32)'))
           PY
+      - name: Capture Move writes in canonical state
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def patch(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              if text.count(old) < count:
+                  raise SystemExit(f'missing patch marker in {path}: {old[:80]!r}')
+              p.write_text(text.replace(old, new, count))
+
+          path = 'move-execution/v1/kanari-move-runtime-v1/src/changeset.rs'
+          patch(path,
+              '    pub token_balance_sets: Vec<(AccountAddress, String, BalanceRecord)>,',
+              '    pub token_balance_sets: Vec<(AccountAddress, String, BalanceRecord)>,\n'
+              '    /// Raw Move module writes. None means delete.\n'
+              '    pub move_modules: Vec<(AccountAddress, String, Option<Vec<u8>>)>,\n'
+              '    /// Raw Move resource writes. None means delete.\n'
+              '    pub move_resources: Vec<(AccountAddress, String, Option<Vec<u8>>)>,')
+          patch(path,
+              '            token_balance_sets: Vec::new(),\n            created_objects: Vec::new(),',
+              '            token_balance_sets: Vec::new(),\n'
+              '            move_modules: Vec::new(),\n'
+              '            move_resources: Vec::new(),\n'
+              '            created_objects: Vec::new(),')
+          patch(path,
+              '            && self.token_balance_sets.is_empty()\n            && self.created_objects.is_empty()',
+              '            && self.token_balance_sets.is_empty()\n'
+              '            && self.move_modules.is_empty()\n'
+              '            && self.move_resources.is_empty()\n'
+              '            && self.created_objects.is_empty()')
+          patch(path,
+              '        self.created_objects.extend(other.created_objects);',
+              '        self.move_modules.append(&mut other.move_modules);\n'
+              '        self.move_resources.append(&mut other.move_resources);\n'
+              '        self.created_objects.extend(other.created_objects);')
+          patch(path,
+              '    pub fn add_event(&mut self, event: Event) {\n        self.events.push(event);\n    }',
+              '    pub fn add_event(&mut self, event: Event) {\n'
+              '        self.events.push(event);\n'
+              '    }\n\n'
+              '    pub fn write_move_module(&mut self, address: AccountAddress, name: String, bytes: Vec<u8>) {\n'
+              '        self.move_modules.push((address, name, Some(bytes)));\n'
+              '    }\n\n'
+              '    pub fn delete_move_module(&mut self, address: AccountAddress, name: String) {\n'
+              '        self.move_modules.push((address, name, None));\n'
+              '    }\n\n'
+              '    pub fn write_move_resource(&mut self, address: AccountAddress, tag: String, bytes: Vec<u8>) {\n'
+              '        self.move_resources.push((address, tag, Some(bytes)));\n'
+              '    }\n\n'
+              '    pub fn delete_move_resource(&mut self, address: AccountAddress, tag: String) {\n'
+              '        self.move_resources.push((address, tag, None));\n'
+              '    }')
+
+          path = 'move-execution/v1/kanari-move-runtime-v1/src/move_runtime/parsers.rs'
+          patch(path,
+              '''            for (module_name, op) in account_changes.modules() {
+                if matches!(op, MoveOp::New(_) | MoveOp::Modify(_)) {
+                    kanari_cs.publish_module(*addr, module_name.to_string());
+                }
+            }''',
+              '''            for (module_name, op) in account_changes.modules() {
+                match op {
+                    MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
+                        kanari_cs.publish_module(*addr, module_name.to_string());
+                        kanari_cs.write_move_module(*addr, module_name.to_string(), bytes.to_vec());
+                    }
+                    MoveOp::Delete => {
+                        kanari_cs.delete_move_module(*addr, module_name.to_string());
+                    }
+                }
+            }''')
+          patch(path,
+              '                    MoveOp::New(bytes) | MoveOp::Modify(bytes) => {\n                        // Extract UID',
+              '                    MoveOp::New(bytes) | MoveOp::Modify(bytes) => {\n'
+              '                        kanari_cs.write_move_resource(*addr, struct_tag.to_string(), bytes.to_vec());\n'
+              '                        // Extract UID')
+          patch(path,
+              '''                    MoveOp::Delete => {
+                        debug!(
+                            "[PARSER] skipping delete without concrete object id: addr={} type={}",
+                            addr.to_hex_literal(),
+                            struct_tag
+                        );
+                    }''',
+              '''                    MoveOp::Delete => {
+                        kanari_cs.delete_move_resource(*addr, struct_tag.to_string());
+                        debug!(
+                            "[PARSER] recorded Move resource deletion: addr={} type={}",
+                            addr.to_hex_literal(),
+                            struct_tag
+                        );
+                    }''')
+
+          path = 'move-execution/v1/kanari-move-runtime-v1/src/state.rs'
+          patch(path,
+              '        self.add_many_to_index_list(ACCOUNT_INDEX_KEY, account_index_additions)?;\n\n        // Update total supply',
+              '''        self.add_many_to_index_list(ACCOUNT_INDEX_KEY, account_index_additions)?;
+
+        for (address, module_name, bytes) in &changeset.move_modules {
+            let key = format!("module:{}:{}", address.to_hex_literal(), module_name);
+            match bytes {
+                Some(bytes) => {
+                    self.save_internal(key.as_bytes(), bytes)?;
+                    self.add_to_index_list(b"module_index", key)?;
+                }
+                None => {
+                    self.delete_internal(key.as_bytes());
+                    self.remove_from_index_list(b"module_index", &key)?;
+                }
+            }
+        }
+        for (address, struct_tag, bytes) in &changeset.move_resources {
+            let key = format!("resource:{}:{}", address.to_hex_literal(), struct_tag);
+            match bytes {
+                Some(bytes) => self.save_internal(key.as_bytes(), bytes)?,
+                None => self.delete_internal(key.as_bytes()),
+            }
+        }
+
+        // Update total supply''')
+
+          path = 'move-execution/v1/kanari-move-runtime-v1/src/move_runtime/mod.rs'
+          patch(path,
+              '''    pub fn reload_vm_cache(&self) -> Result<()> {
+        let new_vm = MoveVM::new(self.all_natives.as_ref().clone())''',
+              '''    pub fn reload_vm_cache(&self) -> Result<()> {
+        let refreshed_modules: HashSet<ModuleId> = self
+            .state
+            .get_all_module_ids()?
+            .into_iter()
+            .collect();
+        *self
+            .published_modules
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = refreshed_modules;
+        let new_vm = MoveVM::new(self.all_natives.as_ref().clone())''')
+          PY
       - run: cargo fmt --all
       - run: cargo check -p kanari-types -p kanari-core -p kanari-auth -p kanari-node --all-targets --all-features
       - run: git diff --check
