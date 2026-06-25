@@ -109,6 +109,7 @@ def apply() -> None:
             parents: block
                 .includes()
                 .iter()
+                .filter(|reference| reference.round > 0)
                 .map(mysticeti_reference_to_vertex_id)
                 .collect(),
             serialized_block,
