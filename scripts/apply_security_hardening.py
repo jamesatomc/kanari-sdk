@@ -13,11 +13,12 @@ from security_hardening import (
     phase4_channels,
     phase4_persistence_network,
     phase5_auth,
+    phase_atomic_commit,
     phase_known_fixups,
     phase_post,
 )
 
-PATCHSET_VERSION = 9
+PATCHSET_VERSION = 11
 
 
 def main() -> None:
@@ -31,6 +32,7 @@ def main() -> None:
     phase5_auth.apply()
     phase_post.apply()
     phase_known_fixups.apply()
+    phase_atomic_commit.apply()
     print(f"security hardening patchset v{PATCHSET_VERSION} applied")
 
 
