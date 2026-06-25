@@ -8,7 +8,17 @@ use move_core_types::account_address::AccountAddress;
 #[path = "test_support.rs"]
 mod test_support;
 
-use test_support::signed_transfer;
+use test_support::{secure_consensus_keys, signed_transfer};
+
+fn configure_single_authority(engine: &mut BlockchainEngine) -> (ed25519_dalek::SigningKey, std::collections::BTreeMap<String, Vec<u8>>) {
+    let authorities = vec!["auth1".to_string()];
+    engine.set_authorities("auth1".to_string(), authorities.clone());
+    let (key, public_keys) = secure_consensus_keys(&authorities, "auth1");
+    engine
+        .set_consensus_signing_key(key.clone(), public_keys.clone())
+        .unwrap();
+    (key, public_keys)
+}
 
 #[test]
 fn account_info_reports_native_balance_after_gas_debit() {
@@ -68,7 +78,8 @@ fn account_info_reports_native_balance_after_gas_debit() {
 
 #[test]
 fn sync_checkpoint_from_data_rejects_empty_checkpoint() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let mut engine = BlockchainEngine::new_in_memory().unwrap();
+    let (key, public_keys) = configure_single_authority(&mut engine);
     let prev_hash = {
         let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
         chain.latest_checkpoint().hash().unwrap()
@@ -78,7 +89,16 @@ fn sync_checkpoint_from_data_rejects_empty_checkpoint() {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .compute_state_root();
-    let checkpoint = Checkpoint::new(1, vec![], vec![], state_root, 42, prev_hash);
+    let mut checkpoint = Checkpoint::new(1, vec![], vec![], state_root, 42, prev_hash);
+    checkpoint
+        .attach_single_authority_certificate(
+            "auth1".to_string(),
+            &key,
+            &public_keys,
+            0,
+            1,
+        )
+        .unwrap();
     let sync_data = CheckpointSyncData { checkpoint };
 
     let error = engine.sync_checkpoint_from_data(&sync_data).unwrap_err();
@@ -92,13 +112,24 @@ fn sync_checkpoint_from_data_rejects_empty_checkpoint() {
 
 #[test]
 fn sync_checkpoint_from_data_rejects_root_mismatch() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let mut engine = BlockchainEngine::new_in_memory().unwrap();
+    let (key, public_keys) = configure_single_authority(&mut engine);
     let prev_hash = {
         let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
         chain.latest_checkpoint().hash().unwrap()
     };
     let signed_tx = signed_transfer(0);
-    let checkpoint = Checkpoint::new(1, vec![], vec![signed_tx], vec![9u8; 32], 42, prev_hash);
+    let mut checkpoint =
+        Checkpoint::new(1, vec![[7u8; 32]], vec![signed_tx], vec![9u8; 32], 42, prev_hash);
+    checkpoint
+        .attach_single_authority_certificate(
+            "auth1".to_string(),
+            &key,
+            &public_keys,
+            0,
+            1,
+        )
+        .unwrap();
     let sync_data = CheckpointSyncData { checkpoint };
 
     let error = engine.sync_checkpoint_from_data(&sync_data).unwrap_err();
