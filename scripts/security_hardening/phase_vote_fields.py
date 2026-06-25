@@ -26,12 +26,12 @@ def apply():
     )
     text = text.replace(
         "    staged_checkpoints: Arc<RwLock<BTreeMap<VertexId, StagedCheckpoint>>>,\n}",
-        "    staged_checkpoints: Arc<RwLock<BTreeMap<VertexId, StagedCheckpoint>>>,\n    checkpoint_votes: Arc<RwLock<BTreeMap<VertexId, BTreeMap<String, Vec<u8>>>>>,\n    committed_anchors: Arc<RwLock<VecDeque<(VertexId, Vec<VertexId>)>>>,\n}",
+        "    staged_checkpoints: Arc<RwLock<BTreeMap<VertexId, StagedCheckpoint>>>,\n    checkpoint_votes: Arc<RwLock<BTreeMap<VertexId, BTreeMap<String, Vec<u8>>>>>,\n    pending_checkpoint_votes: Arc<RwLock<BTreeMap<VertexId, BTreeMap<String, CheckpointVote>>>>,\n    committed_anchors: Arc<RwLock<VecDeque<(VertexId, Vec<VertexId>)>>>,\n}",
         1,
     )
     text = text.replace(
         "            staged_checkpoints: Arc::new(RwLock::new(BTreeMap::new())),\n        };",
-        "            staged_checkpoints: Arc::new(RwLock::new(BTreeMap::new())),\n            checkpoint_votes: Arc::new(RwLock::new(BTreeMap::new())),\n            committed_anchors: Arc::new(RwLock::new(VecDeque::new())),\n        };",
+        "            staged_checkpoints: Arc::new(RwLock::new(BTreeMap::new())),\n            checkpoint_votes: Arc::new(RwLock::new(BTreeMap::new())),\n            pending_checkpoint_votes: Arc::new(RwLock::new(BTreeMap::new())),\n            committed_anchors: Arc::new(RwLock::new(VecDeque::new())),\n        };",
         1,
     )
     write(path, text)
