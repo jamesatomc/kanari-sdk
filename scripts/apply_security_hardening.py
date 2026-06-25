@@ -15,6 +15,8 @@ from security_hardening import (
     phase5_auth,
     phase_atomic_commit,
     phase_checkpoint_votes,
+    phase_consensus_exports,
+    phase_consensus_progress,
     phase_known_fixups,
     phase_move_changeset,
     phase_move_overlay,
@@ -24,14 +26,17 @@ from security_hardening import (
     phase_mysticeti_network,
     phase_mysticeti_production,
     phase_mysticeti_vertex,
+    phase_node_consensus_loop,
     phase_post,
     phase_runtime_reload,
     phase_vote_accept,
     phase_vote_fields,
     phase_vote_prepare,
+    phase_vote_sync,
+    phase_vote_transport,
 )
 
-PATCHSET_VERSION = 14
+PATCHSET_VERSION = 15
 
 
 def main() -> None:
@@ -58,6 +63,11 @@ def main() -> None:
     phase_vote_prepare.apply()
     phase_vote_accept.apply()
     phase_mysticeti_network.apply()
+    phase_consensus_progress.apply()
+    phase_consensus_exports.apply()
+    phase_vote_transport.apply()
+    phase_vote_sync.apply()
+    phase_node_consensus_loop.apply()
     phase_atomic_commit.apply()
     print(f"security hardening patchset v{PATCHSET_VERSION} applied")
 
