@@ -17,7 +17,8 @@ pub struct CheckpointCertificate {
     addition = marker + '''
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointVote {
-    pub checkpoint: Checkpoint,
+    pub checkpoint_id: VertexId,
+    pub sequence: u64,
     pub epoch: u64,
     pub round: u64,
     pub authority: AuthorityId,
@@ -37,8 +38,10 @@ impl CheckpointVote {
         checkpoint.certificate = None;
         let committee_digest = Checkpoint::committee_digest(public_keys)?;
         let digest = checkpoint.certificate_signing_digest(epoch, round, &committee_digest)?;
+        let checkpoint_id = vertex_id_from_hash_bytes(&checkpoint.hash()?);
         Ok(Self {
-            checkpoint,
+            checkpoint_id,
+            sequence: checkpoint.sequence,
             epoch,
             round,
             authority,
@@ -46,15 +49,16 @@ impl CheckpointVote {
         })
     }
 
-    pub fn checkpoint_id(&self) -> Result<VertexId> {
-        Ok(vertex_id_from_hash_bytes(&self.checkpoint.hash()?))
-    }
-
-    pub fn verify(&self, public_keys: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    pub fn verify_for_checkpoint(
+        &self,
+        checkpoint: &Checkpoint,
+        public_keys: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<()> {
         anyhow::ensure!(
-            self.checkpoint.certificate.is_none(),
-            "checkpoint vote must not carry an existing certificate"
+            vertex_id_from_hash_bytes(&checkpoint.hash()?) == self.checkpoint_id,
+            "checkpoint vote digest does not match the local draft"
         );
+        anyhow::ensure!(checkpoint.sequence == self.sequence, "checkpoint vote sequence mismatch");
         let public_key = public_keys
             .get(&self.authority)
             .ok_or_else(|| anyhow::anyhow!("unknown checkpoint voter {}", self.authority))?;
@@ -68,22 +72,17 @@ impl CheckpointVote {
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid checkpoint vote signature length"))?;
         let committee_digest = Checkpoint::committee_digest(public_keys)?;
-        let digest = self
-            .checkpoint
-            .certificate_signing_digest(self.epoch, self.round, &committee_digest)?;
+        let digest = checkpoint.certificate_signing_digest(
+            self.epoch,
+            self.round,
+            &committee_digest,
+        )?;
         let key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)?;
         let signature = ed25519_dalek::Signature::from_bytes(&signature);
         use ed25519_dalek::Verifier;
         key.verify(&digest, &signature)
             .map_err(|_| anyhow::anyhow!("invalid checkpoint vote signature"))?;
         Ok(())
-    }
-
-    pub fn authority_signature(&self) -> CheckpointAuthoritySignature {
-        CheckpointAuthoritySignature {
-            authority: self.authority.clone(),
-            signature: self.signature.clone(),
-        }
     }
 }
 '''
