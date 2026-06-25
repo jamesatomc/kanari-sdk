@@ -43,15 +43,8 @@ jobs:
 
           engine = Path('crates/kanari-core/src/engine.rs')
           text = engine.read_text()
-          text = text.replace(
-              'impl TransactionBatchExecution {\n'
-              '    fn counts(&self) -> (usize, usize) {\n'
-              '        (self.executed, self.failed)\n'
-              '    }\n'
-              '}\n\n',
-              '',
-          )
           for signature in (
+              '    fn counts(&self) -> (usize, usize) {',
               '    fn persist_transaction_receipts(',
               '    pub(crate) fn persist_blockchain_snapshot(',
               '    pub(crate) fn execute_tx_waves_strict_serial(',
