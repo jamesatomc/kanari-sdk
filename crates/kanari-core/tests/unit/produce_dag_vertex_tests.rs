@@ -13,6 +13,12 @@ fn signed_network_vertex(
     parents: Vec<VertexId>,
 ) -> DagVertex {
     let tx = signed_transfer(0);
+    let local_index = usize::from(author == "auth2");
+    let mut backend = MysticetiBackend::new(local_index, 2).unwrap();
+    let block = backend
+        .propose_block(std::slice::from_ref(&tx), 123)
+        .unwrap()
+        .expect("test Mysticeti block must be produced");
     let mut vertex = DagVertex::new(
         round,
         author.to_string(),
@@ -22,6 +28,13 @@ fn signed_network_vertex(
         vec![7u8; 32],
         123,
     );
+    vertex
+        .bind_mysticeti_block(block.serialized_block, block.vertex_id)
+        .unwrap();
+    // Some rejection tests deliberately override the outer round/parents after
+    // binding so validation fails before the raw-block consistency stage.
+    vertex.round = round;
+    vertex.parents = parents;
     use ed25519_dalek::Signer;
     vertex.signature = signing_key
         .sign(&vertex.signing_digest().unwrap())
