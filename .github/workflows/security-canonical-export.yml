@@ -1,0 +1,45 @@
+name: Security canonical export
+
+on:
+  pull_request:
+    branches:
+      - fix-gas
+    paths:
+      - .github/workflows/security-canonical-export.yml
+      - scripts/migrate_security_tests.py
+      - scripts/migrate_security_tests_round2.py
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          show-progress: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Materialize canonical tests
+        run: |
+          python3 scripts/migrate_security_tests.py
+          python3 scripts/migrate_security_tests_round2.py
+          cargo fmt --all
+          git diff --check
+      - name: Build Move frameworks
+        run: cargo build -p kanari-framework-builder
+      - name: Validate kanari-core
+        run: cargo test -p kanari-core --lib
+      - name: Export validated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/kanari-core/tests/unit/engine_tests.rs
+          git commit -m "test(security): materialize canonical engine tests"
+          git push --force origin HEAD:security/canonical-tests-ready
