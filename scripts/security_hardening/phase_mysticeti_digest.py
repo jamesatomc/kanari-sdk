@@ -14,7 +14,8 @@ def apply():
     new = '''        let content_hash = BlockDigest::new(authority, round, includes, transactions, timestamp_ns);
         if !self.enabled {
             let signature = SignatureBytes::dummy();
-            return (signature, content_hash.with_signature(&signature));
+            let signed_digest = content_hash.with_signature(&signature);
+            return (signature, signed_digest);
         }'''
     if old not in text:
         raise RuntimeError("Mysticeti signing block not found")
