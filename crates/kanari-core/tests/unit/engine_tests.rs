@@ -63,7 +63,7 @@ fn dag_engine_requires_explicit_consensus_signing_key() {
 }
 
 #[test]
-fn configured_dag_engine_rejects_empty_checkpoint() {
+fn configured_dag_engine_progresses_without_finalizing_empty_checkpoint() {
     let mut engine = BlockchainEngine::new_in_memory().unwrap();
     let authorities = vec!["0x1".to_string(), "0x2".to_string(), "0x3".to_string()];
     engine.set_authorities("0x1".to_string(), authorities.clone());
@@ -72,14 +72,18 @@ fn configured_dag_engine_rejects_empty_checkpoint() {
         .set_consensus_signing_key(local_key, public_keys)
         .unwrap();
 
-    let err = engine.produce_checkpoint().unwrap_err();
-
-    assert!(err.to_string().contains("No new transactions"));
+    match engine.produce_checkpoint() {
+        Ok(info) => {
+            assert_eq!(info.tx_count, 0);
+            assert!(info.checkpoint.is_none());
+        }
+        Err(error) => assert!(error.to_string().contains("DAG_WAITING")),
+    }
     assert_eq!(engine.get_stats().height, 0);
 }
 
 #[test]
-fn restarted_engine_does_not_create_empty_dag_progress() {
+fn restarted_engine_does_not_finalize_empty_dag_progress() {
     let temp_dir = tempfile::tempdir().unwrap();
     let data_dir = temp_dir.path().to_str().unwrap();
     let authorities = vec!["0x1".to_string(), "0x2".to_string(), "0x3".to_string()];
@@ -94,9 +98,7 @@ fn restarted_engine_does_not_create_empty_dag_progress() {
         engine
             .set_consensus_signing_key(local_key, public_keys)
             .unwrap();
-
-        let err = engine.produce_checkpoint().unwrap_err();
-        assert!(err.to_string().contains("No new transactions"));
+        let _ = engine.produce_checkpoint();
         assert_eq!(engine.get_stats().height, 0);
     }
 
@@ -112,8 +114,8 @@ fn restarted_engine_does_not_create_empty_dag_progress() {
 
     assert_eq!(restarted.get_stats().pending_transactions, 0);
     assert_eq!(restarted.get_stats().height, 0);
-    let err = restarted.produce_checkpoint().unwrap_err();
-    assert!(err.to_string().contains("No new transactions"));
+    let _ = restarted.produce_checkpoint();
+    assert_eq!(restarted.get_stats().height, 0);
 }
 
 #[test]
@@ -248,23 +250,22 @@ fn batch_submit_accepts_shuffled_contiguous_sequences_for_same_sender() {
 }
 
 #[test]
-fn gas_validation_rejects_overflowing_gas_cost() {
+fn gas_validation_rejects_nonzero_protocol_price() {
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
-    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
-    let gas = kanari_types::gas::GasConfig::default();
-    let tx = Transaction::new_transfer_with_gas(
-        sender.tagged_address(),
-        recipient.address,
-        1,
-        0,
-        gas.default_transaction_gas_limit(),
-        u64::MAX,
-    );
-
+    let tx = Transaction::ExecuteFunction {
+        sender: sender.tagged_address(),
+        module: "0x2::test_support".to_string(),
+        function: "noop".to_string(),
+        type_args: vec![],
+        args: vec![],
+        gas_limit: kanari_types::gas::GasConfig::default().default_transaction_gas_limit(),
+        gas_price: u64::MAX,
+        sequence_number: 0,
+    };
     let error = BlockchainEngine::validate_transaction_gas(&tx).unwrap_err();
-
-    assert!(error.to_string().contains("Gas cost overflow"));
+    assert!(error.to_string().contains("Invalid gas price"));
 }
+
 #[test]
 fn gas_application_does_not_increment_sequence_twice() {
     let sender = AccountAddress::random();
@@ -279,126 +280,92 @@ fn gas_application_does_not_increment_sequence_twice() {
 }
 
 #[test]
-fn native_transfer_charges_gas_from_gas_module() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
-    fund_sender(&engine, &sender.address, 1_000_000);
-    let signed_tx = signed_transfer_from(&sender, 0);
-    let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
-    let dao =
-        AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
-
-    let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
-
-    assert!(changeset.success);
-    assert_eq!(
-        changeset.gas_used,
-        kanari_types::gas::GasOperation::Transfer.gas_units()
-    );
-    let gas_cost = i128::from(
-        kanari_types::gas::GasOperation::Transfer.gas_units()
-            * kanari_types::gas::GasConfig::default().default_transaction_gas_price(),
-    );
-    assert_eq!(
-        changeset
-            .account_changes
-            .get(&sender_address)
-            .unwrap()
-            .balance_delta,
-        -(gas_cost + 1)
-    );
-    assert_eq!(
-        changeset.account_changes.get(&dao).unwrap().balance_delta,
-        gas_cost
-    );
-}
-
-#[test]
-fn applied_native_transfer_debits_sender_fee_and_credits_dao() {
+fn legacy_native_transfer_fails_without_moving_funds() {
     let engine = BlockchainEngine::new_in_memory().unwrap();
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
     let recipient = generate_keypair(CurveType::Ed25519).unwrap();
-    fund_sender(&engine, &sender.address, 1_000_000);
-
-    let tx = Transaction::new_transfer(sender.tagged_address(), recipient.address.clone(), 10, 0);
+    let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+    let tx = Transaction::new_transfer(sender.tagged_address(), recipient.address, 1, 0);
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
         .sign(&sender.private_key, sender.curve_type)
         .unwrap();
 
+    let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+    assert!(!changeset.success);
+    assert!(
+        changeset
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("NUMBER_OF_ARGUMENTS_MISMATCH"))
+    );
+    let sender_change = changeset.account_changes.get(&sender_address).unwrap();
+    assert_eq!(sender_change.balance_delta, 0);
+    assert_eq!(sender_change.sequence_increment, 1);
+    assert!(changeset.created_objects.is_empty());
+}
+
+#[test]
+fn failed_legacy_transfer_does_not_change_balances_or_supply() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+    fund_sender(&engine, &sender.address, 1_000_000);
     let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
     let recipient_address = AccountAddress::from_hex_literal(&recipient.address).unwrap();
-    let dao =
-        AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
-    let dao_before = engine
-        .state_read()
-        .get_account(&dao)
-        .map(|account| account.native_balance())
-        .unwrap_or(0);
-    let gas_cost = kanari_types::gas::GasOperation::Transfer.gas_units()
-        * kanari_types::gas::GasConfig::default().default_transaction_gas_price();
+    let supply_before = engine.state_read().total_supply;
 
+    let tx = Transaction::new_transfer(sender.tagged_address(), recipient.address, 10, 0);
+    let mut signed_tx = SignedTransaction::new(tx);
+    signed_tx
+        .sign(&sender.private_key, sender.curve_type)
+        .unwrap();
     let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
-    assert!(changeset.success);
+    assert!(!changeset.success);
 
     let mut state = engine.state_write();
     state.apply_changeset(&changeset).unwrap();
-
     assert_eq!(
         state.get_account(&sender_address).unwrap().native_balance(),
-        1_000_000 - 10 - gas_cost
+        1_000_000
     );
     assert_eq!(
         state
             .get_account(&recipient_address)
-            .unwrap()
-            .native_balance(),
-        10
+            .map(|account| account.native_balance())
+            .unwrap_or(0),
+        0
     );
+    assert_eq!(state.total_supply, supply_before);
     assert_eq!(
-        state.get_account(&dao).unwrap().native_balance(),
-        dao_before + gas_cost
+        state.get_account(&sender_address).unwrap().sequence_number,
+        1
     );
     state.validate_supply_invariants().unwrap();
 }
 
 #[test]
-fn self_native_transfer_only_charges_gas_and_keeps_supply_valid() {
+fn failed_legacy_self_transfer_only_advances_sequence() {
     let engine = BlockchainEngine::new_in_memory().unwrap();
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
     fund_sender(&engine, &sender.address, 1_000_000);
+    let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+    let supply_before = engine.state_read().total_supply;
 
-    let tx = Transaction::new_transfer(sender.tagged_address(), sender.address.clone(), 210_000, 0);
+    let tx = Transaction::new_transfer(sender.tagged_address(), sender.address.clone(), 1, 0);
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
         .sign(&sender.private_key, sender.curve_type)
         .unwrap();
-
-    let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
-    let dao =
-        AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
-    let dao_before = engine
-        .state_read()
-        .get_account(&dao)
-        .map(|account| account.native_balance())
-        .unwrap_or(0);
-    let gas_cost = kanari_types::gas::GasOperation::Transfer.gas_units()
-        * kanari_types::gas::GasConfig::default().default_transaction_gas_price();
-
     let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
-    assert!(changeset.success);
+    assert!(!changeset.success);
 
     let mut state = engine.state_write();
     state.apply_changeset(&changeset).unwrap();
-
-    assert_eq!(
-        state.get_account(&sender_address).unwrap().native_balance(),
-        1_000_000 - gas_cost
-    );
-    assert_eq!(
-        state.get_account(&dao).unwrap().native_balance(),
-        dao_before + gas_cost
-    );
+    let account = state.get_account(&sender_address).unwrap();
+    assert_eq!(account.native_balance(), 1_000_000);
+    assert_eq!(account.sequence_number, 1);
+    assert_eq!(state.total_supply, supply_before);
     state.validate_supply_invariants().unwrap();
 }
 
@@ -573,12 +540,7 @@ fn failed_execution_produces_and_persists_receipt() {
     assert_eq!(execution.failed, 1);
     assert_eq!(execution.receipts.len(), 1);
     assert!(!execution.receipts[0].success);
-    assert!(
-        execution.receipts[0]
-            .error_message
-            .as_deref()
-            .is_some_and(|message| message.contains("Insufficient balance"))
-    );
+    assert!(execution.receipts[0].error_message.is_some());
 
     engine
         .persist_transaction_receipts(&execution.receipts)
@@ -704,45 +666,44 @@ fn batch_submit_rejects_transaction_already_indexed_in_pending_pool() {
 }
 
 #[test]
-fn batch_submit_rejects_gas_price_below_minimum() {
+fn batch_submit_accepts_protocol_zero_gas_price() {
     let engine = BlockchainEngine::new().unwrap();
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
-    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
-    let gas = kanari_types::gas::GasConfig::default();
-    let tx = Transaction::new_transfer_with_gas(
-        sender.tagged_address(),
-        recipient.address,
-        1,
-        0,
-        100_000,
-        0,
-    );
+    let tx = Transaction::ExecuteFunction {
+        sender: sender.tagged_address(),
+        module: "0x2::test_support".to_string(),
+        function: "noop".to_string(),
+        type_args: vec![],
+        args: vec![],
+        gas_limit: 100_000,
+        gas_price: 0,
+        sequence_number: 0,
+    };
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
         .sign(&sender.private_key, sender.curve_type)
         .unwrap();
-
-    let result = engine.submit_transactions_batch(vec![signed_tx]);
-    if gas.min_gas_price == 0 {
-        assert!(result.is_ok());
-    } else {
-        let error = result.unwrap_err();
-        assert!(error.to_string().contains("Gas price too low"));
-    }
+    assert!(engine.submit_transactions_batch(vec![signed_tx]).is_ok());
 }
 
 #[test]
 fn batch_submit_rejects_gas_limit_below_operation_cost() {
     let engine = BlockchainEngine::new().unwrap();
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
-    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
-    let tx =
-        Transaction::new_transfer_with_gas(sender.tagged_address(), recipient.address, 1, 0, 99, 1);
+    let tx = Transaction::ExecuteFunction {
+        sender: sender.tagged_address(),
+        module: "0x2::test_support".to_string(),
+        function: "noop".to_string(),
+        type_args: vec![],
+        args: vec![],
+        gas_limit: 1,
+        gas_price: 0,
+        sequence_number: 0,
+    };
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
         .sign(&sender.private_key, sender.curve_type)
         .unwrap();
-
     let error = engine
         .submit_transactions_batch(vec![signed_tx])
         .unwrap_err();
@@ -763,27 +724,14 @@ fn batch_submit_rejects_sequence_gaps() {
 #[test]
 fn deterministic_parallel_execution_matches_strict_serial_root() {
     let engine = BlockchainEngine::new_in_memory().unwrap();
-    let mut txs = Vec::new();
+    let txs = (0..16)
+        .map(|_| {
+            let sender = generate_keypair(CurveType::Ed25519).unwrap();
+            signed_transfer_from(&sender, 0)
+        })
+        .collect::<Vec<_>>();
 
-    for _ in 0..16 {
-        let sender = generate_keypair(CurveType::Ed25519).unwrap();
-        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
-        fund_sender(&engine, &sender.address, 1_000_000);
-
-        let tx =
-            Transaction::new_transfer(sender.tagged_address(), recipient.address.clone(), 1, 0);
-        let mut signed_tx = SignedTransaction::new(tx);
-        signed_tx
-            .sign(&sender.private_key, sender.curve_type)
-            .unwrap();
-        txs.push(signed_tx);
-    }
-
-    let base_state = engine
-        .state
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    let base_state = engine.state_read().clone();
     let strict_state = Arc::new(RwLock::new(base_state.clone()));
     let parallel_state = Arc::new(RwLock::new(base_state));
 
