@@ -3,7 +3,7 @@
 
 use crate::command::common::{
     check_node_connection, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, normalize_addr,
-    resolve_sender,
+    resolve_sender, resolve_transaction_gas,
 };
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -48,6 +48,7 @@ impl Transfer {
         let from_addr = resolve_sender(self.from.clone())?;
         let to_addr = normalize_addr(&self.to)?;
         let wallet = load_wallet_for(&from_addr, Some(self.password.clone()))?;
+        let (gas_limit, gas_price) = resolve_transaction_gas(None, None);
 
         eprintln!("Transferring Kanari tokens...");
         eprintln!("  From: {}", from_addr);
@@ -137,8 +138,8 @@ impl Transfer {
                 )
                 .context("Failed to serialize recipient address")?,
             ],
-            gas_limit: 100_000,
-            gas_price: 1000,
+            gas_limit,
+            gas_price,
             sequence_number: account.sequence_number,
             signature: None,
             execute_immediate: Some(true),
