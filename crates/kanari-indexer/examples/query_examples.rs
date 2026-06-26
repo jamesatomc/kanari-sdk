@@ -1,6 +1,8 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
+
 //! Example demonstrating various query patterns
 
 use anyhow::Result;

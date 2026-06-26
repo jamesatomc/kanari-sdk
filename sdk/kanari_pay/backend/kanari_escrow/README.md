@@ -34,6 +34,16 @@ STATE_CANCELLED (5)  → Deal cancelled, funds returned
 
 ## Usage
 
+### CLI Note
+
+When calling these entry functions through `kanari move call`, pass a non-zero gas price on networks that enforce `min_gas_price >= 1`.
+
+Example:
+
+```bash
+cargo r -p kanari move call --gas-price 1000 --package <PACKAGE> --module usdc --function mint --args <amount> <recipient>
+```
+
 ### 1. Create a Deal (Buyer)
 
 ```move

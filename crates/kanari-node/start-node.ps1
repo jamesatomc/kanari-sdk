@@ -45,6 +45,20 @@ if ($localIp) {
 Write-Host '========================================' -ForegroundColor Cyan
 Write-Host ''
 
+$peerPortProcess = Get-ListeningProcessForPort -Port $p2pPort
+if ($peerPortProcess) {
+    Write-Host "Error: P2P port $p2pPort is already in use by PID $($peerPortProcess.Id) ($($peerPortProcess.ProcessName))." -ForegroundColor Red
+    Write-Host "Stop the old node first, or relaunch via setup-multi-node.ps1 so stale processes are cleaned automatically." -ForegroundColor Yellow
+    exit 1
+}
+
+$rpcPortProcess = Get-ListeningProcessForPort -Port $rpcPort
+if ($rpcPortProcess) {
+    Write-Host "Error: RPC port $rpcPort is already in use by PID $($rpcPortProcess.Id) ($($rpcPortProcess.ProcessName))." -ForegroundColor Red
+    Write-Host "Stop the old node first, or relaunch via setup-multi-node.ps1 so stale processes are cleaned automatically." -ForegroundColor Yellow
+    exit 1
+}
+
 try {
     $exeInfo = Find-KanariNodeExecutable
     $exePath = $exeInfo.Path

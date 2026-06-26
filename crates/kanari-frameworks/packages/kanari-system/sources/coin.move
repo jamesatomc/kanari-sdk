@@ -210,7 +210,7 @@ module kanari_system::coin {
 
 
     // ==========================================
-    // 🟢 Functions to update CoinMetadata
+    // Functions to update CoinMetadata
     // ==========================================
 
     /// Update the icon URL for the given coin type. 
@@ -221,6 +221,7 @@ module kanari_system::coin {
         url: option::Option<url::Url>
     ) {
         metadata.icon_url = url;
+        object::save_object(metadata);
     }
 
     /// Update the name for the given coin type.
@@ -230,6 +231,7 @@ module kanari_system::coin {
         name: string::String
     ) {
         metadata.name = name;
+        object::save_object(metadata);
     }
 
     /// Update the symbol for the given coin type.
@@ -239,6 +241,7 @@ module kanari_system::coin {
         symbol: ascii::String
     ) {
         metadata.symbol = symbol;
+        object::save_object(metadata);
     }
 
     /// Update the description for the given coin type.
@@ -248,12 +251,19 @@ module kanari_system::coin {
         description: string::String
     ) {
         metadata.description = description;
+        object::save_object(metadata);
     }
     
     // --- Deprecated/Legacy functions ---
 
     public fun treasury_into_supply<T>(_cap: &mut TreasuryCap<T>): kanari_system::balance::Supply<T> {
-        kanari_system::balance::new_supply<T>()
+        let supply = kanari_system::balance::new_supply<T>();
+        let total = _cap.total_supply;
+        if (total > 0) {
+            let minted = kanari_system::balance::increase_supply(&mut supply, total);
+            let _ = kanari_system::balance::destroy(minted);
+        };
+        supply
     }
 
 }

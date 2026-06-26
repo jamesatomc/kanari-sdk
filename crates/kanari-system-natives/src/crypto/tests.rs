@@ -571,7 +571,7 @@ fn generate_p256_test_vectors() {
 
     // Verify it works
     use p256::ecdsa::signature::Verifier;
-    let vk = P256VerifyingKey::from_sec1_bytes(&compressed_pk).unwrap();
+    let vk = P256VerifyingKey::from_sec1_bytes(compressed_pk).unwrap();
     let sig = P256Signature::from_bytes(&sig_bytes).unwrap();
     let verified = vk.verify(msg, &sig).is_ok();
     println!(

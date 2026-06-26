@@ -6,6 +6,9 @@ module kanari_system::bag {
     use kanari_system::tx_context::TxContext;
     use kanari_system::dynamic_field;
 
+    #[test_only]
+    use kanari_system::tx_context;
+
     /// Error codes
     const EBagNotEmpty: u64 = 1;
 
@@ -56,5 +59,32 @@ module kanari_system::bag {
         let Bag { id, size } = bag;
         assert!(size == 0, EBagNotEmpty);
         object::delete(id);
+    }
+
+    #[test]
+    fun test_bag_dynamic_field_borrow_roundtrip() {
+        let ctx = tx_context::dummy();
+        let bag = new(&mut ctx);
+
+        add<u64, bool>(&mut bag, 1, true);
+        add<address, u64>(&mut bag, @0x2, 99);
+
+        assert!(contains(&bag, 1), 0);
+        assert!(contains(&bag, @0x2), 1);
+        assert!(*borrow<u64, bool>(&bag, 1), 2);
+        assert!(*borrow<address, u64>(&bag, @0x2) == 99, 3);
+
+        *borrow_mut<u64, bool>(&mut bag, 1) = false;
+        *borrow_mut<address, u64>(&mut bag, @0x2) = 123;
+        assert!(!*borrow<u64, bool>(&bag, 1), 4);
+        assert!(*borrow<address, u64>(&bag, @0x2) == 123, 5);
+        assert!(length(&bag) == 2, 6);
+
+        let flag = remove<u64, bool>(&mut bag, 1);
+        let amount = remove<address, u64>(&mut bag, @0x2);
+        assert!(!flag, 7);
+        assert!(amount == 123, 8);
+
+        destroy_empty(bag);
     }
 }

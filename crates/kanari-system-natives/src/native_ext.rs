@@ -20,11 +20,18 @@ where
 {
     let exts = context.extensions_mut();
 
-    // Try to get the extension, catch panic if it doesn't exist
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let has_ext = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = exts.get_mut::<E>();
+    }))
+    .is_ok();
+
+    if !has_ext {
+        exts.add(E::default());
+    }
+
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let ext = exts.get_mut::<E>();
         f(ext)
-    }));
-
-    result.ok()
+    }))
+    .ok()
 }

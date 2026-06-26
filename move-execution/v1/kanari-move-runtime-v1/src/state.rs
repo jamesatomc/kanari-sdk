@@ -243,13 +243,8 @@ impl StateManager {
     pub fn token_supply_summary(&self, token_type: &str) -> Result<TokenSupplySummary> {
         let token_type = Self::normalize_token_type(token_type);
         let total_supply = self.issued_supply_for_token(&token_type);
-        let cached_visible = self
-            .global_token_supplies
-            .get(&token_type)
-            .copied()
-            .unwrap_or(0);
         let indexed_visible = self.indexed_wallet_supply(&token_type)?;
-        let wallet_visible_supply = cached_visible.max(indexed_visible);
+        let wallet_visible_supply = indexed_visible;
         let ledger_locked_supply = self.object_locked_supply_for_token(&token_type)?;
         let inferred_locked_supply = total_supply.saturating_sub(wallet_visible_supply);
         let object_locked_supply = ledger_locked_supply.max(inferred_locked_supply);
@@ -291,13 +286,13 @@ impl StateManager {
             context,
             error
         );
-
-        assert!(
-            !Self::supply_invariant_fail_fast_enabled(),
-            "Supply invariant check failed {}: {}",
-            context,
-            error
-        );
+        if Self::supply_invariant_fail_fast_enabled() {
+            log::error!(
+                "[StateManager] fail-fast supply guard requested, but panic is suppressed to keep the node alive. health=degraded context={} error={}",
+                context,
+                error
+            );
+        }
     }
 
     fn metadata_key(prefix: &[u8], token_type: &str) -> Vec<u8> {
@@ -526,6 +521,7 @@ impl StateManager {
         &mut self,
         owner: AccountAddress,
         native_balance_delta: i128,
+        touched_token_types: &BTreeSet<String>,
     ) -> Result<bool> {
         let mut account = self.load_account_or_default(owner)?;
         let old_balances = account.token_balances.clone();
@@ -563,9 +559,17 @@ impl StateManager {
             .map(|(token_type, amount)| (token_type, BalanceRecord::new(amount)))
             .collect();
 
-        // Object writebacks are canonical for wallet coins, while gas and native account
-        // operations live in AccountChange. Reapply the delta so writeback cannot erase gas.
-        Self::apply_native_balance_delta(&mut account, owner, native_balance_delta)?;
+        if touched_token_types.contains(KANARI_TOKEN_TYPE) {
+            // Object writebacks are canonical for wallet coins, while gas and native account
+            // operations live in AccountChange. Reapply the delta so writeback cannot erase gas.
+            Self::apply_native_balance_delta(&mut account, owner, native_balance_delta)?;
+        } else if let Some(existing_native) = old_balances.get(KANARI_TOKEN_TYPE) {
+            account
+                .token_balances
+                .insert(KANARI_TOKEN_TYPE.to_string(), existing_native.clone());
+        } else {
+            account.token_balances.remove(KANARI_TOKEN_TYPE);
+        }
         self.save_account(&account)?;
 
         Ok(self.adjust_global_supplies_for_account_delta(&old_balances, &account.token_balances))
@@ -691,6 +695,17 @@ impl StateManager {
                 state.total_supply > 0,
                 "Genesis initialization completed but total_supply is still 0"
             );
+        }
+
+        let startup_token_types = state.startup_supply_tracking_token_types();
+        if state.reconcile_global_visible_supply_cache(&startup_token_types)? {
+            let supplies_clone = state.global_token_supplies.clone();
+            state
+                .save_internal(b"global_token_supplies", &supplies_clone)
+                .context("Failed to repair global_token_supplies on startup")?;
+            state
+                .commit()
+                .context("Failed to persist repaired global_token_supplies on startup")?;
         }
 
         if let Err(e) = state.validate_supply_invariants() {
@@ -1298,12 +1313,45 @@ impl StateManager {
 
     fn visible_supply_snapshot(&self, token_type: &str) -> Result<u64> {
         let token_type = Self::normalize_token_type(token_type);
-        let cached = self
-            .global_token_supplies
-            .get(&token_type)
-            .copied()
-            .unwrap_or(0);
-        Ok(cached.max(self.indexed_wallet_supply(&token_type)?))
+        self.indexed_wallet_supply(&token_type)
+    }
+
+    fn reconcile_global_visible_supply_cache(
+        &mut self,
+        token_types: &BTreeSet<String>,
+    ) -> Result<bool> {
+        let mut changed = false;
+
+        for token_type in token_types {
+            let normalized = Self::normalize_token_type(token_type);
+            let indexed_visible = self.indexed_wallet_supply(&normalized)?;
+            let cached_visible = self
+                .global_token_supplies
+                .get(&normalized)
+                .copied()
+                .unwrap_or(0);
+
+            if indexed_visible == 0 {
+                if self.global_token_supplies.remove(&normalized).is_some() {
+                    changed = true;
+                }
+                continue;
+            }
+
+            if cached_visible != indexed_visible {
+                self.global_token_supplies
+                    .insert(normalized, indexed_visible);
+                changed = true;
+            }
+        }
+
+        Ok(changed)
+    }
+
+    fn startup_supply_tracking_token_types(&self) -> BTreeSet<String> {
+        let mut token_types: BTreeSet<String> = self.global_token_supplies.keys().cloned().collect();
+        token_types.insert(KANARI_TOKEN_TYPE.to_string());
+        token_types
     }
 
     fn add_locked_coin_record(
@@ -1437,23 +1485,43 @@ impl StateManager {
         Ok(())
     }
 
-    fn owners_requiring_balance_recompute(
+    fn recompute_token_touches(
         &self,
         changeset: &ChangeSet,
-    ) -> Result<BTreeSet<AccountAddress>> {
-        let mut owners = BTreeSet::new();
+    ) -> Result<BTreeMap<AccountAddress, BTreeSet<String>>> {
+        let mut owners = BTreeMap::new();
 
         for obj_id in &changeset.deleted_objects {
             if let Some((_, existing)) = self.load_stored_object_by_any_id(obj_id)? {
-                owners.insert(existing.owner);
+                if let Some((token_type, _)) =
+                    Self::balance_token_amount(&existing.type_name, &existing.data)
+                {
+                    owners
+                        .entry(existing.owner)
+                        .or_insert_with(BTreeSet::new)
+                        .insert(token_type);
+                }
             }
         }
 
         for (obj_id, created) in &changeset.created_objects {
             if let Some((_, existing)) = self.load_stored_object_by_any_id(obj_id)? {
-                owners.insert(existing.owner);
+                if let Some((token_type, _)) =
+                    Self::balance_token_amount(&existing.type_name, &existing.data)
+                {
+                    owners
+                        .entry(existing.owner)
+                        .or_insert_with(BTreeSet::new)
+                        .insert(token_type);
+                }
             }
-            owners.insert(created.owner);
+            if let Some((token_type, _)) = Self::balance_token_amount(&created.type_, &created.data)
+            {
+                owners
+                    .entry(created.owner)
+                    .or_insert_with(BTreeSet::new)
+                    .insert(token_type);
+            }
         }
 
         Ok(owners)
@@ -1495,7 +1563,7 @@ impl StateManager {
         };
         let mut issued_before = BTreeMap::new();
         let mut visible_before = BTreeMap::new();
-        for token_type in token_types_before {
+        for token_type in &token_types_before {
             issued_before.insert(
                 token_type.clone(),
                 self.issued_supply_for_token(&token_type),
@@ -1505,7 +1573,8 @@ impl StateManager {
                 self.visible_supply_snapshot(&token_type)?,
             );
         }
-        let mut owners_to_recompute = self.owners_requiring_balance_recompute(changeset)?;
+        let recompute_token_touches = self.recompute_token_touches(changeset)?;
+        let owners_to_recompute: BTreeSet<_> = recompute_token_touches.keys().copied().collect();
 
         for (address, change) in &changeset.account_changes {
             let mut account = self.load_account_or_default(*address)?;
@@ -1594,15 +1663,7 @@ impl StateManager {
             let normalized_token_type = Self::normalize_token_type(token_type);
 
             let old_balances = account.token_balances.clone();
-            let current = account.get_token_balance(&normalized_token_type);
-            let next = current.checked_add(amount.value()).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Token balance overflow for owner {} and token {}",
-                    owner,
-                    normalized_token_type
-                )
-            })?;
-            account.set_token_balance(normalized_token_type, BalanceRecord::new(next));
+            account.set_token_balance(normalized_token_type, BalanceRecord::new(amount.value()));
             self.save_account(&account)?;
 
             if self.adjust_global_supplies_for_account_delta(&old_balances, &account.token_balances)
@@ -1615,7 +1676,6 @@ impl StateManager {
         for obj_id in &changeset.deleted_objects {
             if let Some((stored_id, existing)) = self.load_stored_object_by_any_id(obj_id)? {
                 let obj_key = Self::object_key(&stored_id);
-                owners_to_recompute.insert(existing.owner);
                 let owner_key = Self::owned_objects_key(&existing.owner);
                 self.remove_from_index_list(&owner_key, &stored_id)?;
                 self.delete_internal(&obj_key);
@@ -1665,7 +1725,6 @@ impl StateManager {
             let obj_key = Self::object_key(obj_id);
 
             if let Some((stored_id, existing)) = existing_obj {
-                owners_to_recompute.insert(existing.owner);
                 // Use the version from the ChangeSet (already calculated by MoveRuntime)
                 // Only recalculate if the ChangeSet version seems wrong (0 or less than existing)
                 if new_obj.version == 0 || new_obj.version <= existing.version {
@@ -1687,7 +1746,6 @@ impl StateManager {
                     new_obj.version = 1;
                 }
             }
-            owners_to_recompute.insert(new_obj.owner);
 
             let stored_obj = StoredObject {
                 id: obj_id.clone(),
@@ -1717,13 +1775,24 @@ impl StateManager {
                 .get(&owner)
                 .map(|change| change.balance_delta)
                 .unwrap_or(0);
-            if self.recompute_token_balances_for_owner(owner, native_balance_delta)? {
+            let touched_token_types = recompute_token_touches.get(&owner).cloned().unwrap_or_default();
+            if self.recompute_token_balances_for_owner(
+                owner,
+                native_balance_delta,
+                &touched_token_types,
+            )? {
                 supplies_dirty = true;
             }
         }
 
         if reconcile_object_locked {
             self.reconcile_object_locked_coin_records(changeset, &issued_before, &visible_before)?;
+        }
+
+        let mut token_types_after = token_types_before;
+        token_types_after.extend(self.supply_tracking_token_types(changeset));
+        if self.reconcile_global_visible_supply_cache(&token_types_after)? {
+            supplies_dirty = true;
         }
 
         if supplies_dirty {

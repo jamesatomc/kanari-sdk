@@ -753,14 +753,21 @@ class _EscrowScreenState extends State<EscrowScreen>
     final balanceOnlyOptions = allOptions
         .where((option) => !option.isSpendable)
         .toList();
+    final selectedOption = allOptions.cast<_EscrowTokenOption?>().firstWhere(
+      (option) => option?.tokenType == _selectedTokenType,
+      orElse: () => null,
+    );
+    final selectedIsSpendable = selectedOption?.isSpendable ?? false;
 
     if (_selectedTokenType != null &&
-        !spendableOptions.any(
+        !allOptions.any(
           (option) => option.tokenType == _selectedTokenType,
         )) {
-      _selectedTokenType = spendableOptions.isEmpty
+      _selectedTokenType = allOptions.isEmpty
           ? null
-          : spendableOptions.first.tokenType;
+          : (spendableOptions.isNotEmpty
+                ? spendableOptions.first.tokenType
+                : allOptions.first.tokenType);
     }
 
     return SingleChildScrollView(
@@ -780,12 +787,12 @@ class _EscrowScreenState extends State<EscrowScreen>
                     padding: EdgeInsets.only(top: 12),
                     child: LinearProgressIndicator(),
                   )
-                else if (spendableOptions.isEmpty)
+                else if (allOptions.isEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 12),
                     child: const AppStatusBanner(
                       message:
-                          'No spendable escrow token was found in this wallet yet.',
+                          'No escrow-compatible token was found in this wallet yet.',
                       tone: AppStatusTone.warning,
                     ),
                   )
@@ -798,10 +805,11 @@ class _EscrowScreenState extends State<EscrowScreen>
                       prefixIcon: Icons.account_balance_wallet_outlined,
                       isExpanded:
                           true, // ← เพิ่มเพื่อให้ dropdown ใช้พื้นที่เต็มที่
-                      items: spendableOptions
+                      items: allOptions
                           .map(
                             (option) => DropdownMenuItem<String>(
                               value: option.tokenType,
+                              enabled: option.isSpendable,
                               child: Text(
                                 option.label,
                                 overflow:
@@ -817,6 +825,15 @@ class _EscrowScreenState extends State<EscrowScreen>
                                 _selectedTokenType = value;
                               });
                             },
+                    ),
+                  ),
+                if (selectedOption != null && !selectedIsSpendable)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 12),
+                    child: AppStatusBanner(
+                      message:
+                          'Selected token is balance-only right now. Escrow needs a spendable Coin object for this token first.',
+                      tone: AppStatusTone.warning,
                     ),
                   ),
                 if (balanceOnlyOptions.isNotEmpty)
@@ -878,10 +895,10 @@ class _EscrowScreenState extends State<EscrowScreen>
           const SizedBox(height: 24),
           // ใช้ AppWideButton แทน ElevatedButton
           _buildPrimaryButton(
-            onPressed: _createDeal,
+            onPressed: selectedIsSpendable ? _createDeal : null,
             icon: Icons.lock_outline,
             label: 'Create Deal & Lock Funds',
-            isLoading: _isLoading || spendableOptions.isEmpty,
+            isLoading: _isLoading,
           ),
         ],
       ),

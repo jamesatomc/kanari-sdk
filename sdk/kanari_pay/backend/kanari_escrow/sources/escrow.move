@@ -23,7 +23,8 @@ module kanari_escrow::escrow {
 
     // ─── Structs ─────────────────────────────────────────────────────
 
-    // Core escrow deal — stored under buyer's address
+    // Core escrow deal — stored as a shared-style object so both buyer and
+    // seller can access it by object id while Move-level checks enforce roles.
     struct EscrowDeal<phantom CoinType> has key, store {
         id:             object::UID,
         deal_id:        String,
@@ -105,8 +106,10 @@ module kanari_escrow::escrow {
             funds: option::some(funds),
         };
 
-        // Transfer ownership to buyer
-        transfer::public_transfer(deal, buyer_addr);
+        // Store as shared-style object so later entry functions can mutably
+        // borrow it from either buyer or seller while role checks below still
+        // control the allowed state transitions.
+        transfer::public_transfer(deal, @0x0);
 
         // Create proof record
         let entry = ProofEntry {
@@ -124,8 +127,8 @@ module kanari_escrow::escrow {
             entries,
         };
 
-        // Transfer proof to buyer
-        transfer::public_transfer(proof, buyer_addr);
+        // Proof follows the same shared-style ownership model as the deal.
+        transfer::public_transfer(proof, @0x0);
 
         // Emit event
         event::emit(DealCreated {

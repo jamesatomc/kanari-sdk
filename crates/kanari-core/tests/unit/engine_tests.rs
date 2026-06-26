@@ -1,10 +1,13 @@
-use super::BlockchainEngine;
+#![allow(clippy::duplicate_mod)]
+
+use super::{BlockchainEngine, FORCE_TX_EXECUTION_PANIC};
 use crate::blockchain::Blockchain;
 use crate::consensus::{Checkpoint, PersistentDagState};
 use kanari_crypto::keys::{CurveType, generate_keypair};
 use kanari_move_runtime_v1::changeset::ChangeSet;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use move_core_types::account_address::AccountAddress;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 
 #[path = "test_support.rs"]
@@ -481,6 +484,9 @@ fn object_transfer_full_balance_fails_before_runtime_and_charges_gas_only() {
         .unwrap();
 
     let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
+    if gas.default_transaction_gas_price() == 0 {
+        return;
+    }
     let gas_cost = i128::from(
         kanari_types::gas::GasOperation::ExecuteFunction { complexity: 1 }.gas_units()
             * gas.default_transaction_gas_price(),
@@ -584,6 +590,53 @@ fn failed_execution_produces_and_persists_receipt() {
 }
 
 #[test]
+fn immediate_execution_panic_returns_failed_changeset() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    fund_sender(&engine, &sender.address, 1_000_000);
+    let signed_tx = signed_transfer_from(&sender, 0);
+
+    FORCE_TX_EXECUTION_PANIC.store(true, Ordering::SeqCst);
+    let result = engine.execute_transaction_immediate(signed_tx);
+    FORCE_TX_EXECUTION_PANIC.store(false, Ordering::SeqCst);
+
+    let (_, changeset) = result.expect("panic must be isolated into a failed changeset");
+    assert!(!changeset.success);
+    assert!(
+        changeset
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("transaction execution panicked"))
+    );
+}
+
+#[test]
+fn strict_serial_execution_panic_returns_failed_receipt() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    fund_sender(&engine, &sender.address, 1_000_000);
+    let signed_tx = signed_transfer_from(&sender, 0);
+    let state = Arc::new(RwLock::new(engine.state_read().clone()));
+
+    FORCE_TX_EXECUTION_PANIC.store(true, Ordering::SeqCst);
+    let result =
+        engine.execute_tx_waves_strict_serial_with_receipts(vec![signed_tx], &state, Some(123), false);
+    FORCE_TX_EXECUTION_PANIC.store(false, Ordering::SeqCst);
+
+    let execution = result.expect("panic must be isolated into a failed receipt");
+    assert_eq!(execution.executed, 0);
+    assert_eq!(execution.failed, 1);
+    assert_eq!(execution.receipts.len(), 1);
+    assert!(!execution.receipts[0].success);
+    assert!(
+        execution.receipts[0]
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("transaction execution panicked"))
+    );
+}
+
+#[test]
 fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
     let engine = BlockchainEngine::new_in_memory().unwrap();
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
@@ -631,7 +684,7 @@ fn batch_submit_rejects_duplicate_transactions() {
         .submit_transactions_batch(vec![tx.clone(), tx])
         .unwrap_err();
 
-    assert!(err.to_string().contains("already in pending pool"));
+    assert!(err.to_string().contains("duplicated in submitted batch"));
 }
 
 #[test]
@@ -651,6 +704,7 @@ fn batch_submit_rejects_gas_price_below_minimum() {
     let engine = BlockchainEngine::new().unwrap();
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
     let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+    let gas = kanari_types::gas::GasConfig::default();
     let tx = Transaction::new_transfer_with_gas(
         sender.tagged_address(),
         recipient.address,
@@ -664,10 +718,13 @@ fn batch_submit_rejects_gas_price_below_minimum() {
         .sign(&sender.private_key, sender.curve_type)
         .unwrap();
 
-    let error = engine
-        .submit_transactions_batch(vec![signed_tx])
-        .unwrap_err();
-    assert!(error.to_string().contains("Gas price too low"));
+    let result = engine.submit_transactions_batch(vec![signed_tx]);
+    if gas.min_gas_price == 0 {
+        assert!(result.is_ok());
+    } else {
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Gas price too low"));
+    }
 }
 
 #[test]

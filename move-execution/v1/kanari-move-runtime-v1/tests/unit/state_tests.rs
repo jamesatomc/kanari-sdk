@@ -1,13 +1,39 @@
 use super::*;
+#[allow(clippy::duplicate_mod)]
 #[path = "test_support.rs"]
 mod test_support;
 
+use std::sync::{Mutex, OnceLock};
 use test_support::{dao_address, set_native_supply_for_test, test_addr};
+
+fn supply_env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[test]
 fn in_memory_state_initializes_smt_backend() {
     let state = StateManager::new_in_memory_with_smt();
     assert!(state.smt.is_some());
+}
+
+#[test]
+fn supply_invariant_reporting_never_panics_even_with_fail_fast_enabled() {
+    let _guard = supply_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let previous = std::env::var("KANARI_FAIL_FAST_ON_SUPPLY_MISMATCH").ok();
+    unsafe { std::env::set_var("KANARI_FAIL_FAST_ON_SUPPLY_MISMATCH", "true") };
+
+    let error = anyhow::anyhow!("synthetic invariant failure");
+    let result = std::panic::catch_unwind(|| {
+        StateManager::report_supply_invariant_violation("during test", &error);
+    });
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var("KANARI_FAIL_FAST_ON_SUPPLY_MISMATCH", value) },
+        None => unsafe { std::env::remove_var("KANARI_FAIL_FAST_ON_SUPPLY_MISMATCH") },
+    }
+
+    assert!(result.is_ok(), "invariant reporting must not panic");
 }
 
 #[test]
@@ -166,6 +192,292 @@ fn token_balance_hint_is_ignored_when_owner_is_recomputed_from_objects() -> Resu
             .token_supply_summary(KANARI_TOKEN_TYPE)?
             .wallet_visible_supply,
         base.wallet_visible_supply + 210_000
+    );
+    state.validate_supply_invariants()?;
+
+    Ok(())
+}
+
+#[test]
+fn non_balance_created_objects_do_not_trigger_native_balance_recompute() -> Result<()> {
+    let sender = test_addr("0x1111")?;
+    let dao = dao_address()?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+    let dao_balance_before = state
+        .get_account(&dao)
+        .map(|account| account.native_balance())
+        .unwrap_or(0);
+
+    set_native_supply_for_test(&mut state, base.total_supply + 1_000)?;
+
+    let mut coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+
+    let mut init = ChangeSet::new();
+    init.created_objects.push((
+        "0xaaaa".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+            data: coin_data,
+            version: 1,
+        },
+    ));
+    state.apply_changeset(&init)?;
+
+    let mut cs = ChangeSet::new();
+    cs.created_objects.push((
+        "0xbbbb".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: "0x2::coin::TreasuryCap<0x2::test::TEST>".to_string(),
+            data: vec![0u8; UID_SIZE + U64_SIZE],
+            version: 1,
+        },
+    ));
+    cs.created_objects.push((
+        "0xcccc".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: "0x2::coin::CoinMetadata<0x2::test::TEST>".to_string(),
+            data: vec![0u8; 64],
+            version: 1,
+        },
+    ));
+    cs.get_or_create_change(sender).debit(210);
+    cs.collect_gas(dao, 210);
+
+    state.apply_changeset(&cs)?;
+
+    assert_eq!(state.get_account(&sender).unwrap().native_balance(), 790);
+    assert_eq!(
+        state.get_account(&dao).unwrap().native_balance(),
+        dao_balance_before + 210
+    );
+    assert_eq!(
+        state
+            .token_supply_summary(KANARI_TOKEN_TYPE)?
+            .wallet_visible_supply,
+        base.wallet_visible_supply + 1_000
+    );
+    state.validate_supply_invariants()?;
+
+    Ok(())
+}
+
+#[test]
+fn mint_flow_reconciles_stale_native_visible_supply_cache() -> Result<()> {
+    let sender = test_addr("0x1111")?;
+    let dao = dao_address()?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+    let dao_balance_before = state
+        .get_account(&dao)
+        .map(|account| account.native_balance())
+        .unwrap_or(0);
+
+    set_native_supply_for_test(&mut state, base.total_supply + 1_000)?;
+
+    let mut native_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    native_coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut init = ChangeSet::new();
+    init.created_objects.push((
+        "0xaaaa".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+            data: native_coin_data,
+            version: 1,
+        },
+    ));
+    state.apply_changeset(&init)?;
+
+    state.global_token_supplies.insert(
+        KANARI_TOKEN_TYPE.to_string(),
+        base.wallet_visible_supply + 1_000 + 6_648,
+    );
+
+    let mut custom_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    custom_coin_data[UID_SIZE..].copy_from_slice(&1_000_000u64.to_le_bytes());
+    let mut treasury_data = vec![0u8; UID_SIZE + U64_SIZE];
+    treasury_data[UID_SIZE..].copy_from_slice(&1_000_000u64.to_le_bytes());
+
+    let mut cs = ChangeSet::new();
+    cs.created_objects.push((
+        "0xtreasury".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: "0x2::coin::TreasuryCap<0x2::test::TEST>".to_string(),
+            data: treasury_data,
+            version: 2,
+        },
+    ));
+    cs.created_objects.push((
+        "0xcoin".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: "0x2::coin::Coin<0x2::test::TEST>".to_string(),
+            data: custom_coin_data,
+            version: 1,
+        },
+    ));
+    cs.add_token_balance_set(sender, "0x2::test::TEST".to_string(), 1_000_000);
+    cs.get_or_create_change(sender).debit(210);
+    cs.collect_gas(dao, 210);
+
+    state.apply_changeset(&cs)?;
+
+    let native_summary = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+    assert_eq!(
+        native_summary.wallet_visible_supply,
+        base.wallet_visible_supply + 1_000
+    );
+    assert_eq!(
+        state
+            .global_token_supplies
+            .get(KANARI_TOKEN_TYPE)
+            .copied()
+            .unwrap_or(0),
+        base.wallet_visible_supply + 1_000
+    );
+    assert_eq!(
+        state.get_account(&dao).unwrap().native_balance(),
+        dao_balance_before + 210
+    );
+    state.validate_supply_invariants()?;
+
+    Ok(())
+}
+
+#[test]
+fn custom_coin_recompute_does_not_restore_prior_native_gas_debits() -> Result<()> {
+    let sender = test_addr("0x1111")?;
+    let dao = dao_address()?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+    let dao_balance_before = state
+        .get_account(&dao)
+        .map(|account| account.native_balance())
+        .unwrap_or(0);
+
+    set_native_supply_for_test(&mut state, base.total_supply + 1_000)?;
+
+    let mut native_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    native_coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut init = ChangeSet::new();
+    init.created_objects.push((
+        "0xaaaa".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+            data: native_coin_data,
+            version: 1,
+        },
+    ));
+    state.apply_changeset(&init)?;
+
+    let mut gas_only = ChangeSet::new();
+    gas_only.created_objects.push((
+        "0xtreasury".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: "0x2::coin::TreasuryCap<0x2::test::TEST>".to_string(),
+            data: vec![0u8; UID_SIZE + U64_SIZE],
+            version: 1,
+        },
+    ));
+    gas_only.created_objects.push((
+        "0xmetadata".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: "0x2::coin::CoinMetadata<0x2::test::TEST>".to_string(),
+            data: vec![0u8; 64],
+            version: 1,
+        },
+    ));
+    gas_only.get_or_create_change(sender).debit(210);
+    gas_only.collect_gas(dao, 210);
+    state.apply_changeset(&gas_only)?;
+
+    assert_eq!(state.get_account(&sender).unwrap().native_balance(), 790);
+    assert_eq!(
+        state.get_account(&dao).unwrap().native_balance(),
+        dao_balance_before + 210
+    );
+
+    let mut custom_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    custom_coin_data[UID_SIZE..].copy_from_slice(&1_000_000u64.to_le_bytes());
+    let mut mint_like = ChangeSet::new();
+    mint_like.created_objects.push((
+        "0xcoin".to_string(),
+        CreatedObject {
+            owner: sender,
+            uid: None,
+            id: None,
+            type_: "0x2::coin::Coin<0x2::test::TEST>".to_string(),
+            data: custom_coin_data,
+            version: 1,
+        },
+    ));
+    mint_like.add_token_balance_set(sender, "0x2::test::TEST".to_string(), 1_000_000);
+    state.apply_changeset(&mint_like)?;
+
+    assert_eq!(state.get_account(&sender).unwrap().native_balance(), 790);
+    assert_eq!(
+        state
+            .token_supply_summary(KANARI_TOKEN_TYPE)?
+            .wallet_visible_supply,
+        base.wallet_visible_supply + 1_000
+    );
+    state.validate_supply_invariants()?;
+
+    Ok(())
+}
+
+#[test]
+fn token_balance_hint_replaces_balance_instead_of_accumulating() -> Result<()> {
+    let owner = test_addr("0x1111")?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+
+    let account = Account::with_native_balance(owner, 210_000);
+    state.save_account(&account)?;
+    set_native_supply_for_test(&mut state, base.total_supply + 209_900)?;
+    state.global_token_supplies.insert(
+        KANARI_TOKEN_TYPE.to_string(),
+        base.wallet_visible_supply + 210_000,
+    );
+
+    let mut cs = ChangeSet::new();
+    cs.add_token_balance_set(owner, KANARI_TOKEN_TYPE.to_string(), 209_900);
+
+    state.apply_changeset(&cs)?;
+
+    assert_eq!(state.get_account(&owner).unwrap().native_balance(), 209_900);
+    assert_eq!(
+        state
+            .token_supply_summary(KANARI_TOKEN_TYPE)?
+            .wallet_visible_supply,
+        base.wallet_visible_supply + 209_900
     );
     state.validate_supply_invariants()?;
 

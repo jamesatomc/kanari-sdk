@@ -9,7 +9,9 @@ pub mod publish;
 pub mod test;
 pub mod verify;
 
-use kanari_system_natives::dynamic_field::DynamicFieldsExt;
+use kanari_system_natives::dynamic_field::{
+    DynamicFieldReferencesExt, DynamicFieldResolverExt, DynamicFieldsExt,
+};
 use kanari_system_natives::event::EventsExt;
 use kanari_system_natives::object::{DeletedObjectsExt, SavedObjectsExt};
 use kanari_system_natives::transfer_natives::TransferredObjectsExt;
@@ -84,6 +86,8 @@ impl MoveCommand {
                     exts.add(DeletedObjectsExt::default());
                     exts.add(SavedObjectsExt::default());
                     exts.add(DynamicFieldsExt::default());
+                    exts.add(DynamicFieldReferencesExt::default());
+                    exts.add(DynamicFieldResolverExt::default());
                     exts.add(kanari_system_natives::object::LoadedObjectsExt::default());
                     exts.add(kanari_system_natives::object::BorrowedObjectsExt::default());
                 }));

@@ -45,7 +45,7 @@ module kanari_escrow::usdt {
 
 /// Mint new USDT tokens
     /// Only the holder of TreasuryCap can call this
-    /// Usage: kanari move call --function mint --args <amount> <recipient>
+    /// Usage: kanari move call --gas-price 1000 --function mint --args <amount> <recipient>
     /// 
     /// This function mints tokens directly to the recipient's address
     /// The runtime will automatically create or update the recipient's Coin object
@@ -102,7 +102,7 @@ module kanari_escrow::usdt {
     // 🟢 Entry wrappers for CLI calling
     // ==========================================
 
-    /// Usage: kanari move call --function update_icon --args <TreasuryCap_ID> <Metadata_ID> "https://..."
+    /// Usage: kanari move call --gas-price 1000 --function update_icon --args <TreasuryCap_ID> <Metadata_ID> "https://..."
     public entry fun update_icon(
         treasury_cap: &TreasuryCap<USDT>,
         metadata: &mut coin::CoinMetadata<USDT>,
@@ -112,7 +112,7 @@ module kanari_escrow::usdt {
         coin::update_icon_url<USDT>(treasury_cap, metadata, option::some(new_url_obj));
     }
 
-    /// Usage: kanari move call --function update_name --args <TreasuryCap_ID> <Metadata_ID> "USDT Token"
+    /// Usage: kanari move call --gas-price 1000 --function update_name --args <TreasuryCap_ID> <Metadata_ID> "USDT Token"
     public entry fun update_name(
         treasury_cap: &TreasuryCap<USDT>,
         metadata: &mut coin::CoinMetadata<USDT>,
@@ -122,7 +122,7 @@ module kanari_escrow::usdt {
         coin::update_name<USDT>(treasury_cap, metadata, name_str);
     }
 
-    /// Usage: kanari move call --function update_symbol --args <TreasuryCap_ID> <Metadata_ID> "USDT"
+    /// Usage: kanari move call --gas-price 1000 --function update_symbol --args <TreasuryCap_ID> <Metadata_ID> "USDT"
     public entry fun update_symbol(
         treasury_cap: &TreasuryCap<USDT>,
         metadata: &mut coin::CoinMetadata<USDT>,
@@ -132,7 +132,7 @@ module kanari_escrow::usdt {
         coin::update_symbol<USDT>(treasury_cap, metadata, symbol_str);
     }
 
-    /// Usage: kanari move call --function update_description --args <TreasuryCap_ID> <Metadata_ID> "My new USDT description"
+    /// Usage: kanari move call --gas-price 1000 --function update_description --args <TreasuryCap_ID> <Metadata_ID> "My new USDT description"
     public entry fun update_description(
         treasury_cap: &TreasuryCap<USDT>,
         metadata: &mut coin::CoinMetadata<USDT>,
