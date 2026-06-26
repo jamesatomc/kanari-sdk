@@ -14,7 +14,7 @@ use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
 pub use kanari_rpc_api::{AccountInfo, BlockData, BlockchainStats, FullBlockData, ObjectInfo};
 use kanari_types::address::Address as KanariAddress;
 use kanari_types::event::Event;
-use kanari_types::gas_v2::{GasMeter, GasOperation};
+use kanari_types::{GasMeter, GasOperation};
 use kanari_types::transaction::{NativeCall, SignedTransaction, Transaction};
 use log::{error, info};
 use lru::LruCache;

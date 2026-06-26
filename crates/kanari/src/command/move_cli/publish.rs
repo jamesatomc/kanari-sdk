@@ -8,7 +8,7 @@ use crate::command::common::{
 };
 use anyhow::{Result, bail};
 use clap::*;
-use kanari_types::gas_v2::{GasEstimate, GasOperation};
+use kanari_types::{GasEstimate, GasOperation};
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use log::error;
 use move_package::BuildConfig;
