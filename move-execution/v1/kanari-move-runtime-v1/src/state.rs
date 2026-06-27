@@ -701,8 +701,6 @@ impl StateManager {
         Ok(None)
     }
 
-    // Helper to construct DB key for owned objects
-
     // helper for generating DB keys for Dynamic Fields
     fn dynamic_field_key(object_id: &str, name_bytes: &[u8]) -> Vec<u8> {
         let hash = hash_data_blake3(name_bytes);

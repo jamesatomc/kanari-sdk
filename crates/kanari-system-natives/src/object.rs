@@ -70,7 +70,7 @@ impl GasParameters {
     }
 }
 
-fn uid_address_bytes(uid_val: &move_vm_types::values::Value) -> Option<Vec<u8>> {
+pub(crate) fn uid_address_bytes(uid_val: &move_vm_types::values::Value) -> Option<Vec<u8>> {
     use move_core_types::runtime_value::{MoveStructLayout, MoveTypeLayout};
 
     // Support both:
@@ -593,3 +593,4 @@ mod tests {
         assert_eq!(all[0].object_id, obj.object_id);
     }
 }
+
