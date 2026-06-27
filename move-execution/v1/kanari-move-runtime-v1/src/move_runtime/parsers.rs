@@ -2,22 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::changeset::ChangeSet;
+use crate::common::ids::object_id_from_bytes;
 use kanari_types::event::Event;
 use log::debug;
-use move_core_types::account_address::AccountAddress;
 use move_core_types::effects::Op as MoveOp;
 
 impl super::MoveRuntime {
-    fn object_id_from_resource_bytes(bytes: &[u8]) -> Option<String> {
-        if bytes.len() < AccountAddress::LENGTH {
-            return None;
-        }
-
-        let mut arr = [0u8; AccountAddress::LENGTH];
-        arr.copy_from_slice(&bytes[..AccountAddress::LENGTH]);
-        Some(AccountAddress::new(arr).to_hex_literal())
-    }
-
     pub(crate) fn parse_move_changeset(
         &self,
         move_cs: &move_core_types::effects::ChangeSet,
@@ -43,7 +33,7 @@ impl super::MoveRuntime {
             for (struct_tag, op) in account_changes.resources() {
                 match op {
                     MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
-                        let Some(object_id) = Self::object_id_from_resource_bytes(bytes) else {
+                        let Some(object_id) = object_id_from_bytes(bytes) else {
                             debug!(
                                 "[PARSER] skipping resource without UID/ID: addr={} type={}",
                                 addr.to_hex_literal(),

@@ -1,6 +1,7 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::common::keys::owned_objects_key;
 use crate::storage::persistent_store::{PersistentStore, PersistentStoreError};
 use anyhow::Result;
 use kanari_crypto::hash_data_blake3;
@@ -112,12 +113,6 @@ impl ObjectStorage {
         key
     }
 
-    fn owned_objects_key(owner: &AccountAddress) -> Vec<u8> {
-        let mut key = b"owned_objects:".to_vec();
-        key.extend_from_slice(owner.as_ref());
-        key
-    }
-
     fn load_id_index(
         store: &PersistentStore,
         key: &[u8],
@@ -141,7 +136,7 @@ impl ObjectStorage {
         store: &PersistentStore,
         owner: &AccountAddress,
     ) -> Result<Vec<String>, ObjectStorageError> {
-        let canonical_key = Self::owned_objects_key(owner);
+        let canonical_key = owned_objects_key(owner);
         let canonical_ids = Self::load_id_index(store, &canonical_key)?;
         if !canonical_ids.is_empty() {
             return Ok(canonical_ids);
@@ -285,20 +280,20 @@ impl ObjectStorage {
 
             if let Some(old) = old_owner {
                 if old != owner {
-                    let old_key = Self::owned_objects_key(&old);
+                    let old_key = owned_objects_key(&old);
                     let mut old_ids = Self::load_id_index(store, &old_key)?;
                     if Self::remove_index_id(&mut old_ids, &id) {
                         Self::save_id_index(store, &old_key, &old_ids)?;
                     }
 
-                    let new_key = Self::owned_objects_key(&owner);
+                    let new_key = owned_objects_key(&owner);
                     let mut new_ids = Self::load_owned_object_ids(store, &owner)?;
                     if Self::add_index_id(&mut new_ids, &id) {
                         Self::save_id_index(store, &new_key, &new_ids)?;
                     }
                 }
             } else {
-                let new_key = Self::owned_objects_key(&owner);
+                let new_key = owned_objects_key(&owner);
                 let mut new_ids = Self::load_owned_object_ids(store, &owner)?;
                 if Self::add_index_id(&mut new_ids, &id) {
                     Self::save_id_index(store, &new_key, &new_ids)?;
@@ -378,13 +373,13 @@ impl ObjectStorage {
         if let Some(store) = &self.persistent {
             store.save(format!("object:{}", id).as_bytes(), &obj_to_persist)?;
 
-            let old_key = Self::owned_objects_key(&old_owner);
+            let old_key = owned_objects_key(&old_owner);
             let mut old_ids = Self::load_id_index(store, &old_key)?;
             if Self::remove_index_id(&mut old_ids, id) {
                 Self::save_id_index(store, &old_key, &old_ids)?;
             }
 
-            let new_key = Self::owned_objects_key(&new_owner);
+            let new_key = owned_objects_key(&new_owner);
             let mut new_ids = Self::load_owned_object_ids(store, &new_owner)?;
             if Self::add_index_id(&mut new_ids, id) {
                 Self::save_id_index(store, &new_key, &new_ids)?;
@@ -408,7 +403,7 @@ impl ObjectStorage {
             store.delete(format!("object:{}", id).as_bytes())?;
 
             if let Some(owner) = old_owner {
-                let owner_key = Self::owned_objects_key(&owner);
+                let owner_key = owned_objects_key(&owner);
                 let mut ids = Self::load_id_index(store, &owner_key)?;
                 if Self::remove_index_id(&mut ids, id) {
                     Self::save_id_index(store, &owner_key, &ids)?;
@@ -595,10 +590,7 @@ mod tests {
             &ObjectStorage::legacy_owner_key(&owner),
             &vec![stale_id.clone()],
         )?;
-        store.save(
-            &ObjectStorage::owned_objects_key(&owner),
-            &vec![canonical_id.clone()],
-        )?;
+        store.save(&owned_objects_key(&owner), &vec![canonical_id.clone()])?;
 
         let storage = ObjectStorage::new_with_store(store.clone())?;
         let objects = storage.get_objects_by_owner(&owner);
@@ -606,7 +598,7 @@ mod tests {
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].id, canonical_id);
         assert_eq!(
-            ObjectStorage::load_id_index(&store, &ObjectStorage::owned_objects_key(&owner))?,
+            ObjectStorage::load_id_index(&store, &owned_objects_key(&owner))?,
             vec![canonical_id]
         );
 
@@ -640,7 +632,7 @@ mod tests {
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].id, object_id);
         assert_eq!(
-            ObjectStorage::load_id_index(&store, &ObjectStorage::owned_objects_key(&owner))?,
+            ObjectStorage::load_id_index(&store, &owned_objects_key(&owner))?,
             vec!["0xcccc".to_string()]
         );
         assert!(

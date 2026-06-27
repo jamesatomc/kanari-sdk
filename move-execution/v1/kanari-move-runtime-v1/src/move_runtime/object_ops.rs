@@ -1,27 +1,14 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::common::ids::canonical_object_id;
 use crate::{changeset::ChangeSet, storage::object_storage::StoredObject};
 use kanari_system_natives::transfer_natives::TransferredObject;
 use log::debug;
-use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::StructTag;
 use std::str::FromStr;
 
 impl super::MoveRuntime {
-    fn canonical_object_id_str(object_id: &str) -> Option<String> {
-        let trimmed = object_id.trim();
-        let normalized = if trimmed.starts_with("0x") {
-            trimmed.to_string()
-        } else {
-            format!("0x{}", trimmed)
-        };
-
-        AccountAddress::from_hex_literal(&normalized)
-            .ok()
-            .map(|addr| addr.to_hex_literal())
-    }
-
     pub(crate) fn add_transferred_objects_to_changeset(
         &self,
         cs: &mut ChangeSet,
@@ -51,7 +38,12 @@ impl super::MoveRuntime {
                 continue;
             }
 
-            let Some(canonical_id) = Self::canonical_object_id_str(&id) else {
+            let normalized_id = if id.trim().starts_with("0x") {
+                id.clone()
+            } else {
+                format!("0x{}", id.trim())
+            };
+            let Some(canonical_id) = canonical_object_id(&normalized_id) else {
                 debug!("Skipping transferred object with invalid object id: {}", id);
                 continue;
             };
@@ -122,6 +114,8 @@ impl super::MoveRuntime {
 
 #[cfg(test)]
 mod tests {
+    use move_core_types::account_address::AccountAddress;
+
     use super::*;
     use crate::move_runtime::MoveRuntime;
 
@@ -150,7 +144,7 @@ mod tests {
         runtime.add_transferred_objects_to_changeset(&mut canonical, vec![object], true);
 
         assert_eq!(runtime.object_storage.count(), 1);
-        let canonical_id = MoveRuntime::canonical_object_id_str(&object_id).unwrap();
+        let canonical_id = canonical_object_id(&object_id).unwrap();
         assert!(runtime.object_storage.get_object(&canonical_id).is_some());
     }
 }

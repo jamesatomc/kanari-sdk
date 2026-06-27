@@ -1806,8 +1806,9 @@ mod tests {
             .get_account_info("0x1111")
             .expect("account info should be available");
 
-        assert_eq!(info.token_balances.get(KANARI_TOKEN_TYPE).copied(), Some(790));
+        assert_eq!(
+            info.token_balances.get(KANARI_TOKEN_TYPE).copied(),
+            Some(790)
+        );
     }
 }
-
-

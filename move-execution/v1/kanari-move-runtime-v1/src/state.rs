@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::changeset::{ChangeSet, CreatedObject};
+use crate::common::ids::canonical_object_id;
+use crate::common::keys::{metadata_key, object_key, owned_objects_key};
 use crate::storage::object_storage::StoredObject;
 use crate::storage::persistent_store::PersistentStore;
 use anyhow::{Context, Result, ensure};
@@ -283,19 +285,13 @@ impl StateManager {
         );
     }
 
-    fn metadata_key(prefix: &[u8], token_type: &str) -> Vec<u8> {
-        let mut key = prefix.to_vec();
-        key.extend_from_slice(token_type.as_bytes());
-        key
-    }
-
     fn save_token_metadata_field<T: Serialize + ?Sized>(
         &mut self,
         prefix: &[u8],
         token_type: &str,
         value: &T,
     ) -> Result<()> {
-        let key = Self::metadata_key(prefix, token_type);
+        let key = metadata_key(prefix, token_type);
         self.save_internal(&key, value)
     }
 
@@ -304,7 +300,7 @@ impl StateManager {
         prefix: &[u8],
         token_type: &str,
     ) -> Result<Option<T>> {
-        let key = Self::metadata_key(prefix, token_type);
+        let key = metadata_key(prefix, token_type);
         self.load_internal(&key)
     }
 
@@ -316,7 +312,7 @@ impl StateManager {
 
     /// Retrieves NFT IDs for the specified collection from the index
     pub fn get_collection_nft_ids(&self, collection_id: &str) -> Vec<String> {
-        self.load_index_list(&Self::metadata_key(b"collection_members:", collection_id))
+        self.load_index_list(&metadata_key(b"collection_members:", collection_id))
             .unwrap_or_default()
     }
     fn normalize_token_type(token_type: &str) -> String {
@@ -681,21 +677,10 @@ impl StateManager {
     }
 
     // Helper to construct DB key for object
-    fn object_key(id: &str) -> Vec<u8> {
-        let mut key = b"object:".to_vec();
-        key.extend_from_slice(id.as_bytes());
-        key
-    }
-
-    fn canonical_object_id(id: &str) -> Option<String> {
-        AccountAddress::from_hex_literal(id)
-            .ok()
-            .map(|addr| addr.to_hex_literal())
-    }
 
     fn object_lookup_ids(id: &str) -> Vec<String> {
         let mut ids = vec![id.to_string()];
-        if let Some(canonical_id) = Self::canonical_object_id(id)
+        if let Some(canonical_id) = canonical_object_id(id)
             && canonical_id != id
         {
             ids.push(canonical_id);
@@ -708,7 +693,7 @@ impl StateManager {
         object_id: &str,
     ) -> Result<Option<(String, StoredObject)>> {
         for candidate_id in Self::object_lookup_ids(object_id) {
-            let obj_key = Self::object_key(&candidate_id);
+            let obj_key = object_key(&candidate_id);
             if let Some(stored) = self.load_internal::<StoredObject>(&obj_key)? {
                 return Ok(Some((candidate_id, stored)));
             }
@@ -717,11 +702,6 @@ impl StateManager {
     }
 
     // Helper to construct DB key for owned objects
-    fn owned_objects_key(owner: &AccountAddress) -> Vec<u8> {
-        let mut key = b"owned_objects:".to_vec();
-        key.extend_from_slice(owner.as_ref());
-        key
-    }
 
     // helper for generating DB keys for Dynamic Fields
     fn dynamic_field_key(object_id: &str, name_bytes: &[u8]) -> Vec<u8> {
@@ -771,7 +751,7 @@ impl StateManager {
             };
 
             for object_id in object_ids {
-                canonical_object_keys.insert(Self::object_key(&object_id));
+                canonical_object_keys.insert(object_key(&object_id));
             }
         }
 
@@ -795,7 +775,7 @@ impl StateManager {
 
         bcs::from_bytes::<StoredObject>(value)
             .map(|stored| {
-                let owner_key = Self::owned_objects_key(&stored.owner);
+                let owner_key = owned_objects_key(&stored.owner);
                 self.load_internal::<Vec<String>>(&owner_key)
                     .ok()
                     .flatten()
@@ -1301,15 +1281,15 @@ impl StateManager {
 
         for obj_id in &changeset.deleted_objects {
             if let Some((stored_id, existing)) = self.load_stored_object_by_any_id(obj_id)? {
-                let obj_key = Self::object_key(&stored_id);
+                let obj_key = object_key(&stored_id);
                 if Self::balance_token_amount(&existing.type_name, &existing.data).is_some() {
                     owners_to_recompute.insert(existing.owner);
                 }
-                let owner_key = Self::owned_objects_key(&existing.owner);
+                let owner_key = owned_objects_key(&existing.owner);
                 self.remove_from_index_list(&owner_key, &stored_id)?;
                 self.overlay.insert(obj_key, None);
             } else {
-                let obj_key = Self::object_key(obj_id);
+                let obj_key = object_key(obj_id);
                 self.overlay.insert(obj_key, None);
             }
         }
@@ -1342,7 +1322,7 @@ impl StateManager {
                     };
 
                     // Record in Collection member index (O(1) Access)
-                    let key = Self::metadata_key(b"collection_members:", &coll_id);
+                    let key = metadata_key(b"collection_members:", &coll_id);
                     self.add_to_index_list(&key, nft_id)?;
                 }
             }
@@ -1351,7 +1331,7 @@ impl StateManager {
         for (obj_id, created) in &changeset.created_objects {
             let mut new_obj = created.clone();
             let existing_obj = self.load_stored_object_by_any_id(obj_id)?;
-            let obj_key = Self::object_key(obj_id);
+            let obj_key = object_key(obj_id);
 
             if let Some((stored_id, existing)) = existing_obj {
                 let existing_affects_balances =
@@ -1365,11 +1345,11 @@ impl StateManager {
                     new_obj.owner = existing.owner;
                 }
                 if existing.owner != new_obj.owner {
-                    let old_owner_key = Self::owned_objects_key(&existing.owner);
+                    let old_owner_key = owned_objects_key(&existing.owner);
                     self.remove_from_index_list(&old_owner_key, &stored_id)?;
                 }
                 if stored_id != *obj_id {
-                    self.overlay.insert(Self::object_key(&stored_id), None);
+                    self.overlay.insert(object_key(&stored_id), None);
                 }
                 if existing_affects_balances {
                     owners_to_recompute.insert(existing.owner);
@@ -1393,7 +1373,7 @@ impl StateManager {
             };
             self.save_internal(&obj_key, &stored_obj)?;
 
-            let owner_key = Self::owned_objects_key(&new_obj.owner);
+            let owner_key = owned_objects_key(&new_obj.owner);
             self.remove_from_index_list(&owner_key, obj_id)?;
             self.add_to_index_list(&owner_key, obj_id.clone())?;
 
@@ -1444,7 +1424,7 @@ impl StateManager {
 
     /// Get all object IDs owned by an address
     pub fn get_owned_objects(&self, owner: &AccountAddress) -> Result<Vec<String>> {
-        let owner_key = Self::owned_objects_key(owner);
+        let owner_key = owned_objects_key(owner);
         let mut clean: Vec<String> = self.load_internal(&owner_key)?.unwrap_or_default();
         clean.sort();
         clean.dedup();
@@ -1456,7 +1436,7 @@ impl StateManager {
         let Some((stored_id, stored)) = self.load_stored_object_by_any_id(object_id)? else {
             return Ok(None);
         };
-        let normalized_id = Self::canonical_object_id(&stored_id).unwrap_or(stored_id.clone());
+        let normalized_id = canonical_object_id(&stored_id).unwrap_or(stored_id.clone());
         let uid = AccountAddress::from_hex_literal(&normalized_id)
             .ok()
             .map(UIDRecord::new);
