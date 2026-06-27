@@ -308,10 +308,6 @@ impl StateManager {
         self.load_internal(&key)
     }
 
-    fn collection_members_key(collection_id: &str) -> Vec<u8> {
-        Self::metadata_key(b"collection_members:", collection_id)
-    }
-
     /// Retrieves all Collection IDs from the index
     pub fn get_all_collection_ids(&self) -> Vec<String> {
         self.load_index_list(b"nft_collection_index")
@@ -320,10 +316,9 @@ impl StateManager {
 
     /// Retrieves NFT IDs for the specified collection from the index
     pub fn get_collection_nft_ids(&self, collection_id: &str) -> Vec<String> {
-        let key = Self::collection_members_key(collection_id);
-        self.load_index_list(&key).unwrap_or_default()
+        self.load_index_list(&Self::metadata_key(b"collection_members:", collection_id))
+            .unwrap_or_default()
     }
-
     fn normalize_token_type(token_type: &str) -> String {
         if let Ok(TypeTag::Struct(st)) = TypeTag::from_str(token_type) {
             return format!("{}", st);
@@ -698,10 +693,6 @@ impl StateManager {
             .map(|addr| addr.to_hex_literal())
     }
 
-    fn normalize_object_id_for_lookup(id: &str) -> Option<String> {
-        Self::canonical_object_id(id)
-    }
-
     fn object_lookup_ids(id: &str) -> Vec<String> {
         let mut ids = vec![id.to_string()];
         if let Some(canonical_id) = Self::canonical_object_id(id)
@@ -764,10 +755,10 @@ impl StateManager {
             || key.starts_with(b"metadata_icon_url:")
     }
 
-    fn canonical_object_keys(entries: &BTreeMap<Vec<u8>, Vec<u8>>) -> BTreeSet<Vec<u8>> {
-        let mut object_keys = BTreeSet::new();
+    fn retain_canonical_state_root_entries(entries: &mut BTreeMap<Vec<u8>, Vec<u8>>) {
+        let mut canonical_object_keys = BTreeSet::new();
 
-        for (key, value) in entries {
+        for (key, value) in entries.iter() {
             if !key.starts_with(b"owned_objects:") {
                 continue;
             }
@@ -780,33 +771,14 @@ impl StateManager {
             };
 
             for object_id in object_ids {
-                object_keys.insert(Self::object_key(&object_id));
+                canonical_object_keys.insert(Self::object_key(&object_id));
             }
         }
 
-        object_keys
-    }
-
-    fn retain_canonical_state_root_entries(entries: &mut BTreeMap<Vec<u8>, Vec<u8>>) {
-        let canonical_object_keys = Self::canonical_object_keys(entries);
         entries.retain(|key, _| {
             Self::is_canonical_state_root_key(key)
                 || (key.starts_with(b"object:") && canonical_object_keys.contains(key))
         });
-    }
-
-    fn object_key_id(key: &[u8]) -> Option<&str> {
-        key.strip_prefix(b"object:")
-            .and_then(|id| std::str::from_utf8(id).ok())
-    }
-
-    fn object_is_owned_in_overlay_root(&self, object_id: &str, stored: &StoredObject) -> bool {
-        let owner_key = Self::owned_objects_key(&stored.owner);
-        self.load_internal::<Vec<String>>(&owner_key)
-            .ok()
-            .flatten()
-            .map(|owned| owned.iter().any(|id| id == object_id))
-            .unwrap_or(false)
     }
 
     fn is_canonical_smt_update(&self, key: &[u8], value: &[u8]) -> bool {
@@ -814,11 +786,22 @@ impl StateManager {
             return true;
         }
 
-        let Some(object_id) = Self::object_key_id(key) else {
+        let Some(object_id) = key
+            .strip_prefix(b"object:")
+            .and_then(|id| std::str::from_utf8(id).ok())
+        else {
             return false;
         };
+
         bcs::from_bytes::<StoredObject>(value)
-            .map(|stored| self.object_is_owned_in_overlay_root(object_id, &stored))
+            .map(|stored| {
+                let owner_key = Self::owned_objects_key(&stored.owner);
+                self.load_internal::<Vec<String>>(&owner_key)
+                    .ok()
+                    .flatten()
+                    .map(|owned| owned.iter().any(|id| id == object_id))
+                    .unwrap_or(false)
+            })
             .unwrap_or(false)
     }
 
@@ -1359,7 +1342,7 @@ impl StateManager {
                     };
 
                     // Record in Collection member index (O(1) Access)
-                    let key = Self::collection_members_key(&coll_id);
+                    let key = Self::metadata_key(b"collection_members:", &coll_id);
                     self.add_to_index_list(&key, nft_id)?;
                 }
             }
@@ -1473,8 +1456,7 @@ impl StateManager {
         let Some((stored_id, stored)) = self.load_stored_object_by_any_id(object_id)? else {
             return Ok(None);
         };
-        let normalized_id =
-            Self::normalize_object_id_for_lookup(&stored_id).unwrap_or(stored_id.clone());
+        let normalized_id = Self::canonical_object_id(&stored_id).unwrap_or(stored_id.clone());
         let uid = AccountAddress::from_hex_literal(&normalized_id)
             .ok()
             .map(UIDRecord::new);

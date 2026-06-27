@@ -5,4 +5,4 @@ pub mod move_vm_state;
 pub mod object_storage;
 pub mod persistent_store;
 pub mod resolver;
-pub mod shared_db;
+

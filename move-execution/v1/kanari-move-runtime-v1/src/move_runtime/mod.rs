@@ -31,7 +31,7 @@ mod parsers;
 use kanari_types::address::Address as KanariAddress;
 use kanari_types::gas::GasOperation;
 use kanari_types::tx_context::TxContextModule;
-pub mod move_runtime_extensions;
+mod move_runtime_extensions;
 use crate::changeset::ChangeSet;
 use crate::state::StateManager;
 use crate::storage::move_vm_state::MoveVMState;
@@ -1669,3 +1669,4 @@ mod tests {
         Ok(())
     }
 }
+

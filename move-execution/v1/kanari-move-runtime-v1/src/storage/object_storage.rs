@@ -10,23 +10,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-/// Create a unique key for a dynamic field in RocksDB
-/// Format: df_{object_id}_{hash(name_bytes)}
+/// Create a unique key for a dynamic field in RocksDB.
 fn derive_dynamic_field_key(object_id: &str, name_bytes: &[u8]) -> String {
     let hash = hash_data_blake3(name_bytes);
     format!("df_{}_{}", object_id, hex::encode(&hash[0..16]))
 }
 
-/// Error types that can occur during `ObjectStorage` operations.
 #[derive(Debug)]
 pub enum ObjectStorageError {
-    /// Failed to acquire or interact with an in-memory lock.
     LockError(String),
-
-    /// Failure writing to or reading from the persistent backend.
     PersistenceError(anyhow::Error),
-
-    /// The requested object was not found in the store.
     NotFound,
 }
 
@@ -61,8 +54,7 @@ impl From<PersistentStoreError> for ObjectStorageError {
     }
 }
 
-/// Trait abstraction for object storage backends. Allows swapping in-memory and
-/// persistent implementations without changing the runtime.
+/// Trait abstraction for object storage backends.
 pub trait ObjectStore: Send + Sync {
     fn store_object(&self, obj: StoredObject) -> Result<(), ObjectStorageError>;
     fn get_object(&self, id: &str) -> Option<StoredObject>;
@@ -82,7 +74,6 @@ pub trait ObjectStore: Send + Sync {
         coin_type: &TypeTag,
     ) -> Vec<StoredObject>;
 
-    // --- 🟢 Dynamic Field Methods ---
     fn put_dynamic_field(
         &self,
         object_id: &str,
@@ -93,7 +84,6 @@ pub trait ObjectStore: Send + Sync {
     fn remove_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Result<()>;
 }
 
-/// Stored object with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredObject {
     pub id: String,
@@ -116,14 +106,13 @@ pub struct ObjectStorage {
 impl ObjectStorage {
     const OBJECT_INDEX_KEY: &'static str = "object_index";
 
-    // 🚨 Helper to create Key for fetching Owner Index directly from RocksDB database
-    fn owner_key(owner: &AccountAddress) -> Vec<u8> {
+    fn legacy_owner_key(owner: &AccountAddress) -> Vec<u8> {
         let mut key = b"owner_index:".to_vec();
         key.extend_from_slice(owner.as_ref());
         key
     }
 
-    fn canonical_owned_objects_key(owner: &AccountAddress) -> Vec<u8> {
+    fn owned_objects_key(owner: &AccountAddress) -> Vec<u8> {
         let mut key = b"owned_objects:".to_vec();
         key.extend_from_slice(owner.as_ref());
         key
@@ -146,6 +135,28 @@ impl ObjectStorage {
     ) -> Result<(), ObjectStorageError> {
         store.save(key, ids)?;
         Ok(())
+    }
+
+    fn load_owned_object_ids(
+        store: &PersistentStore,
+        owner: &AccountAddress,
+    ) -> Result<Vec<String>, ObjectStorageError> {
+        let canonical_key = Self::owned_objects_key(owner);
+        let canonical_ids = Self::load_id_index(store, &canonical_key)?;
+        if !canonical_ids.is_empty() {
+            return Ok(canonical_ids);
+        }
+
+        let legacy_key = Self::legacy_owner_key(owner);
+        let legacy_ids = Self::load_id_index(store, &legacy_key)?;
+        if legacy_ids.is_empty() {
+            return Ok(legacy_ids);
+        }
+
+        // One-time lazy migration from the old owner index format.
+        Self::save_id_index(store, &canonical_key, &legacy_ids)?;
+        store.delete(&legacy_key)?;
+        Ok(legacy_ids)
     }
 
     fn add_index_id(ids: &mut Vec<String>, id: &str) -> bool {
@@ -215,7 +226,6 @@ impl ObjectStorage {
         coins
     }
 
-    /// Create a new ObjectStorage backed by an already-open persistent store.
     pub(crate) fn new_with_store(store: Arc<PersistentStore>) -> Result<Self> {
         let mut objects_map: BTreeMap<String, StoredObject> = BTreeMap::new();
 
@@ -238,7 +248,6 @@ impl ObjectStorage {
         })
     }
 
-    /// Create a new ObjectStorage backed by RocksDB persistence (uses `PersistentStore::open_default`).
     fn new_with_persistence() -> Result<Self> {
         let store = Arc::new(PersistentStore::open_default()?);
         Self::new_with_store(store)
@@ -263,7 +272,6 @@ impl ObjectStorage {
         let owner = obj.owner;
         let mut old_owner = None;
 
-        // 🚨 Lock Poisoning Fix: Always use unwrap_or_else
         {
             let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
             if let Some(existing) = state.objects.get(&id) {
@@ -272,27 +280,26 @@ impl ObjectStorage {
             state.objects.insert(id.clone(), obj.clone());
         }
 
-        // 🚨 Persist owner index directly to DB instead of keeping in memory
         if let Some(store) = &self.persistent {
             store.save(format!("object:{}", id).as_bytes(), &obj)?;
 
             if let Some(old) = old_owner {
                 if old != owner {
-                    let old_key = Self::owner_key(&old);
+                    let old_key = Self::owned_objects_key(&old);
                     let mut old_ids = Self::load_id_index(store, &old_key)?;
                     if Self::remove_index_id(&mut old_ids, &id) {
                         Self::save_id_index(store, &old_key, &old_ids)?;
                     }
 
-                    let new_key = Self::owner_key(&owner);
-                    let mut new_ids = Self::load_id_index(store, &new_key)?;
+                    let new_key = Self::owned_objects_key(&owner);
+                    let mut new_ids = Self::load_owned_object_ids(store, &owner)?;
                     if Self::add_index_id(&mut new_ids, &id) {
                         Self::save_id_index(store, &new_key, &new_ids)?;
                     }
                 }
             } else {
-                let new_key = Self::owner_key(&owner);
-                let mut new_ids = Self::load_id_index(store, &new_key)?;
+                let new_key = Self::owned_objects_key(&owner);
+                let mut new_ids = Self::load_owned_object_ids(store, &owner)?;
                 if Self::add_index_id(&mut new_ids, &id) {
                     Self::save_id_index(store, &new_key, &new_ids)?;
                 }
@@ -307,14 +314,12 @@ impl ObjectStorage {
         Ok(())
     }
 
-    /// Get object by ID
-    pub fn get_object(&self, id: &str) -> Option<StoredObject> {
-        // 🚨 Lock Poisoning Fix
+    fn get_object(&self, id: &str) -> Option<StoredObject> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         if let Some(obj) = state.objects.get(id) {
             return Some(obj.clone());
         }
-        drop(state); // Drop Lock before accessing database
+        drop(state);
 
         if let Some(store) = &self.persistent
             && let Ok(Some(obj)) = store.load::<StoredObject>(format!("object:{}", id).as_bytes())
@@ -326,17 +331,9 @@ impl ObjectStorage {
         None
     }
 
-    /// Get all objects owned by an address
     fn get_objects_by_owner(&self, owner: &AccountAddress) -> Vec<StoredObject> {
-        // 🚨 Read Owner Index from DB directly if persistent
         if let Some(store) = &self.persistent {
-            let canonical_key = Self::canonical_owned_objects_key(owner);
-            let mut ids = Self::load_id_index(store, &canonical_key).unwrap_or_default();
-            if ids.is_empty() {
-                let legacy_key = Self::owner_key(owner);
-                ids = Self::load_id_index(store, &legacy_key).unwrap_or_default();
-            }
-
+            let ids = Self::load_owned_object_ids(store, owner).unwrap_or_default();
             let mut results = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Some(obj) = self.get_object(&id) {
@@ -347,7 +344,6 @@ impl ObjectStorage {
             return results;
         }
 
-        // 🚨 Fallback: in-memory calculation (used in testing environments)
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         let mut results: Vec<_> = state
             .objects
@@ -359,7 +355,6 @@ impl ObjectStorage {
         results
     }
 
-    // Transfer object ownership
     fn transfer_object(
         &self,
         id: &str,
@@ -369,13 +364,12 @@ impl ObjectStorage {
             return Err(ObjectStorageError::NotFound);
         }
 
-        // 🚨 FIX: Fetch value directly from RwLock scope without declaring dummy variables
         let (old_owner, obj_to_persist) = {
             let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
             if let Some(obj) = state.objects.get_mut(id) {
                 let old = obj.owner;
                 obj.owner = new_owner;
-                (old, obj.clone()) // Return value as Tuple
+                (old, obj.clone())
             } else {
                 return Err(ObjectStorageError::NotFound);
             }
@@ -384,14 +378,14 @@ impl ObjectStorage {
         if let Some(store) = &self.persistent {
             store.save(format!("object:{}", id).as_bytes(), &obj_to_persist)?;
 
-            let old_key = Self::owner_key(&old_owner);
+            let old_key = Self::owned_objects_key(&old_owner);
             let mut old_ids = Self::load_id_index(store, &old_key)?;
             if Self::remove_index_id(&mut old_ids, id) {
                 Self::save_id_index(store, &old_key, &old_ids)?;
             }
 
-            let new_key = Self::owner_key(&new_owner);
-            let mut new_ids = Self::load_id_index(store, &new_key)?;
+            let new_key = Self::owned_objects_key(&new_owner);
+            let mut new_ids = Self::load_owned_object_ids(store, &new_owner)?;
             if Self::add_index_id(&mut new_ids, id) {
                 Self::save_id_index(store, &new_key, &new_ids)?;
             }
@@ -400,7 +394,6 @@ impl ObjectStorage {
         Ok(())
     }
 
-    /// Delete object
     fn delete_object(&self, id: &str) -> Result<(), ObjectStorageError> {
         let mut old_owner = None;
 
@@ -415,7 +408,7 @@ impl ObjectStorage {
             store.delete(format!("object:{}", id).as_bytes())?;
 
             if let Some(owner) = old_owner {
-                let owner_key = Self::owner_key(&owner);
+                let owner_key = Self::owned_objects_key(&owner);
                 let mut ids = Self::load_id_index(store, &owner_key)?;
                 if Self::remove_index_id(&mut ids, id) {
                     Self::save_id_index(store, &owner_key, &ids)?;
@@ -431,7 +424,6 @@ impl ObjectStorage {
         Ok(())
     }
 
-    /// Get total number of objects
     fn count(&self) -> usize {
         self.state
             .read()
@@ -440,17 +432,12 @@ impl ObjectStorage {
             .len()
     }
 
-    /// Clear all objects
     fn clear(&self) -> Result<(), ObjectStorageError> {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         state.objects.clear();
-        state.dynamic_fields.clear(); // Clear Cache
+        state.dynamic_fields.clear();
         Ok(())
     }
-
-    // =====================================================================
-    // 🟢 Dynamic Field Implementations
-    // =====================================================================
 
     fn put_dynamic_field(
         &self,
@@ -467,7 +454,6 @@ impl ObjectStorage {
         }
 
         if let Some(store) = &self.persistent {
-            // Use vector load/save to comply with PersistentStore BCS requirements
             store
                 .save(key.as_bytes(), &value)
                 .map_err(|e| anyhow::anyhow!("RocksDB Error (put_dynamic_field): {}", e))?;
@@ -515,7 +501,6 @@ impl ObjectStorage {
     }
 }
 
-// Implement the ObjectStore trait for the in-memory ObjectStorage
 impl ObjectStore for ObjectStorage {
     fn store_object(&self, obj: StoredObject) -> Result<(), ObjectStorageError> {
         ObjectStorage::store_object(self, obj)
@@ -557,7 +542,6 @@ impl ObjectStore for ObjectStorage {
         ObjectStorage::get_coins_by_type_and_owner(self, owner, coin_type)
     }
 
-    // Dynamic Field methods
     fn put_dynamic_field(
         &self,
         object_id: &str,
@@ -607,17 +591,63 @@ mod tests {
                 version: 1,
             },
         )?;
-        store.save(&ObjectStorage::owner_key(&owner), &vec![stale_id.clone()])?;
         store.save(
-            &ObjectStorage::canonical_owned_objects_key(&owner),
+            &ObjectStorage::legacy_owner_key(&owner),
+            &vec![stale_id.clone()],
+        )?;
+        store.save(
+            &ObjectStorage::owned_objects_key(&owner),
             &vec![canonical_id.clone()],
         )?;
 
-        let storage = ObjectStorage::new_with_store(store)?;
+        let storage = ObjectStorage::new_with_store(store.clone())?;
         let objects = storage.get_objects_by_owner(&owner);
 
         assert_eq!(objects.len(), 1);
         assert_eq!(objects[0].id, canonical_id);
+        assert_eq!(
+            ObjectStorage::load_id_index(&store, &ObjectStorage::owned_objects_key(&owner))?,
+            vec![canonical_id]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_owner_index_is_migrated_to_owned_objects_index() -> Result<()> {
+        let store = Arc::new(PersistentStore::open_in_memory()?);
+        let owner = AccountAddress::from_hex_literal("0x2")?;
+        let object_id = "0xcccc".to_string();
+
+        store.save(
+            format!("object:{}", object_id).as_bytes(),
+            &StoredObject {
+                id: object_id.clone(),
+                owner,
+                type_name: "0x2::coin::Coin<0x2::kanari::KANARI>".to_string(),
+                data: vec![3],
+                version: 1,
+            },
+        )?;
+        store.save(
+            &ObjectStorage::legacy_owner_key(&owner),
+            &vec![object_id.clone()],
+        )?;
+
+        let storage = ObjectStorage::new_with_store(store.clone())?;
+        let objects = storage.get_objects_by_owner(&owner);
+
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].id, object_id);
+        assert_eq!(
+            ObjectStorage::load_id_index(&store, &ObjectStorage::owned_objects_key(&owner))?,
+            vec!["0xcccc".to_string()]
+        );
+        assert!(
+            store
+                .load::<Vec<String>>(&ObjectStorage::legacy_owner_key(&owner))?
+                .is_none()
+        );
 
         Ok(())
     }

@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::storage::shared_db::get_or_open_db;
 use rocksdb::{DB, IteratorMode, WriteBatch};
 
 /// Custom error type for PersistentStore operations
@@ -80,7 +79,7 @@ impl PersistentStore {
 
     /// Open store using an explicit path (None -> default).
     pub fn open_with_path(path_opt: Option<PathBuf>) -> Result<Self> {
-        let db = get_or_open_db(path_opt)?;
+        let db = kanari_db_common::open_or_get_db(path_opt)?;
         Ok(PersistentStore {
             db: Some(db),
             memory_store: None,
@@ -244,3 +243,4 @@ impl PersistentStore {
         key.starts_with(b"n:") || key.starts_with(b"d:")
     }
 }
+
