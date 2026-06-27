@@ -1345,7 +1345,7 @@ mod tests {
     use crate::blockchain::Blockchain;
     use crate::consensus::{Checkpoint, PersistentDagState};
     use kanari_crypto::keys::{CurveType, generate_keypair};
-    use kanari_move_runtime_v1::changeset::ChangeSet;
+    use kanari_move_runtime_v1::changeset::{ChangeSet, CreatedObject};
     use kanari_move_runtime_v1::state::Account;
     use kanari_types::balance::BalanceRecord;
     use kanari_types::kanari::KANARI_TOKEN_TYPE;
@@ -1776,4 +1776,38 @@ mod tests {
         assert_eq!(strict_counts, parallel_counts);
         assert_eq!(strict_root, parallel_root);
     }
+
+    #[test]
+    fn account_info_prefers_native_state_balance_over_stale_coin_object() {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let owner = AccountAddress::from_hex_literal("0x1111").unwrap();
+
+        let mut coin_data = vec![0u8; 32];
+        coin_data.extend_from_slice(&1_000u64.to_le_bytes());
+        let mut cs = ChangeSet::new();
+        cs.created_objects.push((
+            "0xcafe".to_string(),
+            CreatedObject {
+                owner,
+                uid: None,
+                id: None,
+                type_: format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE),
+                data: coin_data,
+                version: 1,
+            },
+        ));
+        engine.state_write().apply_changeset(&cs).unwrap();
+
+        let mut account = Account::with_native_balance(owner, 790);
+        account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(790));
+        engine.state_write().save_account(&account).unwrap();
+
+        let info = engine
+            .get_account_info("0x1111")
+            .expect("account info should be available");
+
+        assert_eq!(info.token_balances.get(KANARI_TOKEN_TYPE).copied(), Some(790));
+    }
 }
+
+

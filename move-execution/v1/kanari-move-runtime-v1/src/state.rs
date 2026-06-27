@@ -468,6 +468,7 @@ impl StateManager {
     fn recompute_token_balances_for_owner(&mut self, owner: AccountAddress) -> Result<bool> {
         let mut account = self.load_account_or_default(owner)?;
         let old_balances = account.token_balances.clone();
+        let native_balance = account.native_balance();
         let mut aggregated: BTreeMap<String, u64> = BTreeMap::new();
 
         for object_id in self.get_owned_objects(&owner)? {
@@ -501,6 +502,12 @@ impl StateManager {
             .into_iter()
             .map(|(token_type, amount)| (token_type, BalanceRecord::new(amount)))
             .collect();
+        if native_balance > 0 {
+            account.set_token_balance(
+                KANARI_TOKEN_TYPE.to_string(),
+                BalanceRecord::new(native_balance),
+            );
+        }
         self.save_account(&account)?;
 
         Ok(self.adjust_global_supplies_for_account_delta(&old_balances, &account.token_balances))
@@ -1312,7 +1319,9 @@ impl StateManager {
         for obj_id in &changeset.deleted_objects {
             if let Some((stored_id, existing)) = self.load_stored_object_by_any_id(obj_id)? {
                 let obj_key = Self::object_key(&stored_id);
-                owners_to_recompute.insert(existing.owner);
+                if Self::balance_token_amount(&existing.type_name, &existing.data).is_some() {
+                    owners_to_recompute.insert(existing.owner);
+                }
                 let owner_key = Self::owned_objects_key(&existing.owner);
                 self.remove_from_index_list(&owner_key, &stored_id)?;
                 self.overlay.insert(obj_key, None);
@@ -1362,7 +1371,8 @@ impl StateManager {
             let obj_key = Self::object_key(obj_id);
 
             if let Some((stored_id, existing)) = existing_obj {
-                owners_to_recompute.insert(existing.owner);
+                let existing_affects_balances =
+                    Self::balance_token_amount(&existing.type_name, &existing.data).is_some();
                 // Use the version from the ChangeSet (already calculated by MoveRuntime)
                 // Only recalculate if the ChangeSet version seems wrong (0 or less than existing)
                 if new_obj.version == 0 || new_obj.version <= existing.version {
@@ -1378,13 +1388,18 @@ impl StateManager {
                 if stored_id != *obj_id {
                     self.overlay.insert(Self::object_key(&stored_id), None);
                 }
+                if existing_affects_balances {
+                    owners_to_recompute.insert(existing.owner);
+                }
             } else {
                 // For new objects, use version from ChangeSet or default to 1
                 if new_obj.version == 0 {
                     new_obj.version = 1;
                 }
             }
-            owners_to_recompute.insert(new_obj.owner);
+            if Self::balance_token_amount(&new_obj.type_, &new_obj.data).is_some() {
+                owners_to_recompute.insert(new_obj.owner);
+            }
 
             let stored_obj = StoredObject {
                 id: obj_id.clone(),
@@ -2019,6 +2034,80 @@ mod tests {
         assert_eq!(state.compute_state_root(), root_before);
         assert!(state.get_account(&recipient).is_none());
         assert_eq!(state.get_account(&sender).unwrap().native_balance(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn unrelated_object_creation_preserves_native_balance_cache() -> Result<()> {
+        let owner = AccountAddress::from_hex_literal("0x1111")?;
+        let mut state = StateManager::new_in_memory();
+        state.save_account(&Account::with_native_balance(owner, 500))?;
+        let before_balance = state.get_account(&owner).unwrap().native_balance();
+        let before_visible = state.indexed_wallet_supply(KANARI_TOKEN_TYPE)?;
+
+        let mut changeset = ChangeSet::new();
+        changeset.created_objects.push((
+            "0xcafe".to_string(),
+            CreatedObject {
+                owner,
+                uid: None,
+                id: None,
+                type_: "0x2::coin::CoinMetadata<0x2::test::TEST>".to_string(),
+                data: vec![1, 2, 3],
+                version: 1,
+            },
+        ));
+        state.apply_changeset(&changeset)?;
+
+        assert_eq!(
+            state.get_account(&owner).unwrap().native_balance(),
+            before_balance
+        );
+        assert_eq!(
+            state.indexed_wallet_supply(KANARI_TOKEN_TYPE)?,
+            before_visible
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn recompute_owner_balances_preserves_native_gas_adjustments() -> Result<()> {
+        let owner = AccountAddress::from_hex_literal("0x1111")?;
+        let token_type = "0x2::test::TEST";
+        let coin_type = format!("0x2::coin::Coin<{}>", token_type);
+        let mut state = StateManager::new_in_memory();
+        state.save_account(&Account::with_native_balance(owner, 500))?;
+
+        let before_balance = state.get_account(&owner).unwrap().native_balance();
+
+        let mut gas_only = ChangeSet::new();
+        gas_only.get_or_create_change(owner).debit(210);
+        state.apply_changeset(&gas_only)?;
+        let after_gas_balance = state.get_account(&owner).unwrap().native_balance();
+        assert_eq!(after_gas_balance, before_balance - 210);
+
+        let mut coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+        coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+        let mut mint = ChangeSet::new();
+        mint.created_objects.push((
+            "0xcafe".to_string(),
+            CreatedObject {
+                owner,
+                uid: None,
+                id: None,
+                type_: coin_type,
+                data: coin_data,
+                version: 1,
+            },
+        ));
+        state.apply_changeset(&mint)?;
+
+        assert_eq!(
+            state.get_account(&owner).unwrap().native_balance(),
+            after_gas_balance
+        );
 
         Ok(())
     }
