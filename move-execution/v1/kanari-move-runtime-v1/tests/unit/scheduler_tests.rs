@@ -1,4 +1,3 @@
-
 use super::*;
 use kanari_types::transaction::Transaction;
 

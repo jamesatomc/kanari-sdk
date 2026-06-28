@@ -1,4 +1,3 @@
-
 use kanari_types::address::Address as KanariAddress;
 
 use super::*;
