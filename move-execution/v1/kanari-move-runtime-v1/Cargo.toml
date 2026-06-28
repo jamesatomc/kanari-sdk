@@ -27,6 +27,7 @@ move-bytecode-verifier = { workspace = true }
 move-vm-types = { workspace = true }
 move-stdlib-natives = { workspace = true }
 move-vm-profiler = { workspace = true }
+move-package = { workspace = true }
 
 kanari-db-common = { workspace = true }
 smt = { workspace = true }
@@ -38,7 +39,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 kanari-frameworks = { workspace = true }
-move-package = { workspace = true }
 tempfile = { workspace = true }
 kanari-types = { workspace = true }
 

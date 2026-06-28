@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use kanari_move_runtime_v1::StateManager;
 use kanari_move_runtime_v1::move_runtime::MoveRuntime;
 use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
-use kanari_move_runtime_v1::StateManager;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::identifier::Identifier;
 use move_core_types::language_storage::ModuleId;
@@ -51,7 +51,11 @@ fn dynamic_object_field_persists_across_runtime_instances() -> Result<()> {
             &module_id,
             "add_child",
             vec![],
-            vec![object_arg(&host_id)?, bcs::to_bytes(&3u64)?, bcs::to_bytes(&500u64)?],
+            vec![
+                object_arg(&host_id)?,
+                bcs::to_bytes(&3u64)?,
+                bcs::to_bytes(&500u64)?,
+            ],
             Some(*module_id.address()),
             None,
             None,
@@ -79,7 +83,11 @@ fn dynamic_object_field_persists_across_runtime_instances() -> Result<()> {
             &module_id,
             "write_child_value",
             vec![],
-            vec![object_arg(&host_id)?, bcs::to_bytes(&3u64)?, bcs::to_bytes(&777u64)?],
+            vec![
+                object_arg(&host_id)?,
+                bcs::to_bytes(&3u64)?,
+                bcs::to_bytes(&777u64)?,
+            ],
             Some(*module_id.address()),
             None,
             None,
@@ -138,7 +146,8 @@ fn create_test_package() -> Result<PathBuf> {
     let package_dir = dir.keep();
     fs::create_dir_all(package_dir.join("sources"))?;
 
-    let dependency_path = Path::new("D:/kanari-sdk/crates/kanari-frameworks/packages/kanari-system");
+    let dependency_path =
+        Path::new("D:/kanari-sdk/crates/kanari-frameworks/packages/kanari-system");
     let manifest = format!(
         "[package]\nname = \"DynamicObjectFieldE2E\"\n\n[dependencies]\nKanariSystem = {{ local = \"{}\" }}\n\n[addresses]\ntester = \"{}\"\n",
         dependency_path.display(),
@@ -150,7 +159,12 @@ fn create_test_package() -> Result<PathBuf> {
         "module tester::{module_name} {{\n    use kanari_system::dynamic_object_field;\n    use kanari_system::object::{{Self, UID}};\n    use kanari_system::transfer;\n    use kanari_system::tx_context::{{Self, TxContext}};\n\n    struct Host has key, store {{\n        id: UID,\n    }}\n\n    struct Child has key, store {{\n        id: UID,\n        value: u64,\n    }}\n\n    fun new_child(ctx: &mut TxContext, value: u64): Child {{\n        Child {{ id: object::new(ctx), value }}\n    }}\n\n    public entry fun create_host(ctx: &mut TxContext) {{\n        let host = Host {{ id: object::new(ctx) }};\n        transfer::public_transfer(host, tx_context::sender(ctx));\n    }}\n\n    public entry fun add_child(host: &mut Host, key: u64, value: u64, ctx: &mut TxContext) {{\n        let child = new_child(ctx, value);\n        dynamic_object_field::add<u64, Child>(&mut host.id, key, child);\n        object::save_object(host);\n    }}\n\n    public entry fun write_child_value(host: &mut Host, key: u64, value: u64) {{\n        dynamic_object_field::borrow_mut<u64, Child>(&mut host.id, key).value = value;\n        object::save_object(host);\n    }}\n\n    public entry fun remove_child(host: &mut Host, key: u64) {{\n        let child = dynamic_object_field::remove<u64, Child>(&mut host.id, key);\n        let Child {{ id, value: _ }} = child;\n        object::delete(id);\n        object::save_object(host);\n    }}\n\n    public fun read_child_value(host: &Host, key: u64): u64 {{\n        dynamic_object_field::borrow<u64, Child>(&host.id, key).value\n    }}\n\n    public fun has_child(host: &Host, key: u64): bool {{\n        dynamic_object_field::exists_<u64>(&host.id, key)\n    }}\n}}\n",
         module_name = MODULE_NAME,
     );
-    fs::write(package_dir.join("sources").join(format!("{MODULE_NAME}.move")), source)?;
+    fs::write(
+        package_dir
+            .join("sources")
+            .join(format!("{MODULE_NAME}.move")),
+        source,
+    )?;
 
     Ok(package_dir)
 }

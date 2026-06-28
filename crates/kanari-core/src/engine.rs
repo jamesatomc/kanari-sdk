@@ -1796,7 +1796,10 @@ mod tests {
                 version: 1,
             },
         ));
-        engine.state_write().apply_changeset(&cs).unwrap();
+        engine
+            .state_write()
+            .apply_changeset_without_supply_validation(&cs)
+            .unwrap();
 
         let mut account = Account::with_native_balance(owner, 790);
         account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(790));

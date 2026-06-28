@@ -593,4 +593,3 @@ mod tests {
         assert_eq!(all[0].object_id, obj.object_id);
     }
 }
-
