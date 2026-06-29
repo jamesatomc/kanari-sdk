@@ -12,6 +12,7 @@ use crate::storage::persistent_store::PersistentStore;
 
 /// Persistent storage wrapper for Move modules, resources, and framework metadata.
 #[derive(Clone)]
+#[allow(clippy::upper_case_acronyms)]
 pub(crate) struct MoveVMState {
     store: Arc<PersistentStore>,
 }

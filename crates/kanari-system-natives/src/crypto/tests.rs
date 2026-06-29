@@ -1,9 +1,11 @@
+#![allow(clippy::print_stdout)]
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 //! Tests for crypto native functions
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
 
     #[test]
@@ -102,10 +104,7 @@ fn test_secp256k1_ecrecover_and_verify() {
 
     // For recovery, we need to sign with recoverable signature
     let recoverable_sig = secp.sign_ecdsa_recoverable(message, &secret_key);
-    let (recovery_id, rec_sig_bytes) = recoverable_sig.serialize_compact();
-    let mut sig_65 = vec![0u8; 65];
-    sig_65[..64].copy_from_slice(&rec_sig_bytes);
-    sig_65[64] = i32::from(recovery_id) as u8;
+    let (_recovery_id, _rec_sig_bytes) = recoverable_sig.serialize_compact();
 
     // Test decompress_pubkey
     let compressed_pk = public_key.serialize(); // 33 bytes
@@ -362,10 +361,7 @@ fn test_recovery_id_handling() {
     let (rec_id, _sig_bytes) = signature.serialize_compact();
 
     let rec_id_value: i32 = rec_id.into();
-    assert!(
-        rec_id_value >= 0 && rec_id_value <= 3,
-        "Recovery ID should be 0-3"
-    );
+    assert!((0..=3).contains(&rec_id_value), "Recovery ID should be 0-3");
 
     // Test legacy format (27-28)
     let legacy_v = (rec_id_value + 27) as u8;
@@ -447,8 +443,8 @@ fn generate_test_vectors_for_move() {
 
     println!("\n=== ECDSA K1 Test Vectors ===");
     println!("Message: {}", hex::encode(&msg));
-    println!("Public Key (compressed): {}", hex::encode(&compressed_pk));
-    println!("Signature (r||s): {}", hex::encode(&sig_bytes));
+    println!("Public Key (compressed): {}", hex::encode(compressed_pk));
+    println!("Signature (r||s): {}", hex::encode(sig_bytes));
     println!("Hash Type: SHA256 (1)");
 
     // Verify it works
@@ -467,11 +463,11 @@ fn generate_test_vectors_for_move() {
     let schnorr_sig = secp.sign_schnorr_no_aux_rand(&schnorr_msg, &keypair);
 
     println!("\n=== Schnorr Test Vectors ===");
-    println!("Message (32 bytes): {}", hex::encode(&schnorr_msg));
-    println!("Public Key (x-only): {}", hex::encode(&xonly.serialize()));
+    println!("Message (32 bytes): {}", hex::encode(schnorr_msg));
+    println!("Public Key (x-only): {}", hex::encode(xonly.serialize()));
     println!(
         "Signature (r||s): {}",
-        hex::encode(&schnorr_sig.to_byte_array())
+        hex::encode(schnorr_sig.to_byte_array())
     );
 
     // Verify Schnorr
@@ -566,12 +562,12 @@ fn generate_p256_test_vectors() {
     println!("\n=== P-256 (ECDSA R1) Test Vectors ===");
     println!("Message: {}", String::from_utf8_lossy(msg));
     println!("Public Key length: {} bytes", compressed_pk.len());
-    println!("Public Key (compressed): {}", hex::encode(&compressed_pk));
-    println!("Signature (r||s): {}", hex::encode(&sig_bytes));
+    println!("Public Key (compressed): {}", hex::encode(compressed_pk));
+    println!("Signature (r||s): {}", hex::encode(sig_bytes));
 
     // Verify it works
     use p256::ecdsa::signature::Verifier;
-    let vk = P256VerifyingKey::from_sec1_bytes(&compressed_pk).unwrap();
+    let vk = P256VerifyingKey::from_sec1_bytes(compressed_pk).unwrap();
     let sig = P256Signature::from_bytes(&sig_bytes).unwrap();
     let verified = vk.verify(msg, &sig).is_ok();
     println!(

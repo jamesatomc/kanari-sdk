@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout)]
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +35,7 @@ fn main() -> Result<()> {
     // Demonstrate metadata operations
     indexer.db().set_metadata("example_key", "example_value")?;
     if let Some(value) = indexer.db().get_metadata("example_key")? {
-        println!("✓ Metadata test: {} = {}\n", "example_key", value);
+        println!("✓ Metadata test: example_key = {}\n", value);
     }
 
     // Show available query methods

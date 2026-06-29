@@ -320,12 +320,13 @@ mod tests {
     use kanari_types::kanari::KANARI_TOKEN_TYPE;
     use kanari_types::transaction::{SignedTransaction, Transaction};
     use move_core_types::account_address::AccountAddress;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
+    use tokio::sync::{Mutex, MutexGuard};
     use tower::util::ServiceExt;
 
-    fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    async fn test_guard() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        LOCK.get_or_init(|| Mutex::new(())).lock().await
     }
 
     fn coin_data(amount: u64) -> Vec<u8> {
@@ -474,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn rpc_runtime_backed_endpoints_smoke() {
-        let guard = test_guard();
+        let guard = test_guard().await;
         let app = build_test_router();
 
         let health = rpc_call(app.clone(), methods::HEALTH, serde_json::json!([]), 1).await;
@@ -568,7 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_endpoint_exports_prometheus_text() {
-        let guard = test_guard();
+        let guard = test_guard().await;
         let app = build_test_router();
 
         let request = Request::builder()
@@ -596,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn submitted_transaction_hash_is_queryable() {
-        let guard = test_guard();
+        let guard = test_guard().await;
         let app = build_test_router();
 
         let sender = generate_keypair(CurveType::Ed25519).unwrap();
@@ -666,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_transaction_can_execute_immediately() {
-        let guard = test_guard();
+        let guard = test_guard().await;
         let mut engine = BlockchainEngine::new_in_memory().unwrap();
         engine.set_authorities(
             "0x1".to_string(),
@@ -719,7 +720,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_transaction_rejects_missing_signature() {
-        let guard = test_guard();
+        let guard = test_guard().await;
         let app = build_test_router();
 
         let response = rpc_call_response(

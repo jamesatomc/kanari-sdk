@@ -194,7 +194,7 @@ mod tests {
         assert!(
             dil3.private_key.starts_with("kanapqc"),
             "PQC keys should have kanapqc prefix, got: {}",
-            &*dil3.private_key
+            *dil3.private_key
         );
         assert!(
             dil3.address.starts_with("0x"),
