@@ -4,32 +4,21 @@
 use crate::common::keys::owned_objects_key;
 use crate::storage::persistent_store::{PersistentStore, PersistentStoreError};
 use anyhow::Result;
-use kanari_crypto::hash_data_blake3;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::TypeTag;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-/// Create a unique key for a dynamic field in RocksDB.
-fn derive_dynamic_field_key(object_id: &str, name_bytes: &[u8]) -> String {
-    let hash = hash_data_blake3(name_bytes);
-    format!("df_{}_{}", object_id, hex::encode(&hash[0..16]))
-}
-
 #[derive(Debug)]
 pub enum ObjectStorageError {
-    LockError(String),
     PersistenceError(anyhow::Error),
-    NotFound,
 }
 
 impl std::fmt::Display for ObjectStorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ObjectStorageError::LockError(s) => write!(f, "LockError: {}", s),
             ObjectStorageError::PersistenceError(e) => write!(f, "PersistenceError: {}", e),
-            ObjectStorageError::NotFound => write!(f, "NotFound"),
         }
     }
 }
@@ -38,7 +27,6 @@ impl std::error::Error for ObjectStorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ObjectStorageError::PersistenceError(e) => e.source(),
-            _ => None,
         }
     }
 }
@@ -59,13 +47,8 @@ impl From<PersistentStoreError> for ObjectStorageError {
 pub trait ObjectStore: Send + Sync {
     fn store_object(&self, obj: StoredObject) -> Result<(), ObjectStorageError>;
     fn get_object(&self, id: &str) -> Option<StoredObject>;
-    fn get_objects_by_owner(&self, owner: &AccountAddress) -> Vec<StoredObject>;
-    fn transfer_object(
-        &self,
-        id: &str,
-        new_owner: AccountAddress,
-    ) -> Result<(), ObjectStorageError>;
     fn delete_object(&self, id: &str) -> Result<(), ObjectStorageError>;
+    #[cfg(test)]
     fn count(&self) -> usize;
     fn clear(&self) -> Result<(), ObjectStorageError>;
 
@@ -74,15 +57,6 @@ pub trait ObjectStore: Send + Sync {
         owner: AccountAddress,
         coin_type: &TypeTag,
     ) -> Vec<StoredObject>;
-
-    fn put_dynamic_field(
-        &self,
-        object_id: &str,
-        name_bytes: &[u8],
-        value_bytes: &[u8],
-    ) -> Result<()>;
-    fn get_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Option<Vec<u8>>;
-    fn remove_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Result<()>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,7 +70,6 @@ pub struct StoredObject {
 
 struct InnerState {
     objects: BTreeMap<String, StoredObject>,
-    dynamic_fields: BTreeMap<String, Vec<u8>>,
 }
 
 pub struct ObjectStorage {
@@ -178,7 +151,6 @@ impl ObjectStorage {
         Self {
             state: Arc::new(RwLock::new(InnerState {
                 objects: BTreeMap::new(),
-                dynamic_fields: BTreeMap::new(),
             })),
             persistent: None,
         }
@@ -196,27 +168,41 @@ impl Default for ObjectStorage {
 }
 
 impl ObjectStorage {
+    fn matches_coin_type(obj: &StoredObject, coin_type: &TypeTag) -> bool {
+        if let Ok(struct_tag) = obj
+            .type_name
+            .parse::<move_core_types::language_storage::StructTag>()
+            && struct_tag.module.as_str() == "coin"
+            && struct_tag.name.as_str() == "Coin"
+            && let Some(tag) = struct_tag.type_params.first()
+        {
+            return tag == coin_type;
+        }
+        false
+    }
+
     fn get_coins_by_type_and_owner(
         &self,
         owner: AccountAddress,
         coin_type: &move_core_types::language_storage::TypeTag,
     ) -> Vec<StoredObject> {
-        let mut coins: Vec<_> = self
-            .get_objects_by_owner(&owner)
-            .into_iter()
-            .filter(|obj| {
-                if let Ok(struct_tag) = obj
-                    .type_name
-                    .parse::<move_core_types::language_storage::StructTag>()
-                    && struct_tag.module.as_str() == "coin"
-                    && struct_tag.name.as_str() == "Coin"
-                    && let Some(tag) = struct_tag.type_params.first()
-                {
-                    return tag == coin_type;
-                }
-                false
-            })
-            .collect();
+        let mut coins: Vec<_> = if let Some(store) = &self.persistent {
+            Self::load_owned_object_ids(store, &owner)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|id| self.get_object(&id))
+                .filter(|obj| Self::matches_coin_type(obj, coin_type))
+                .collect()
+        } else {
+            let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+            state
+                .objects
+                .values()
+                .filter(|obj| obj.owner == owner)
+                .filter(|obj| Self::matches_coin_type(obj, coin_type))
+                .cloned()
+                .collect()
+        };
         coins.sort_by(|a, b| a.id.cmp(&b.id));
         coins
     }
@@ -237,7 +223,6 @@ impl ObjectStorage {
         Ok(Self {
             state: Arc::new(RwLock::new(InnerState {
                 objects: objects_map,
-                dynamic_fields: BTreeMap::new(),
             })),
             persistent: Some(store),
         })
@@ -326,6 +311,7 @@ impl ObjectStorage {
         None
     }
 
+    #[cfg(test)]
     fn get_objects_by_owner(&self, owner: &AccountAddress) -> Vec<StoredObject> {
         if let Some(store) = &self.persistent {
             let ids = Self::load_owned_object_ids(store, owner).unwrap_or_default();
@@ -348,45 +334,6 @@ impl ObjectStorage {
             .collect();
         results.sort_by(|a, b| a.id.cmp(&b.id));
         results
-    }
-
-    fn transfer_object(
-        &self,
-        id: &str,
-        new_owner: AccountAddress,
-    ) -> Result<(), ObjectStorageError> {
-        if self.get_object(id).is_none() {
-            return Err(ObjectStorageError::NotFound);
-        }
-
-        let (old_owner, obj_to_persist) = {
-            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-            if let Some(obj) = state.objects.get_mut(id) {
-                let old = obj.owner;
-                obj.owner = new_owner;
-                (old, obj.clone())
-            } else {
-                return Err(ObjectStorageError::NotFound);
-            }
-        };
-
-        if let Some(store) = &self.persistent {
-            store.save(format!("object:{}", id).as_bytes(), &obj_to_persist)?;
-
-            let old_key = owned_objects_key(&old_owner);
-            let mut old_ids = Self::load_id_index(store, &old_key)?;
-            if Self::remove_index_id(&mut old_ids, id) {
-                Self::save_id_index(store, &old_key, &old_ids)?;
-            }
-
-            let new_key = owned_objects_key(&new_owner);
-            let mut new_ids = Self::load_owned_object_ids(store, &new_owner)?;
-            if Self::add_index_id(&mut new_ids, id) {
-                Self::save_id_index(store, &new_key, &new_ids)?;
-            }
-        }
-
-        Ok(())
     }
 
     fn delete_object(&self, id: &str) -> Result<(), ObjectStorageError> {
@@ -419,6 +366,7 @@ impl ObjectStorage {
         Ok(())
     }
 
+    #[cfg(test)]
     fn count(&self) -> usize {
         self.state
             .read()
@@ -430,68 +378,6 @@ impl ObjectStorage {
     fn clear(&self) -> Result<(), ObjectStorageError> {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         state.objects.clear();
-        state.dynamic_fields.clear();
-        Ok(())
-    }
-
-    fn put_dynamic_field(
-        &self,
-        object_id: &str,
-        name_bytes: &[u8],
-        value_bytes: &[u8],
-    ) -> Result<()> {
-        let key = derive_dynamic_field_key(object_id, name_bytes);
-        let value = value_bytes.to_vec();
-
-        {
-            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-            state.dynamic_fields.insert(key.clone(), value.clone());
-        }
-
-        if let Some(store) = &self.persistent {
-            store
-                .save(key.as_bytes(), &value)
-                .map_err(|e| anyhow::anyhow!("RocksDB Error (put_dynamic_field): {}", e))?;
-        }
-
-        Ok(())
-    }
-
-    fn get_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Option<Vec<u8>> {
-        let key = derive_dynamic_field_key(object_id, name_bytes);
-
-        {
-            let state = self.state.read().unwrap_or_else(|e| e.into_inner());
-            if let Some(val) = state.dynamic_fields.get(&key) {
-                return Some(val.clone());
-            }
-        }
-
-        if let Some(store) = &self.persistent
-            && let Ok(Some(val)) = store.load::<Vec<u8>>(key.as_bytes())
-        {
-            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-            state.dynamic_fields.insert(key, val.clone());
-            return Some(val);
-        }
-
-        None
-    }
-
-    fn remove_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Result<()> {
-        let key = derive_dynamic_field_key(object_id, name_bytes);
-
-        {
-            let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-            state.dynamic_fields.remove(&key);
-        }
-
-        if let Some(store) = &self.persistent {
-            store
-                .delete(key.as_bytes())
-                .map_err(|e| anyhow::anyhow!("RocksDB Error (remove_dynamic_field): {}", e))?;
-        }
-
         Ok(())
     }
 }
@@ -505,22 +391,11 @@ impl ObjectStore for ObjectStorage {
         ObjectStorage::get_object(self, id)
     }
 
-    fn get_objects_by_owner(&self, owner: &AccountAddress) -> Vec<StoredObject> {
-        ObjectStorage::get_objects_by_owner(self, owner)
-    }
-
-    fn transfer_object(
-        &self,
-        id: &str,
-        new_owner: AccountAddress,
-    ) -> Result<(), ObjectStorageError> {
-        ObjectStorage::transfer_object(self, id, new_owner)
-    }
-
     fn delete_object(&self, id: &str) -> Result<(), ObjectStorageError> {
         ObjectStorage::delete_object(self, id)
     }
 
+    #[cfg(test)]
     fn count(&self) -> usize {
         ObjectStorage::count(self)
     }
@@ -535,23 +410,6 @@ impl ObjectStore for ObjectStorage {
         coin_type: &TypeTag,
     ) -> Vec<StoredObject> {
         ObjectStorage::get_coins_by_type_and_owner(self, owner, coin_type)
-    }
-
-    fn put_dynamic_field(
-        &self,
-        object_id: &str,
-        name_bytes: &[u8],
-        value_bytes: &[u8],
-    ) -> Result<()> {
-        ObjectStorage::put_dynamic_field(self, object_id, name_bytes, value_bytes)
-    }
-
-    fn get_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Option<Vec<u8>> {
-        ObjectStorage::get_dynamic_field(self, object_id, name_bytes)
-    }
-
-    fn remove_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Result<()> {
-        ObjectStorage::remove_dynamic_field(self, object_id, name_bytes)
     }
 }
 

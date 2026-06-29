@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use kanari_move_runtime_v1::StateManager;
 use kanari_move_runtime_v1::move_runtime::MoveRuntime;
+use kanari_move_runtime_v1::state::StateManager;
 use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::identifier::Identifier;

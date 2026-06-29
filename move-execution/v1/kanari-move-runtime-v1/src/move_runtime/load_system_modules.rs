@@ -115,7 +115,7 @@ fn ensure_production_build_artifacts(modules_dir: &Path) -> Result<()> {
 }
 
 #[derive(Clone)]
-pub struct DiscoveredModule {
+pub(crate) struct DiscoveredModule {
     pub module_id: ModuleId,
     pub module_name: String,
     pub file_name: String,
@@ -396,7 +396,7 @@ fn save_framework_modules(
     Ok(count)
 }
 
-pub(crate) fn find_modules_dir(env_var: &str, segments: &[&str]) -> PathBuf {
+fn find_modules_dir(env_var: &str, segments: &[&str]) -> PathBuf {
     if let Ok(path_str) = std::env::var(env_var) {
         return PathBuf::from(path_str);
     }
@@ -419,7 +419,7 @@ pub(crate) fn find_modules_dir(env_var: &str, segments: &[&str]) -> PathBuf {
     p
 }
 
-pub(crate) fn find_move_stdlib_modules_dir() -> PathBuf {
+fn find_move_stdlib_modules_dir() -> PathBuf {
     find_modules_dir("MOVE_STDLIB_PATH", MOVE_STDLIB_BYTECODE_SEGMENTS)
 }
 
@@ -436,7 +436,7 @@ fn verbose_startup_enabled() -> bool {
 /// Load move-stdlib and kanari-system modules as methods on `MoveRuntime`
 impl super::MoveRuntime {
     /// Load move-stdlib modules (0x1::*)
-    pub fn load_move_stdlib(&self) -> Result<()> {
+    pub(crate) fn load_move_stdlib(&self) -> Result<()> {
         let modules_dir = find_move_stdlib_modules_dir();
         ensure_production_build_artifacts(&modules_dir)?;
 
@@ -490,7 +490,7 @@ impl super::MoveRuntime {
     }
 
     /// Load Kanari system modules (0x2::*)
-    pub fn load_kanari_system(&self) -> Result<()> {
+    pub(crate) fn load_kanari_system(&self) -> Result<()> {
         let modules_dir = find_kanari_system_modules_dir();
         ensure_production_build_artifacts(&modules_dir)?;
 
@@ -557,7 +557,7 @@ impl super::MoveRuntime {
 }
 
 /// Public API: Load and sort system modules from a directory
-pub fn load_system_modules_from_dir(modules_dir: &Path) -> Result<Vec<DiscoveredModule>> {
+pub(crate) fn load_system_modules_from_dir(modules_dir: &Path) -> Result<Vec<DiscoveredModule>> {
     let system_addr = KanariAddress::kanari_system_account_address();
     let move_system_addr = AccountAddress::from_hex_literal(system_addr.to_hex_literal().as_str())?;
 

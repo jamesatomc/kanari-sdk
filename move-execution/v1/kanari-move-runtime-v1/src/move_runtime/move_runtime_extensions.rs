@@ -13,7 +13,7 @@ use crate::move_runtime::MoveRuntime;
 impl MoveRuntime {
     /// Verify a compiled module before publishing
     /// Checks basic invariants and dependencies
-    pub fn verify_module(&self, module: &CompiledModule) -> Result<()> {
+    pub(crate) fn verify_module(&self, module: &CompiledModule) -> Result<()> {
         // Basic verification checks
 
         // 1. Check module has valid self-id
@@ -50,7 +50,7 @@ impl MoveRuntime {
     }
 
     /// Check if a module is available in storage
-    pub fn has_module(&self, module_id: &ModuleId) -> bool {
+    fn has_module(&self, module_id: &ModuleId) -> bool {
         // Check by assuming stdlib/system modules are always available
         let addr = module_id.address();
         if addr == &KanariAddress::std_account_address()

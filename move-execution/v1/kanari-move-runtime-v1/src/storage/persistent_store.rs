@@ -153,13 +153,6 @@ impl PersistentStore {
         }
     }
 
-    /// Flush all pending writes to the backing store synchronously.
-    pub fn flush(&self) -> std::result::Result<(), PersistentStoreError> {
-        // RocksDB writes are synchronous in this implementation
-        // In-memory writes are immediate
-        Ok(())
-    }
-
     /// Delete a key from the store.
     pub fn delete(&self, key: &[u8]) -> std::result::Result<(), PersistentStoreError> {
         if let Some(db) = &self.db {
@@ -224,19 +217,6 @@ impl PersistentStore {
     /// Expose underlying RocksDB instance for other components (e.g. SMT)
     pub fn get_db(&self) -> Option<Arc<DB>> {
         self.db.clone()
-    }
-
-    /// Apply a write batch atomically.
-    pub fn apply_batch(
-        &self,
-        batch: rocksdb::WriteBatch,
-    ) -> std::result::Result<(), PersistentStoreError> {
-        if let Some(db) = &self.db {
-            db.write(batch)?;
-        }
-        // Note: In-memory batch application is not supported directly via RocksDB batch type
-        // For in-memory, callers should use save_raw individually or implement a custom batch
-        Ok(())
     }
 
     fn is_internal_smt_key(key: &[u8]) -> bool {

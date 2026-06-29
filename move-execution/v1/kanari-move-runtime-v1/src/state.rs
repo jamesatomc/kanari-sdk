@@ -99,7 +99,7 @@ pub struct TokenSupplySummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ObjectLockedCoinRecord {
+struct ObjectLockedCoinRecord {
     pub holder_object_id: String,
     pub holder_type: String,
     pub owner: AccountAddress,
@@ -510,7 +510,7 @@ impl StateManager {
     }
 
     /// Create a new in-memory state manager and surface initialization errors.
-    pub fn try_new_in_memory() -> Result<Self> {
+    pub(crate) fn try_new_in_memory() -> Result<Self> {
         let store = Arc::new(
             PersistentStore::open_in_memory().context("Failed to create in-memory store")?,
         );
@@ -802,7 +802,7 @@ impl StateManager {
         (updates, deletes)
     }
 
-    pub fn get_system_clock_object_id(&self) -> Result<Option<AccountAddress>> {
+    pub(crate) fn get_system_clock_object_id(&self) -> Result<Option<AccountAddress>> {
         let bytes_opt: Option<Vec<u8>> = self.load_internal(SYSTEM_CLOCK_OBJECT_ID_KEY)?;
         match bytes_opt {
             None => Ok(None),
@@ -813,7 +813,7 @@ impl StateManager {
         }
     }
 
-    pub fn set_system_clock_object_id(&mut self, id: AccountAddress) -> Result<()> {
+    pub(crate) fn set_system_clock_object_id(&mut self, id: AccountAddress) -> Result<()> {
         self.save_internal(SYSTEM_CLOCK_OBJECT_ID_KEY, &id.as_ref().to_vec())
     }
 

@@ -119,11 +119,7 @@ impl MoveRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub fn new() -> Result<Self> {
-        Self::new_with_natives(vec![])
-    }
-
-    pub fn new_with_natives(natives: Vec<NativeFunctionTable>) -> Result<Self> {
+    pub(crate) fn new_with_natives(natives: Vec<NativeFunctionTable>) -> Result<Self> {
         let state = if cfg!(miri) {
             MoveVMState::new_in_memory()?
         } else {
@@ -137,7 +133,7 @@ impl MoveRuntime {
         Self::new_internal(natives, state, None)
     }
 
-    pub fn new_with_natives_and_store(
+    pub(crate) fn new_with_natives_and_store(
         natives: Vec<NativeFunctionTable>,
         store: Arc<PersistentStore>,
     ) -> Result<Self> {
@@ -396,24 +392,6 @@ impl MoveRuntime {
             true,
         )
     }
-
-    pub fn publish_module_with_persistence(
-        &self,
-        module_bytes: Vec<u8>,
-        sender: AccountAddress,
-        gas_info: Option<(u64, u64)>,
-        persist_runtime_state: bool,
-    ) -> Result<ChangeSet> {
-        self.publish_module_with_context_and_persistence(
-            module_bytes,
-            sender,
-            gas_info,
-            None,
-            None,
-            persist_runtime_state,
-        )
-    }
-
     pub fn publish_module_with_context_and_persistence(
         &self,
         module_bytes: Vec<u8>,
@@ -527,25 +505,7 @@ impl MoveRuntime {
                 )
             })
     }
-
-    /// Execute the init() function from a module (used for genesis initialization)
-    pub fn execute_init_function(
-        &self,
-        module_addr: AccountAddress,
-        module_name: &str,
-        args: Vec<Vec<u8>>,
-    ) -> Result<ChangeSet> {
-        log::info!(
-            "Executing {}.init() with {} arguments",
-            module_name,
-            args.len()
-        );
-
-        self.execute_init_function_internal(module_addr, module_name, args, None, None)
-            .map_err(|e| anyhow::anyhow!("Failed to execute init(): {:?}", e))
-    }
-
-    pub fn execute_init_function_with_context(
+    pub(crate) fn execute_init_function_with_context(
         &self,
         module_addr: AccountAddress,
         module_name: &str,
@@ -556,40 +516,6 @@ impl MoveRuntime {
         self.execute_init_function_internal(module_addr, module_name, args, timestamp, tx_hash)
             .map_err(|e| anyhow::anyhow!("Failed to execute init(): {:?}", e))
     }
-
-    /// Execute init function with a type witness (for coin initialization)
-    pub fn execute_init_function_with_type_witness(
-        &self,
-        module_addr: AccountAddress,
-        module_name: &str,
-        witness_type_name: &str,
-        args: Vec<Vec<u8>>,
-    ) -> Result<ChangeSet> {
-        log::info!(
-            "Executing {}.init() with type witness {} and {} arguments",
-            module_name,
-            witness_type_name,
-            args.len()
-        );
-
-        let mut init_args = Vec::with_capacity(args.len() + 1);
-
-        // `init(witness: T, ctx: &mut TxContext)` expects the witness as a function argument,
-        // not a generic type argument. An empty payload lets `execute_entry_function_internal`
-        // synthesize the OTW bytes from the function parameter layout.
-        init_args.push(Vec::new());
-        init_args.extend(args);
-
-        self.execute_init_function_internal(module_addr, module_name, init_args, None, None)
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to execute init() with witness {}: {:?}",
-                    witness_type_name,
-                    e
-                )
-            })
-    }
-
     fn execute_init_function_internal(
         &self,
         module_addr: AccountAddress,
@@ -897,26 +823,6 @@ impl MoveRuntime {
             type_args,
             args,
             ExecutionOptions::new(sender, gas_info, timestamp, None),
-        )
-    }
-
-    pub fn execute_entry_function_with_tx_hash(
-        &self,
-        module_id: &ModuleId,
-        function_name: &str,
-        type_args: Vec<TypeTag>,
-        args: Vec<Vec<u8>>,
-        sender: Option<AccountAddress>,
-        gas_info: Option<(u64, u64)>,
-        timestamp: Option<u64>,
-        tx_hash: Option<Vec<u8>>,
-    ) -> Result<ChangeSet> {
-        self.execute_entry_function_internal(
-            module_id,
-            function_name,
-            type_args,
-            args,
-            ExecutionOptions::new(sender, gas_info, timestamp, tx_hash),
         )
     }
 
@@ -1386,44 +1292,6 @@ impl MoveRuntime {
         extensions.add(BorrowedObjectsExt::default());
 
         vm_guard.new_session_with_extensions(self.resolver.clone(), extensions)
-    }
-
-    pub fn execute_block_prologue(
-        &self,
-        state: &mut StateManager,
-        timestamp_ms: u64,
-    ) -> Result<()> {
-        let module_id = ClockModule::get_module_id()?;
-        let func_name = ClockModule::function_names().consensus_commit_prologue;
-
-        let mut args: Vec<Vec<u8>> = vec![];
-        let clock_id = self.ensure_system_clock(state)?;
-        args.push(bcs::to_bytes(&clock_id)?);
-        args.push(bcs::to_bytes(&timestamp_ms)?);
-
-        let system_sender = AccountAddress::ZERO;
-
-        let result = self.execute_entry_function(
-            &module_id,
-            func_name,
-            vec![],
-            args,
-            Some(system_sender),
-            None,
-            Some(timestamp_ms),
-        );
-
-        match result {
-            Ok(change_set) => {
-                // Apply the changeset to persist state updates (e.g., clock timestamp change)
-                state.apply_changeset(&change_set)?;
-                Ok(())
-            }
-            Err(e) => {
-                log::error!("[Block Prologue] Failed to update clock: {:?}", e);
-                Err(anyhow::anyhow!("Clock update failed: {}", e))
-            }
-        }
     }
 
     /// Execute a read-only function without persisting any state changes.

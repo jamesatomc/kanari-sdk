@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::{CheckpointSyncData, consensus::Checkpoint};
 use kanari_crypto::keys::{CurveType, generate_keypair};

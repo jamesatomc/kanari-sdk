@@ -1,6 +1,9 @@
 use anyhow::Result;
 use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
-use kanari_move_runtime_v1::{Account, ChangeSet, StateManager};
+use kanari_move_runtime_v1::{
+    ChangeSet,
+    state::{Account, StateManager},
+};
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use move_core_types::account_address::AccountAddress;
 use std::collections::BTreeMap;

@@ -1,4 +1,3 @@
-
 use super::*;
 use kanari_crypto::keys::{CurveType, generate_keypair};
 use kanari_types::transaction::{SignedTransaction, Transaction};
