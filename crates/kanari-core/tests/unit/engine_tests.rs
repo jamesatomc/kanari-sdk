@@ -1,4 +1,4 @@
-use super::BlockchainEngine;
+use super::{BlockchainEngine, PersistedTransactionLocation};
 use crate::blockchain::Blockchain;
 use crate::consensus::{Checkpoint, PersistentDagState};
 use kanari_crypto::keys::{CurveType, generate_keypair};
@@ -470,4 +470,62 @@ fn account_info_prefers_native_state_balance_over_stale_coin_object() {
         info.token_balances.get(KANARI_TOKEN_TYPE).copied(),
         Some(790)
     );
+}
+
+#[test]
+fn apply_checkpoint_rejects_empty_checkpoint() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let prev_hash = {
+        let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
+        chain.latest_checkpoint().hash().unwrap()
+    };
+    let state_root = engine
+        .state
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .compute_state_root();
+    let checkpoint = Checkpoint::new(1, vec![], vec![], state_root, 42, prev_hash);
+
+    let error = engine.apply_checkpoint(checkpoint).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Refusing to apply empty checkpoint")
+    );
+    assert_eq!(engine.get_stats().height, 0);
+}
+
+#[test]
+fn stats_count_committed_transactions_from_queryable_history() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let data_dir = temp_dir.path().to_str().unwrap();
+    let engine = BlockchainEngine::new_dir(data_dir).unwrap();
+    let Some(store) = engine.persistent_store.as_ref() else {
+        return;
+    };
+
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let first = signed_transfer_from(&sender, 0);
+    let second = signed_transfer_from(&sender, 1);
+    let location = PersistedTransactionLocation {
+        checkpoint_sequence: 7,
+        state_root: vec![3u8; 32],
+    };
+
+    for tx in [&first, &second] {
+        let tx_hash = tx.transaction_hash().to_vec();
+        store
+            .save(&BlockchainEngine::transaction_payload_key(&tx_hash), tx)
+            .unwrap();
+        store
+            .save(
+                &BlockchainEngine::transaction_index_key(&tx_hash),
+                &location,
+            )
+            .unwrap();
+    }
+
+    let stats = engine.get_stats();
+    assert_eq!(stats.total_transactions, 2);
 }

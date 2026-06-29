@@ -10,6 +10,39 @@ use super::*;
 use crate::{BlockchainEngine, Checkpoint, CheckpointSyncData};
 
 impl BlockchainEngine {
+    fn committed_transaction_count_for_stats(&self, fallback_count: usize) -> usize {
+        let Some(store) = &self.persistent_store else {
+            return fallback_count;
+        };
+
+        match store.logical_entries() {
+            Ok(entries) => {
+                let mut payload_hashes = std::collections::HashSet::new();
+                let mut indexed_hashes = std::collections::HashSet::new();
+
+                for (key, _) in &entries {
+                    if let Some(hash) = key.strip_prefix(b"tx_payload/") {
+                        payload_hashes.insert(hash.to_vec());
+                    } else if let Some(hash) = key.strip_prefix(b"tx_index/") {
+                        indexed_hashes.insert(hash.to_vec());
+                    }
+                }
+
+                payload_hashes
+                    .intersection(&indexed_hashes)
+                    .count()
+                    .max(fallback_count)
+            }
+            Err(error) => {
+                warn!(
+                    "Failed to scan committed transaction history for stats: {}",
+                    error
+                );
+                fallback_count
+            }
+        }
+    }
+
     pub fn latest_checkpoint_hash_hex(&self) -> String {
         let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
         chain
@@ -34,11 +67,13 @@ impl BlockchainEngine {
             }
         };
         let pending_transactions = self.pending_transaction_len();
+        let total_transactions =
+            self.committed_transaction_count_for_stats(chain.get_transaction_count());
 
         BlockchainStats {
             height: chain.height(),
             total_blocks: chain.dag_checkpoints.len(),
-            total_transactions: chain.get_transaction_count(),
+            total_transactions,
             pending_transactions,
             total_accounts: state.account_count(),
             total_supply: state.total_supply,

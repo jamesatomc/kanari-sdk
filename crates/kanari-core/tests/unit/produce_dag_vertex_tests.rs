@@ -223,3 +223,40 @@ fn test_add_network_vertex_rejects_missing_parent() {
     let error = dag_engine.add_network_vertex(vertex).unwrap_err();
     assert!(error.to_string().contains("Missing parent"));
 }
+
+#[test]
+fn test_add_network_vertex_does_not_create_committed_progress() {
+    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let local_key = authority_key(11);
+    let remote_key = authority_key(22);
+    let mut public_keys = BTreeMap::new();
+    public_keys.insert(
+        "auth1".to_string(),
+        local_key.verifying_key().to_bytes().to_vec(),
+    );
+    public_keys.insert(
+        "auth2".to_string(),
+        remote_key.verifying_key().to_bytes().to_vec(),
+    );
+    let dag_engine = DagEngine::new_secure(
+        engine.clone(),
+        "auth1".to_string(),
+        vec!["auth1".to_string(), "auth2".to_string()],
+        local_key,
+        public_keys,
+    )
+    .unwrap();
+
+    let vertex = signed_network_vertex("auth2", &remote_key, 1, vec![]);
+    dag_engine.add_network_vertex(vertex.clone()).unwrap();
+    dag_engine.add_network_vertex(vertex).unwrap();
+
+    let stats = engine.get_stats();
+    let consensus = dag_engine
+        .consensus
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    assert_eq!(consensus.vertices.len(), 1);
+    assert_eq!(stats.height, 0);
+    assert_eq!(stats.total_transactions, 0);
+}

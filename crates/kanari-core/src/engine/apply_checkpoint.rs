@@ -10,6 +10,17 @@ use log::info;
 use std::sync::{Arc, RwLock};
 
 impl BlockchainEngine {
+    fn ensure_non_empty_committed_checkpoint(checkpoint: &Checkpoint) -> Result<()> {
+        if checkpoint.sequence > 0 && checkpoint.transactions.is_empty() {
+            bail!(
+                "Refusing to apply empty checkpoint #{}",
+                checkpoint.sequence
+            );
+        }
+
+        Ok(())
+    }
+
     fn requires_runtime_side_effect_persistence(transactions: &[SignedTransaction]) -> bool {
         transactions.iter().any(|signed_tx| {
             if signed_tx.transaction.is_native_balance_call() {
@@ -190,6 +201,8 @@ impl BlockchainEngine {
         to_execute: Vec<SignedTransaction>,
         validate_supply: bool,
     ) -> Result<()> {
+        Self::ensure_non_empty_committed_checkpoint(&checkpoint)?;
+
         if !to_execute.is_empty() && Self::requires_runtime_side_effect_persistence(&to_execute) {
             let side_effect_state = Arc::new(RwLock::new(self.state_read().clone()));
             self.apply_system_prologue_to_state(&side_effect_state, checkpoint.timestamp, true)?;
@@ -205,6 +218,7 @@ impl BlockchainEngine {
     }
 
     pub fn apply_checkpoint(&self, checkpoint: Checkpoint) -> Result<()> {
+        Self::ensure_non_empty_committed_checkpoint(&checkpoint)?;
         info!(
             "[ENGINE] Applying checkpoint {} with {} txs",
             checkpoint.sequence,

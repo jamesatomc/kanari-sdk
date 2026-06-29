@@ -134,8 +134,7 @@ impl WalWriter {
         let v_len = v.iter().map(|s| s.len()).sum::<usize>();
         let len = v_len as u64 + HEADER_LEN_BYTES;
         assert!(len <= MAP_SIZE, "Wal entry too big, {len} < {MAP_SIZE}");
-        let mut buffs = vec![];
-        let mut written_expected = 0usize;
+        let mut prefix_len = 0usize;
         tracing::trace!(
             "pos={}, len={}, self.pos + len - 1={}, a(pos)={}, a(pos+len)={}",
             self.pos,
@@ -146,9 +145,7 @@ impl WalWriter {
         );
         if offset(self.pos) != offset(self.pos + len - 1) {
             let extra_len = offset(self.pos + len - 1) - self.pos;
-            let extra = &ZERO_MAP[0..(extra_len as usize)];
-            buffs.push(IoSlice::new(extra));
-            written_expected += extra.len();
+            prefix_len = extra_len as usize;
             self.pos += extra_len;
             debug_assert_eq!(offset(self.pos), self.pos);
             debug_assert_eq!(offset(self.pos), offset(self.pos + len - 1));
@@ -158,13 +155,16 @@ impl WalWriter {
             crc.update(slice);
         }
         let crc = crc.finalize() as u64;
-        let header = combine_header(crc, len, tag);
-        let header = header.to_le_bytes();
-        buffs.push(IoSlice::new(&header));
-        buffs.extend_from_slice(v);
-        written_expected += len as usize;
-        let written = self.file.write_vectored(&buffs)?;
-        assert_eq!(written, written_expected);
+        let header = combine_header(crc, len, tag).to_le_bytes();
+        let mut buffer = Vec::with_capacity(prefix_len + len as usize);
+        if prefix_len > 0 {
+            buffer.extend_from_slice(&ZERO_MAP[..prefix_len]);
+        }
+        buffer.extend_from_slice(&header);
+        for slice in v {
+            buffer.extend_from_slice(slice.as_ref());
+        }
+        self.file.write_all(&buffer)?;
         let position = WalPosition { start: self.pos };
         self.pos += len;
         Ok(position)

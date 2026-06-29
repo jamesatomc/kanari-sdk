@@ -1453,16 +1453,6 @@ impl StateManager {
     }
 
     pub fn compute_state_root(&self) -> Vec<u8> {
-        if let Some(smt) = &self.smt {
-            let (updates, deletes) = self.smt_changes_from_overlay();
-            match smt.root_hash_with_changes(&updates, &deletes) {
-                Ok(root) => return root.to_vec(),
-                Err(e) => {
-                    log::error!("Failed to compute SMT state root, falling back: {}", e);
-                }
-            }
-        }
-
         let mut entries: BTreeMap<Vec<u8>, Vec<u8>> = match self.store.logical_entries() {
             Ok(entries) => entries.into_iter().collect(),
             Err(e) => {

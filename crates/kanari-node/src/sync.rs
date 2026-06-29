@@ -1253,18 +1253,8 @@ mod tests {
         )
     }
 
-    fn apply_empty_checkpoint(engine: &BlockchainEngine, sequence: u64) {
-        let prev_hash = {
-            let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
-            chain.latest_checkpoint().hash().unwrap()
-        };
-        let state_root = engine
-            .state
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .compute_state_root();
-        let checkpoint = Checkpoint::new(sequence, vec![], vec![], state_root, sequence, prev_hash);
-        engine.apply_checkpoint(checkpoint).unwrap();
+    fn empty_checkpoint(sequence: u64, prev_hash: Vec<u8>, state_root: Vec<u8>) -> Checkpoint {
+        Checkpoint::new(sequence, vec![], vec![], state_root, sequence, prev_hash)
     }
 
     #[test]
@@ -1344,10 +1334,24 @@ mod tests {
     #[test]
     fn test_buffered_empty_checkpoint_is_not_applied_when_gap_is_filled() {
         let source_engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
-        apply_empty_checkpoint(source_engine.as_ref(), 1);
-        apply_empty_checkpoint(source_engine.as_ref(), 2);
-        let checkpoint_one = source_engine.get_checkpoint_sync(1).unwrap();
-        let checkpoint_two = source_engine.get_checkpoint_sync(2).unwrap();
+        let state_root = source_engine
+            .state
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .compute_state_root();
+        let genesis_hash = {
+            let chain = source_engine
+                .blockchain
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            chain.latest_checkpoint().hash().unwrap()
+        };
+        let checkpoint_one = CheckpointSyncData {
+            checkpoint: empty_checkpoint(1, genesis_hash.clone(), state_root.clone()),
+        };
+        let checkpoint_two = CheckpointSyncData {
+            checkpoint: empty_checkpoint(2, checkpoint_one.checkpoint.hash().unwrap(), state_root),
+        };
 
         let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
         let (network_tx, _network_rx) = mpsc::unbounded_channel();
