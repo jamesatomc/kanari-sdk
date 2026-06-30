@@ -1,4 +1,5 @@
 use super::*;
+use kanari_types::error::KanariUnwrapExt;
 
 fn set_native_supply_for_test(state: &mut StateManager, total_supply: u64) -> Result<()> {
     state.total_supply = total_supply;
@@ -417,7 +418,13 @@ fn apply_changeset_rejects_insufficient_debit_without_partial_writes() -> Result
     assert!(error.to_string().contains("Insufficient native balance"));
     assert_eq!(state.compute_state_root(), root_before);
     assert!(state.get_account(&recipient).is_none());
-    assert_eq!(state.get_account(&sender).unwrap().native_balance(), 5);
+    assert_eq!(
+        state
+            .get_account(&sender)
+            .invariant("sender account should exist")
+            .native_balance(),
+        5
+    );
 
     Ok(())
 }
@@ -437,7 +444,10 @@ fn apply_changeset_rejects_supply_invariant_violation_without_mutating_live_stat
     );
 
     let root_before = state.compute_state_root();
-    let sender_balance_before = state.get_account(&sender).unwrap().native_balance();
+    let sender_balance_before = state
+        .get_account(&sender)
+        .invariant("sender account should exist")
+        .native_balance();
 
     let mut changeset = ChangeSet::new();
     changeset.transfer(sender, recipient, 10);
@@ -447,7 +457,10 @@ fn apply_changeset_rejects_supply_invariant_violation_without_mutating_live_stat
     assert_eq!(state.compute_state_root(), root_before);
     assert!(state.get_account(&recipient).is_none());
     assert_eq!(
-        state.get_account(&sender).unwrap().native_balance(),
+        state
+            .get_account(&sender)
+            .invariant("sender account should exist")
+            .native_balance(),
         sender_balance_before
     );
 
@@ -459,7 +472,10 @@ fn unrelated_object_creation_preserves_native_balance_cache() -> Result<()> {
     let owner = AccountAddress::from_hex_literal("0x1111")?;
     let mut state = StateManager::new_in_memory();
     state.save_account(&Account::with_native_balance(owner, 500))?;
-    let before_balance = state.get_account(&owner).unwrap().native_balance();
+    let before_balance = state
+        .get_account(&owner)
+        .invariant("owner account should exist")
+        .native_balance();
     let before_visible = state.indexed_wallet_supply(KANARI_TOKEN_TYPE)?;
 
     let mut changeset = ChangeSet::new();
@@ -477,7 +493,10 @@ fn unrelated_object_creation_preserves_native_balance_cache() -> Result<()> {
     state.apply_changeset(&changeset)?;
 
     assert_eq!(
-        state.get_account(&owner).unwrap().native_balance(),
+        state
+            .get_account(&owner)
+            .invariant("owner account should exist")
+            .native_balance(),
         before_balance
     );
     assert_eq!(
@@ -496,12 +515,18 @@ fn recompute_owner_balances_preserves_native_gas_adjustments() -> Result<()> {
     let mut state = StateManager::new_in_memory();
     state.save_account(&Account::with_native_balance(owner, 500))?;
 
-    let before_balance = state.get_account(&owner).unwrap().native_balance();
+    let before_balance = state
+        .get_account(&owner)
+        .invariant("owner account should exist")
+        .native_balance();
 
     let mut gas_only = ChangeSet::new();
     gas_only.get_or_create_change(owner).debit(210);
     state.apply_changeset(&gas_only)?;
-    let after_gas_balance = state.get_account(&owner).unwrap().native_balance();
+    let after_gas_balance = state
+        .get_account(&owner)
+        .invariant("owner account should exist")
+        .native_balance();
     assert_eq!(after_gas_balance, before_balance - 210);
 
     let mut coin_data = vec![0u8; UID_SIZE + U64_SIZE];
@@ -521,7 +546,10 @@ fn recompute_owner_balances_preserves_native_gas_adjustments() -> Result<()> {
     state.apply_changeset(&mint)?;
 
     assert_eq!(
-        state.get_account(&owner).unwrap().native_balance(),
+        state
+            .get_account(&owner)
+            .invariant("owner account should exist")
+            .native_balance(),
         after_gas_balance
     );
 

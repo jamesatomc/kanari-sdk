@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use kanari_crypto::keys::{CurveType, KANARI_KEY_PREFIX, generate_keypair};
+use kanari_types::error::{KanariError, KanariUnwrapExt};
 use tracing::info;
 
 mod app;
@@ -159,12 +160,15 @@ fn write_consensus_key_files(
 
     let mut public_keys = BTreeMap::new();
     for node_id in 1..=node_count {
-        let keypair = generate_keypair(CurveType::Ed25519)
-            .map_err(|e| anyhow::anyhow!("Failed to generate consensus key: {}", e))?;
+        let keypair =
+            generate_keypair(CurveType::Ed25519).map_err(|e| KanariError::OperationFailed {
+                context: "Failed to generate consensus key",
+                details: e.to_string(),
+            })?;
         let private_seed = keypair
             .private_key
             .strip_prefix(KANARI_KEY_PREFIX)
-            .ok_or_else(|| anyhow::anyhow!("Generated private key has unexpected format"))?
+            .require("Generated private key has unexpected format")?
             .to_string();
         let authority = format!("0x{}", node_id);
         let private_key_path =
@@ -240,8 +244,8 @@ fn main() -> Result<()> {
             let mut engine = create_engine(&data_dir, &network)?;
             info!("Engine initialized. Configuring authority and consensus keys");
 
-            let id = authority_id.expect("validated authority_id must exist");
-            let auths = authorities.expect("validated authorities must exist");
+            let id = authority_id.invariant("validated authority_id must exist");
+            let auths = authorities.invariant("validated authorities must exist");
             tracing::info!(
                 "Configuring Authority ID: {} with {} authorities",
                 id,

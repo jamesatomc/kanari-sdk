@@ -12,6 +12,7 @@ repository.workspace = true
 description.workspace = true
 
 [dependencies]
+kanari-types = { workspace = true }
 kanari-rpc-api = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde_json = { workspace = true }

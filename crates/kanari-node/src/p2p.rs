@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Result, bail};
+use kanari_types::error::KanariError;
 use libp2p::{
     PeerId, Swarm, Transport,
     core::upgrade,
@@ -186,13 +187,19 @@ impl P2PNetwork {
             // Add flood publishing for critical messages (checkpoints, vertices)
             .flood_publish(true)
             .build()
-            .map_err(|e| anyhow::anyhow!("Gossipsub config error: {}", e))?;
+            .map_err(|e| KanariError::OperationFailed {
+                context: "Gossipsub config error",
+                details: e.to_string(),
+            })?;
 
         let mut gossipsub = gossipsub::Behaviour::new(
             MessageAuthenticity::Signed(keypair.clone()),
             gossipsub_config,
         )
-        .map_err(|e| anyhow::anyhow!("Failed to create gossipsub: {}", e))?;
+        .map_err(|e| KanariError::OperationFailed {
+            context: "Failed to create gossipsub",
+            details: e.to_string(),
+        })?;
 
         let checkpoints_topic = IdentTopic::new("kanari/checkpoints");
         let tx_topic = IdentTopic::new("kanari/transactions");
@@ -415,8 +422,12 @@ impl P2PNetwork {
         let final_msg = Self::compress_large_message(msg)?;
 
         let config = bincode::config::standard();
-        let data = bincode::encode_to_vec(&final_msg, config)
-            .map_err(|e| anyhow::anyhow!("Failed to encode message: {}", e))?;
+        let data = bincode::encode_to_vec(&final_msg, config).map_err(|e| {
+            KanariError::OperationFailed {
+                context: "Failed to encode message",
+                details: e.to_string(),
+            }
+        })?;
 
         // Publish and handle duplicate gracefully
         match self
@@ -918,20 +929,25 @@ impl P2PEventHandler {
 }
 #[cfg(test)]
 mod tests {
+    use kanari_types::error::KanariUnwrapExt;
+
     use super::*;
 
     #[test]
     fn compressed_payload_round_trip() {
         let payload = "kanari".repeat(20_000);
-        let compressed = gzip_string(&payload).unwrap();
+        let compressed = gzip_string(&payload).invariant("failed to compress test payload");
 
-        assert_eq!(decompress_payload(&compressed).unwrap(), payload);
+        assert_eq!(
+            decompress_payload(&compressed).invariant("failed to decompress test payload"),
+            payload
+        );
     }
 
     #[test]
     fn compressed_payload_rejects_excessive_expansion() {
         let payload = "x".repeat(MAX_DECOMPRESSED_PAYLOAD_SIZE + 1);
-        let compressed = gzip_string(&payload).unwrap();
+        let compressed = gzip_string(&payload).invariant("failed to compress test payload");
 
         let error = decompress_payload(&compressed).unwrap_err();
         assert!(error.to_string().contains("exceeds"));

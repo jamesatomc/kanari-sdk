@@ -9,6 +9,7 @@ use crate::command::common::{
 use anyhow::{Context, Result};
 use clap::*;
 use kanari_rpc_api::{CallFunctionRequest, RpcRequest, RpcResponse, methods};
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use kanari_types::{GasEstimate, GasOperation};
 use log::error;
@@ -159,7 +160,7 @@ impl Call {
             // Wrap and sign using SignedTransaction helper
             let mut stx = SignedTransaction::new(transaction);
             stx.sign(&wallet.private_key, wallet.curve_type)
-                .map_err(|e| anyhow::anyhow!("Failed to sign transaction: {}", e))?;
+                .require("Failed to sign transaction")?;
             eprintln!("   Transaction signed (curve: {})", wallet.curve_type);
             stx
         };
@@ -181,7 +182,7 @@ impl Call {
         let rpc_request = RpcRequest {
             jsonrpc: "2.0".to_string(),
             method: methods::CALL_FUNCTION.to_string(),
-            params: serde_json::to_value(call_req).unwrap_or(serde_json::json!(null)),
+            params: serde_json::to_value(call_req).context("Failed to serialize call request")?,
             id: 1,
         };
 
@@ -249,7 +250,7 @@ impl Call {
             // Result is vector<vector<u8>> which matches vector<String> in Move
             return MoveValue::Vector(elements)
                 .simple_serialize()
-                .ok_or_else(|| anyhow::anyhow!("Fail to serialize vector<String>"));
+                .require("Fail to serialize vector<String>");
         }
 
         // 2. Handle Object IDs (Kanari convention for passing object references)
@@ -273,7 +274,7 @@ impl Call {
             {
                 // Convert to AccountAddress
                 let obj_id = AccountAddress::from_hex_literal(&format!("0x{}", raw_hex))
-                    .map_err(|e| anyhow::anyhow!("Invalid object ID format: {}", e))?;
+                    .require("Invalid object ID format")?;
 
                 eprintln!("[CLI] 📦 Detected Object ID: 0x{}", raw_hex);
 

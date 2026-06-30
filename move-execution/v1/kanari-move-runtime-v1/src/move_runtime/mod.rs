@@ -11,6 +11,8 @@ use kanari_system_natives::object::{
 };
 use kanari_system_natives::transfer_natives::TransferredObjectsExt;
 use kanari_types::clock::ClockModule;
+
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::event::Event;
 use log::debug;
 use move_binary_format::file_format::CompiledModule;
@@ -151,8 +153,7 @@ impl MoveRuntime {
             .flat_map(|table| table.into_iter())
             .collect();
 
-        let vm = MoveVM::new(all_natives.clone())
-            .map_err(|e| anyhow::anyhow!(format!("VM init error: {:?}", e)))?;
+        let vm = MoveVM::new(all_natives.clone()).require("VM init error")?;
 
         let object_storage: Arc<dyn ObjectStore> = match shared_store {
             Some(store) if !cfg!(miri) => match ObjectStorage::boxed_with_store(store) {
@@ -233,8 +234,7 @@ impl MoveRuntime {
     }
 
     pub fn spawn_worker(&self) -> Result<Self> {
-        let vm = MoveVM::new(self.all_natives.as_ref().clone())
-            .map_err(|e| anyhow::anyhow!("Worker VM init error: {:?}", e))?;
+        let vm = MoveVM::new(self.all_natives.as_ref().clone()).require("Worker VM init error")?;
 
         Ok(MoveRuntime {
             vm: Arc::new(RwLock::new(vm)),
@@ -250,7 +250,7 @@ impl MoveRuntime {
 
     pub fn spawn_isolated_worker(&self) -> Result<Self> {
         let vm = MoveVM::new(self.all_natives.as_ref().clone())
-            .map_err(|e| anyhow::anyhow!("Isolated worker VM init error: {:?}", e))?;
+            .require("Isolated worker VM init error")?;
 
         let object_storage: Arc<dyn ObjectStore> =
             match ObjectStorage::boxed_with_store(self.state.store()) {
@@ -289,8 +289,8 @@ impl MoveRuntime {
 
     /// Rebuild the VM instance so cached module state is refreshed.
     pub fn reload_vm_cache(&self) -> Result<()> {
-        let new_vm = MoveVM::new(self.all_natives.as_ref().clone())
-            .map_err(|e| anyhow::anyhow!("Failed to reload MoveVM: {:?}", e))?;
+        let new_vm =
+            MoveVM::new(self.all_natives.as_ref().clone()).require("Failed to reload MoveVM")?;
 
         // Replace the VM instance to clear internal caches.
         *self.write_vm() = new_vm;
@@ -305,7 +305,7 @@ impl MoveRuntime {
     pub fn clear_object_cache(&self) -> Result<()> {
         self.object_storage
             .clear()
-            .map_err(|e| anyhow::anyhow!("Failed to clear runtime object cache: {}", e))
+            .require("Failed to clear runtime object cache")
     }
 
     /// Preload system modules into the VM cache to ensure dependencies are available
@@ -419,9 +419,12 @@ impl MoveRuntime {
 
             session
                 .publish_module(module_bytes.clone(), sender, &mut metered_gas)
-                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+                .require("Move VM operation failed")?;
 
-            session.finish().0.map_err(|e| anyhow::anyhow!("{:?}", e))?
+            session
+                .finish()
+                .0
+                .require("Failed to finish publish session")?
         };
 
         if persist_runtime_state {
@@ -471,8 +474,7 @@ impl MoveRuntime {
             );
         }
 
-        verify_module_unmetered(compiled)
-            .map_err(|e| anyhow::anyhow!("Module bytecode verification failed: {:?}", e))?;
+        verify_module_unmetered(compiled).require("Module bytecode verification failed")?;
         self.verify_module(compiled)?;
         self.verify_module_upgrade_compatibility(module_id, compiled, module_bytes)
     }
@@ -514,7 +516,7 @@ impl MoveRuntime {
         tx_hash: Option<Vec<u8>>,
     ) -> Result<ChangeSet> {
         self.execute_init_function_internal(module_addr, module_name, args, timestamp, tx_hash)
-            .map_err(|e| anyhow::anyhow!("Failed to execute init(): {:?}", e))
+            .require("Failed to execute init()")
     }
     fn execute_init_function_internal(
         &self,
@@ -597,7 +599,7 @@ impl MoveRuntime {
         ]));
         move_value
             .simple_serialize()
-            .ok_or_else(|| anyhow::anyhow!("Failed to serialize TxContext MoveValue"))
+            .require("Failed to serialize TxContext MoveValue")
     }
 
     fn synthesize_otw_bytes_from_layout(layout: &MoveTypeLayout) -> Option<Vec<u8>> {
@@ -740,7 +742,7 @@ impl MoveRuntime {
         };
         self.object_storage
             .store_object(stored)
-            .map_err(|e| anyhow::anyhow!("{:?}", e))
+            .require("Object storage operation failed")
     }
 
     pub fn ensure_system_clock(&self, state: &mut StateManager) -> Result<AccountAddress> {
@@ -774,7 +776,7 @@ impl MoveRuntime {
             .created_objects
             .iter()
             .find(|(_, created)| created.type_.contains("::clock::Clock"))
-            .ok_or_else(|| anyhow::anyhow!("Clock object was not created by clock::create"))?;
+            .require("Clock object was not created by clock::create")?;
 
         let addr = AccountAddress::from_hex_literal(object_id)?;
         state.set_system_clock_object_id(addr)?;
@@ -904,11 +906,11 @@ impl MoveRuntime {
             ty_args_loaded.push(
                 session
                     .load_type(tag)
-                    .map_err(|e| anyhow::anyhow!("{:?}", e))?,
+                    .require("Object storage operation failed")?,
             );
         }
 
-        let ident = IdentStr::new(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let ident = IdentStr::new(function_name).require("Invalid function name")?;
 
         let mut final_args = Self::preprocess_entry_args(args);
         let tx_context_bytes =
@@ -1104,8 +1106,7 @@ impl MoveRuntime {
                 };
 
                 let (res, _new_storage) = session.finish();
-                let (move_changeset, events) =
-                    res.map_err(|e| anyhow::anyhow!("exec error: {:?}", e))?;
+                let (move_changeset, events) = res.require("exec error")?;
 
                 for (addr, account_changes) in move_changeset.accounts() {
                     for op in account_changes.resources().values() {
@@ -1312,7 +1313,7 @@ impl MoveRuntime {
             package_addr
         };
         let addr = AccountAddress::from_hex_literal(&format!("0x{}", addr_hex))
-            .map_err(|e| anyhow::anyhow!("Invalid package address: {}", e))?;
+            .require("Invalid package address")?;
 
         let module_id = ModuleId::new(addr, Identifier::new(module_name)?);
 
@@ -1322,7 +1323,7 @@ impl MoveRuntime {
 
         // Preload object arguments so view functions can borrow them through natives.
         self.preload_objects_for_execution(&mut session, args)
-            .map_err(|e| anyhow::anyhow!("Failed to preload objects: {}", e))?;
+            .require("Failed to preload objects")?;
 
         // Parse and load type arguments before invocation.
         let mut ty_args_loaded = Vec::with_capacity(type_args.len());
@@ -1332,12 +1333,11 @@ impl MoveRuntime {
             ty_args_loaded.push(
                 session
                     .load_type(&type_tag)
-                    .map_err(|e| anyhow::anyhow!("Failed to load type {}: {:?}", type_arg, e))?,
+                    .require("Failed to load type argument")?,
             );
         }
 
-        let ident = IdentStr::new(function_name)
-            .map_err(|e| anyhow::anyhow!("Invalid function name: {}", e))?;
+        let ident = IdentStr::new(function_name).require("Invalid function name")?;
 
         // View calls run with the unmetered gas meter.
         let mut unmetered_gas = UnmeteredGasMeter;
@@ -1351,8 +1351,7 @@ impl MoveRuntime {
 
         // Finish the session without persisting any writes.
         let (res, _new_storage) = session.finish();
-        let (_move_changeset, _events) =
-            res.map_err(|e| anyhow::anyhow!("Session error: {:?}", e))?;
+        let (_move_changeset, _events) = res.require("Session error")?;
 
         match execution_result {
             Ok(return_values) => {
@@ -1367,7 +1366,7 @@ impl MoveRuntime {
                     results
                         .into_iter()
                         .next()
-                        .ok_or_else(|| anyhow::anyhow!("View function returned no values"))
+                        .require("View function returned no values")
                 } else {
                     Ok(serde_json::Value::Array(results))
                 }
@@ -1428,11 +1427,9 @@ impl MoveRuntime {
                     if parts.len() >= 3 {
                         TypeTag::Struct(Box::new(StructTag {
                             address: AccountAddress::from_hex_literal(parts[0])
-                                .map_err(|e| anyhow::anyhow!("Invalid address in type: {}", e))?,
-                            module: Identifier::new(parts[1])
-                                .map_err(|e| anyhow::anyhow!("Invalid module in type: {}", e))?,
-                            name: Identifier::new(parts[2])
-                                .map_err(|e| anyhow::anyhow!("Invalid name in type: {}", e))?,
+                                .require("Invalid address in type")?,
+                            module: Identifier::new(parts[1]).require("Invalid module in type")?,
+                            name: Identifier::new(parts[2]).require("Invalid name in type")?,
                             type_params: vec![],
                         }))
                     } else {

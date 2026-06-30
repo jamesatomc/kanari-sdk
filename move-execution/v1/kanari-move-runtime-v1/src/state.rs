@@ -11,6 +11,7 @@ use kanari_crypto::hash_data_blake3;
 use kanari_types::balance::BalanceModule;
 use kanari_types::balance::BalanceRecord;
 use kanari_types::coin::{CoinModule, TreasuryCap};
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::event::Event;
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use kanari_types::object::{IDRecord, UIDRecord};
@@ -505,7 +506,7 @@ impl StateManager {
 
     /// Create a new in-memory state manager for testing
     pub fn new_in_memory() -> Self {
-        Self::try_new_in_memory().expect("Failed to create in-memory state manager")
+        Self::try_new_in_memory().invariant("failed to create in-memory state manager")
     }
 
     /// Create a new in-memory state manager and surface initialization errors.
@@ -520,7 +521,7 @@ impl StateManager {
     /// Total supply: 11 million KANARI = 11,000,000,000,000,000 Mist
     /// Dev address gets entire supply according to kanari.move
     pub fn new(store: Arc<PersistentStore>) -> Self {
-        Self::try_new(store).expect("Failed to create state manager")
+        Self::try_new(store).invariant("failed to create state manager")
     }
 
     /// Create new state with genesis allocation and return initialization errors.
@@ -1141,13 +1142,13 @@ impl StateManager {
             .try_fold(0i64, |total, change| {
                 total
                     .checked_add(change.balance_delta)
-                    .ok_or_else(|| anyhow::anyhow!("Native supply delta overflow"))
+                    .require("Native supply delta overflow")
             })?;
         let next_total_supply = if supply_delta > 0 {
             Some(
                 self.total_supply
                     .checked_add(supply_delta as u64)
-                    .ok_or_else(|| anyhow::anyhow!("Native total supply overflow"))?,
+                    .require("Native total supply overflow")?,
             )
         } else if supply_delta < 0 {
             let burn_amount = supply_delta.unsigned_abs();
@@ -1208,7 +1209,7 @@ impl StateManager {
                 let next = account
                     .native_balance()
                     .checked_add(amount)
-                    .ok_or_else(|| anyhow::anyhow!("Native account balance overflow"))?;
+                    .require("Native account balance overflow")?;
                 account.set_token_balance(native_token.clone(), BalanceRecord::new(next));
             } else if change.balance_delta < 0 {
                 let debit = change.balance_delta.unsigned_abs();
@@ -1222,7 +1223,7 @@ impl StateManager {
             account.sequence_number = account
                 .sequence_number
                 .checked_add(change.sequence_increment)
-                .ok_or_else(|| anyhow::anyhow!("Account sequence number overflow"))?;
+                .require("Account sequence number overflow")?;
             for module_name in &change.modules_added {
                 account.add_module(module_name.clone());
             }

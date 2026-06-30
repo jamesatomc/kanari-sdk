@@ -3,6 +3,7 @@
 
 use crate::consensus::Checkpoint;
 use anyhow::Result;
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::SignedTransaction;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -66,7 +67,7 @@ impl Blockchain {
     pub fn latest_checkpoint(&self) -> &Checkpoint {
         self.dag_checkpoints
             .back()
-            .expect("blockchain must contain at least the genesis checkpoint")
+            .invariant("blockchain must contain at least the genesis checkpoint")
     }
 
     pub fn height(&self) -> u64 {

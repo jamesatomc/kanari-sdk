@@ -17,6 +17,7 @@ pub use stdlib::*;
 pub mod clock;
 pub mod collection;
 pub mod deny_list;
+pub mod error;
 pub mod object;
 
 pub mod block;

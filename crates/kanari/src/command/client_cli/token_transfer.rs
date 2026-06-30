@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_api::CallFunctionRequest;
 use kanari_rpc_client::RpcClient;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::language_storage::TypeTag;
 use std::str::FromStr;
 
@@ -157,7 +158,7 @@ impl TokenTransfer {
             );
         }
 
-        let coin_object_id = selected_coin_id.as_ref().expect("selected coin checked");
+        let coin_object_id = selected_coin_id.as_ref().invariant("selected coin checked");
         eprintln!("  Using coin object: {}", coin_object_id);
         eprintln!(
             "  Selected Coin Balance: {} (base units)",

@@ -296,6 +296,7 @@ impl GasMeter for KanariGasMeter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kanari_types::error::KanariUnwrapExt;
     use move_core_types::gas_algebra::NumBytes;
     use move_vm_types::gas::GasMeter;
 
@@ -312,7 +313,9 @@ mod tests {
     #[test]
     fn gas_counter_overflow_becomes_out_of_gas() {
         let mut meter = KanariGasMeter::new(u64::MAX);
-        meter.charge(u64::MAX).expect("max charge should fit once");
+        meter
+            .charge(u64::MAX)
+            .invariant("max charge should fit once");
 
         let err = meter
             .charge(1)

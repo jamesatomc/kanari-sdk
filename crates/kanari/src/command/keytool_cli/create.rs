@@ -10,6 +10,7 @@ use clap::Parser;
 use kanari_crypto::hd_wallet::derive_keypair_from_path;
 use kanari_crypto::keys::{CurveType, generate_keypair, generate_mnemonic};
 use kanari_crypto::wallet::save_wallet;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::account_address::AccountAddress;
 use std::str::FromStr;
 
@@ -58,7 +59,7 @@ impl CreateWallet {
                 let mnemonic =
                     generate_mnemonic(self.words).context("Failed to generate mnemonic")?;
                 let kp = derive_keypair_from_path(&mnemonic, "", &self.path, curve_type)
-                    .map_err(|e| anyhow::anyhow!("HD derivation failed: {}", e))?;
+                    .require("HD derivation failed")?;
                 let zk = kp.export_private_key_secure();
                 (
                     zk.to_string(),

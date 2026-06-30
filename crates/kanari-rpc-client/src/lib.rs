@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use kanari_rpc_api::*;
+use kanari_types::error::KanariUnwrapExt;
 use reqwest::Client;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -118,8 +119,14 @@ impl RpcClient {
         let result = response.result.context("No result in response")?;
 
         let status = TransactionStatus {
-            hash: result["hash"].as_str().unwrap_or("").to_string(),
-            status: result["status"].as_str().unwrap_or("unknown").to_string(),
+            hash: result["hash"]
+                .as_str()
+                .require("missing transaction hash")?
+                .to_string(),
+            status: result["status"]
+                .as_str()
+                .require("missing transaction status")?
+                .to_string(),
             block_height: None,
             gas_used: None,
         };
@@ -136,8 +143,14 @@ impl RpcClient {
         let result = response.result.context("No result in response")?;
 
         let status = TransactionStatus {
-            hash: result["hash"].as_str().unwrap_or("").to_string(),
-            status: result["status"].as_str().unwrap_or("unknown").to_string(),
+            hash: result["hash"]
+                .as_str()
+                .require("missing transaction hash")?
+                .to_string(),
+            status: result["status"]
+                .as_str()
+                .require("missing transaction status")?
+                .to_string(),
             block_height: None,
             gas_used: None,
         };
@@ -154,8 +167,14 @@ impl RpcClient {
         let result = response.result.context("No result in response")?;
 
         let status = TransactionStatus {
-            hash: result["hash"].as_str().unwrap_or("").to_string(),
-            status: result["status"].as_str().unwrap_or("unknown").to_string(),
+            hash: result["hash"]
+                .as_str()
+                .require("missing transaction hash")?
+                .to_string(),
+            status: result["status"]
+                .as_str()
+                .require("missing transaction status")?
+                .to_string(),
             block_height: None,
             gas_used: None,
         };

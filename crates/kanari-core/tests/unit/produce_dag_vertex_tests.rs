@@ -1,5 +1,6 @@
 use super::*;
 use kanari_crypto::keys::{CurveType, generate_keypair};
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 
 fn authority_key(seed: u8) -> ed25519_dalek::SigningKey {
@@ -7,8 +8,8 @@ fn authority_key(seed: u8) -> ed25519_dalek::SigningKey {
 }
 
 fn signed_transfer(sequence_number: u64) -> SignedTransaction {
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
-    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
+    let recipient = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = Transaction::new_transfer(
         sender.tagged_address(),
         recipient.address,
@@ -18,7 +19,7 @@ fn signed_transfer(sequence_number: u64) -> SignedTransaction {
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
         .sign(&sender.private_key, sender.curve_type)
-        .unwrap();
+        .invariant("test operation");
     signed_tx
 }
 
@@ -40,7 +41,7 @@ fn signed_network_vertex(
     );
     use ed25519_dalek::Signer;
     vertex.signature = signing_key
-        .sign(&vertex.signing_digest().unwrap())
+        .sign(&vertex.signing_digest().invariant("vertex signing digest"))
         .to_bytes()
         .to_vec();
     vertex
@@ -48,7 +49,7 @@ fn signed_network_vertex(
 
 #[test]
 fn test_dag_engine_defaults_to_mysticeti_protocol() {
-    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
     let signing_key = authority_key(11);
     let mut public_keys = BTreeMap::new();
     public_keys.insert(
@@ -67,7 +68,7 @@ fn test_dag_engine_defaults_to_mysticeti_protocol() {
         signing_key,
         public_keys,
     )
-    .unwrap();
+    .invariant("test operation");
     let protocol = dag_engine
         .consensus
         .read()
@@ -83,7 +84,7 @@ fn test_dag_engine_defaults_to_mysticeti_protocol() {
 
 #[test]
 fn test_dag_engine_secure_constructor_rejects_mismatched_local_key() {
-    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
     let expected = authority_key(11);
     let wrong = authority_key(33);
     let mut public_keys = BTreeMap::new();
@@ -105,7 +106,7 @@ fn test_dag_engine_secure_constructor_rejects_mismatched_local_key() {
 
 #[test]
 fn test_add_network_vertex_accepts_valid_remote_vertex() {
-    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
     let local_key = authority_key(11);
     let remote_key = authority_key(22);
     let mut public_keys = BTreeMap::new();
@@ -124,10 +125,12 @@ fn test_add_network_vertex_accepts_valid_remote_vertex() {
         local_key,
         public_keys,
     )
-    .unwrap();
+    .invariant("test operation");
 
     let vertex = signed_network_vertex("auth2", &remote_key, 1, vec![]);
-    dag_engine.add_network_vertex(vertex).unwrap();
+    dag_engine
+        .add_network_vertex(vertex)
+        .invariant("add network vertex");
 
     let consensus = dag_engine
         .consensus
@@ -139,7 +142,7 @@ fn test_add_network_vertex_accepts_valid_remote_vertex() {
 
 #[test]
 fn test_add_network_vertex_rejects_invalid_signature() {
-    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
     let local_key = authority_key(11);
     let remote_key = authority_key(22);
     let wrong_key = authority_key(33);
@@ -159,7 +162,7 @@ fn test_add_network_vertex_rejects_invalid_signature() {
         local_key,
         public_keys,
     )
-    .unwrap();
+    .invariant("test operation");
 
     let vertex = signed_network_vertex("auth2", &wrong_key, 1, vec![]);
     let error = dag_engine.add_network_vertex(vertex).unwrap_err();
@@ -168,7 +171,7 @@ fn test_add_network_vertex_rejects_invalid_signature() {
 
 #[test]
 fn test_add_network_vertex_rejects_payload_modified_after_signing() {
-    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
     let local_key = authority_key(11);
     let remote_key = authority_key(22);
     let mut public_keys = BTreeMap::new();
@@ -187,7 +190,7 @@ fn test_add_network_vertex_rejects_payload_modified_after_signing() {
         local_key,
         public_keys,
     )
-    .unwrap();
+    .invariant("test operation");
 
     let mut vertex = signed_network_vertex("auth2", &remote_key, 1, vec![]);
     vertex.metadata.state_root[0] ^= 0xff;
@@ -198,7 +201,7 @@ fn test_add_network_vertex_rejects_payload_modified_after_signing() {
 
 #[test]
 fn test_add_network_vertex_rejects_missing_parent() {
-    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
     let local_key = authority_key(11);
     let remote_key = authority_key(22);
     let mut public_keys = BTreeMap::new();
@@ -217,7 +220,7 @@ fn test_add_network_vertex_rejects_missing_parent() {
         local_key,
         public_keys,
     )
-    .unwrap();
+    .invariant("test operation");
 
     let vertex = signed_network_vertex("auth2", &remote_key, 2, vec![[9u8; 32]]);
     let error = dag_engine.add_network_vertex(vertex).unwrap_err();
@@ -226,7 +229,7 @@ fn test_add_network_vertex_rejects_missing_parent() {
 
 #[test]
 fn test_add_network_vertex_does_not_create_committed_progress() {
-    let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
     let local_key = authority_key(11);
     let remote_key = authority_key(22);
     let mut public_keys = BTreeMap::new();
@@ -245,11 +248,15 @@ fn test_add_network_vertex_does_not_create_committed_progress() {
         local_key,
         public_keys,
     )
-    .unwrap();
+    .invariant("test operation");
 
     let vertex = signed_network_vertex("auth2", &remote_key, 1, vec![]);
-    dag_engine.add_network_vertex(vertex.clone()).unwrap();
-    dag_engine.add_network_vertex(vertex).unwrap();
+    dag_engine
+        .add_network_vertex(vertex.clone())
+        .invariant("add network vertex");
+    dag_engine
+        .add_network_vertex(vertex)
+        .invariant("add network vertex");
 
     let stats = engine.get_stats();
     let consensus = dag_engine

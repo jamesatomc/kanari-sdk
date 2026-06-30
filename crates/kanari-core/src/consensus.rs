@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use kanari_crypto::hash_data_blake3;
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::SignedTransaction;
 use mysticeti_consensus::protocol::Protocol as MysticetiProtocol;
 use serde::{Deserialize, Serialize};
@@ -67,7 +68,7 @@ impl DagVertex {
             state_root,
             timestamp,
         )
-        .expect("DagVertex::new failed")
+        .invariant("DagVertex::new failed")
     }
 
     pub fn try_new<T>(

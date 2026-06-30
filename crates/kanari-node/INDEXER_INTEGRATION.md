@@ -8,7 +8,7 @@ The kanari-indexer is automatically integrated into the kanari-node to provide r
 
 ## Architecture
 
-```
+```md
 kanari-node
 ├── src/
 │   ├── main.rs          # Node entry point, initializes indexer
@@ -64,7 +64,11 @@ match self.engine.sync_full_block_from_data(&block) {
         
         // Index the block
         if let Some(ref indexer) = self.indexer {
-            indexer.lock().unwrap().index_block(&kanari_block)?;
+            let idx = indexer.lock().map_err(|e| anyhow::anyhow!(
+                "failed to acquire indexer lock: {}",
+                e
+            ))?;
+            idx.index_block(&kanari_block)?;
         }
     }
 }
@@ -86,7 +90,7 @@ This follows Rust best practices for non-thread-safe resources in async contexts
 
 The indexer database is stored alongside the blockchain data:
 
-```
+```md
 ~/.kanari/kanari-db/
 ├── kanari_db/         # Blockchain state (RocksDB)
 └── indexer.db         # Indexer database (SQLite)
@@ -131,9 +135,12 @@ let stats = indexer.get_statistics()?;
 If indexing fails, the error is logged but doesn't prevent block synchronization:
 
 ```rust
-match indexer.lock().unwrap().index_block(&kanari_block) {
-    Ok(_) => info!("[INDEXER] Indexed block #{}", height),
-    Err(e) => error!("[INDEXER] Failed to index block #{}: {}", height, e),
+match indexer.lock() {
+    Ok(idx) => match idx.index_block(&kanari_block) {
+        Ok(_) => info!("[INDEXER] Indexed block #{}", height),
+        Err(e) => error!("[INDEXER] Failed to index block #{}: {}", height, e),
+    },
+    Err(e) => error!("[INDEXER] Failed to acquire indexer lock: {}", e),
 }
 ```
 
@@ -153,13 +160,13 @@ This ensures the node continues operating even if there are temporary indexing i
 
 Check logs for:
 
-```
+```md
 Node indexer initialized at <path>
 ```
 
 If you see:
 
-```
+```md
 Failed to initialize indexer: <error>
 ```
 
@@ -173,7 +180,7 @@ Common causes:
 
 Look for:
 
-```
+```md
 [INDEXER] Failed to index block #<height>: <error>
 ```
 

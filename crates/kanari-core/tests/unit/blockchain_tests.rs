@@ -1,4 +1,5 @@
 use super::*;
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::Transaction;
 
 fn test_tx(sequence_number: u64) -> SignedTransaction {
@@ -19,11 +20,14 @@ fn transaction_count_uses_queryable_index_not_stale_snapshot_counter() {
         vec![test_tx(0), test_tx(1)],
         vec![2u8; 32],
         1,
-        chain.latest_checkpoint().hash().unwrap(),
+        chain
+            .latest_checkpoint()
+            .hash()
+            .invariant("checkpoint hash"),
     );
     chain
         .add_checkpoint_with_validation(checkpoint, false)
-        .unwrap();
+        .invariant("test operation");
     chain.total_transaction_count = 99;
 
     assert_eq!(chain.get_transaction_count(), 2);

@@ -6,6 +6,7 @@ use clap::Parser;
 use kanari_crypto::hd_wallet::derive_keypair_from_path;
 use kanari_crypto::keys::{CurveType, ImportedWallet};
 use kanari_crypto::wallet::save_wallet;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::account_address::AccountAddress;
 use std::str::FromStr;
 
@@ -51,7 +52,7 @@ impl AddWallet {
         if let Some(pk) = &self.private_key {
             let imported: ImportedWallet =
                 kanari_crypto::keys::import_from_private_key(pk, curve_type)
-                    .map_err(|e| anyhow::anyhow!("Import from private key failed: {}", e))?;
+                    .require("Import from private key failed")?;
 
             let address =
                 AccountAddress::from_str(&imported.address).context("Generated invalid address")?;
@@ -77,7 +78,7 @@ impl AddWallet {
                 ));
             }
             let kp = derive_keypair_from_path(seed_phrase, "", &self.path, curve_type)
-                .map_err(|e| anyhow::anyhow!("Import from seed phrase failed: {}", e))?;
+                .require("Import from seed phrase failed")?;
 
             let address_str = kp.address.clone();
             let zk = kp.export_private_key_secure();

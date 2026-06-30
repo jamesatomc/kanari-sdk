@@ -6,6 +6,7 @@ use crate::p2p::{
     DagVertexResponseMsg, P2PMessage, PeerInfoMsg,
 };
 use kanari_core::{BlockchainEngine, CheckpointSyncData, DagVertex};
+use kanari_types::error::KanariError;
 use kanari_types::transaction::SignedTransaction;
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, VecDeque};
@@ -1201,9 +1202,10 @@ impl SyncManager {
         materialized_block_view: &kanari_core::FullBlockData,
     ) -> anyhow::Result<()> {
         let materialized_block = BlockchainEngine::block_from_full_data(materialized_block_view);
-        let idx = indexer
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire indexer lock: {}", e))?;
+        let idx = indexer.lock().map_err(|e| KanariError::OperationFailed {
+            context: "Failed to acquire indexer lock",
+            details: e.to_string(),
+        })?;
         idx.index_block(&materialized_block)?;
 
         Ok(())
@@ -1216,9 +1218,13 @@ mod tests {
 
     use super::*;
     use kanari_core::Checkpoint;
+    use kanari_types::error::KanariUnwrapExt;
 
     fn new_sync_manager() -> SyncManager {
-        let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+        let engine = Arc::new(
+            BlockchainEngine::new_in_memory()
+                .invariant("failed to build in-memory blockchain engine"),
+        );
         let (network_tx, _network_rx) = mpsc::unbounded_channel();
         SyncManager::new(engine, network_tx, "local-peer".to_string(), None)
     }
@@ -1333,7 +1339,8 @@ mod tests {
 
     #[test]
     fn test_buffered_empty_checkpoint_is_not_applied_when_gap_is_filled() {
-        let source_engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+        let source_engine =
+            Arc::new(BlockchainEngine::new_in_memory().invariant("failed to build source engine"));
         let state_root = source_engine
             .state
             .read()
@@ -1344,16 +1351,29 @@ mod tests {
                 .blockchain
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
-            chain.latest_checkpoint().hash().unwrap()
+            chain
+                .latest_checkpoint()
+                .hash()
+                .invariant("missing latest checkpoint hash")
         };
         let checkpoint_one = CheckpointSyncData {
             checkpoint: empty_checkpoint(1, genesis_hash.clone(), state_root.clone()),
         };
         let checkpoint_two = CheckpointSyncData {
-            checkpoint: empty_checkpoint(2, checkpoint_one.checkpoint.hash().unwrap(), state_root),
+            checkpoint: empty_checkpoint(
+                2,
+                checkpoint_one
+                    .checkpoint
+                    .hash()
+                    .invariant("missing buffered checkpoint hash"),
+                state_root,
+            ),
         };
 
-        let engine = Arc::new(BlockchainEngine::new_in_memory().unwrap());
+        let engine = Arc::new(
+            BlockchainEngine::new_in_memory()
+                .invariant("failed to build in-memory blockchain engine"),
+        );
         let (network_tx, _network_rx) = mpsc::unbounded_channel();
         let sync = SyncManager::new(engine.clone(), network_tx, "local-peer".to_string(), None);
 
@@ -1370,7 +1390,7 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
+            .invariant("failed to build tokio runtime");
         runtime.block_on(sync.try_apply_buffered_checkpoints());
 
         assert_eq!(engine.get_stats().height, 0);
@@ -1393,7 +1413,10 @@ mod tests {
                 .blockchain
                 .read()
                 .unwrap_or_else(|e| e.into_inner());
-            chain.latest_checkpoint().hash().unwrap()
+            chain
+                .latest_checkpoint()
+                .hash()
+                .invariant("missing latest checkpoint hash")
         };
         let bogus_checkpoint = CheckpointSyncData {
             checkpoint: Checkpoint::new(3, vec![], vec![], vec![0u8; 32], 3, prev_hash),
@@ -1402,11 +1425,14 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
-        runtime.block_on(sync.handle_checkpoint_response(
-            serde_json::to_string(&bogus_checkpoint).unwrap(),
-            Some("peer-2"),
-        ));
+            .invariant("failed to build tokio runtime");
+        runtime.block_on(
+            sync.handle_checkpoint_response(
+                serde_json::to_string(&bogus_checkpoint)
+                    .invariant("failed to serialize bogus checkpoint"),
+                Some("peer-2"),
+            ),
+        );
 
         let pending_heights: BTreeSet<_> = sync
             .pending_checkpoint_requests_guard()

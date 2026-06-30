@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::identifier::Identifier;
 use move_core_types::language_storage::ModuleId;
@@ -181,7 +182,7 @@ impl MoveVMState {
         // Persist the resource blob in Move VM storage.
         self.store
             .save(key.as_bytes(), blob)
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .require("Failed to persist Move VM resource")?;
 
         // Keep coin objects in sync with the latest resource bytes.
         if tag.module.as_str() == "coin" && tag.name.as_str() == "Coin" {
@@ -232,7 +233,7 @@ impl MoveVMState {
         let key = Self::resource_key(address, tag);
         self.store
             .delete(key.as_bytes())
-            .map_err(|e| anyhow::anyhow!(e))
+            .require("Failed to delete Move VM resource")
     }
 }
 

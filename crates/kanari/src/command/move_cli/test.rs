@@ -6,6 +6,7 @@ use crate::command::move_cli::NativeFunctionRecord;
 use super::reroot_path;
 use anyhow::Result;
 use clap::*;
+use kanari_types::error::KanariUnwrapExt;
 use move_command_line_common::files::{FileHash, MOVE_COVERAGE_MAP_EXTENSION};
 use move_compiler::{
     PASS_CFGIR,
@@ -170,10 +171,11 @@ pub fn run_move_unit_tests<W: Write + Send>(
         .values()
         .flat_map(|rpkg| {
             rpkg.get_sources(&resolution_graph.build_options)
-                .unwrap()
+                .invariant("Failed to collect package sources")
                 .iter()
                 .map(|fname| {
-                    let contents = fs::read_to_string(Path::new(fname.as_str())).unwrap();
+                    let contents = fs::read_to_string(Path::new(fname.as_str()))
+                        .invariant("Failed to read Move source file");
                     let fhash = FileHash::new(&contents);
                     (fhash, (*fname, Arc::from(contents)))
                 })
@@ -188,7 +190,9 @@ pub fn run_move_unit_tests<W: Write + Send>(
     // control back to the Move package system.
     let mut warning_diags = None;
     build_plan.compile_with_driver(writer, |compiler| {
-        let (files, comments_and_compiler_res) = compiler.run::<PASS_CFGIR>().unwrap();
+        let (files, comments_and_compiler_res) = compiler
+            .run::<PASS_CFGIR>()
+            .require("Move compiler PASS_CFGIR failed")?;
         let (_, compiler) =
             diagnostics::unwrap_or_report_pass_diagnostics(&files, comments_and_compiler_res);
         let (mut compiler, cfgir) = compiler.into_ast();
@@ -209,9 +213,9 @@ pub fn run_move_unit_tests<W: Write + Send>(
         Ok((files, units))
     })?;
 
-    let (test_plan, mut files, units) = test_plan.unwrap();
+    let (test_plan, mut files, units) = test_plan.invariant("test plan should be initialized");
     files.extend(dep_file_map);
-    let test_plan = test_plan.unwrap();
+    let test_plan = test_plan.require("failed to construct Move test plan")?;
     let no_tests = test_plan.is_empty();
     let test_plan = TestPlan::new(test_plan, files, units);
 
@@ -221,7 +225,7 @@ pub fn run_move_unit_tests<W: Write + Send>(
         .with_extension(MOVE_COVERAGE_MAP_EXTENSION);
     let cleanup_trace = || {
         if compute_coverage && trace_path.exists() {
-            std::fs::remove_file(&trace_path).unwrap();
+            std::fs::remove_file(&trace_path).invariant("remove trace file");
         }
     };
 
@@ -237,7 +241,7 @@ pub fn run_move_unit_tests<W: Write + Send>(
     // the trace files.
     if !unit_test_config
         .run_and_report_unit_tests(test_plan, Some(natives), cost_table, writer)
-        .unwrap()
+        .require("failed to run Move unit tests")?
         .1
     {
         cleanup_trace();
@@ -247,7 +251,7 @@ pub fn run_move_unit_tests<W: Write + Send>(
     // Compute the coverage map. This will be used by other commands after this.
     if compute_coverage && !no_tests {
         let coverage_map = CoverageMap::from_trace_file(trace_path);
-        output_map_to_file(coverage_map_path, &coverage_map).unwrap();
+        output_map_to_file(coverage_map_path, &coverage_map).invariant("write coverage map");
     }
     Ok((UnitTestResult::Success, warning_diags))
 }

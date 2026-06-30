@@ -5,6 +5,7 @@ use kanari_crypto::keys::{CurveType, generate_keypair};
 use kanari_move_runtime_v1::changeset::{ChangeSet, CreatedObject};
 use kanari_move_runtime_v1::state::Account;
 use kanari_types::balance::BalanceRecord;
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use move_core_types::account_address::AccountAddress;
@@ -17,7 +18,7 @@ fn signed_transfer_from(
     sender: &kanari_crypto::keys::KeyPair,
     sequence_number: u64,
 ) -> SignedTransaction {
-    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+    let recipient = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = Transaction::new_transfer(
         sender.tagged_address(),
         recipient.address,
@@ -27,12 +28,12 @@ fn signed_transfer_from(
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
         .sign(&sender.private_key, sender.curve_type)
-        .unwrap();
+        .invariant("test operation");
     signed_tx
 }
 
 fn fund_sender(engine: &BlockchainEngine, address: &str, balance: u64) {
-    let addr = AccountAddress::from_hex_literal(address).unwrap();
+    let addr = AccountAddress::from_hex_literal(address).invariant("valid account address");
     let mut account = Account::with_native_balance(addr, balance);
     account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(balance));
     engine
@@ -40,7 +41,7 @@ fn fund_sender(engine: &BlockchainEngine, address: &str, balance: u64) {
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .save_account(&account)
-        .unwrap();
+        .invariant("test operation");
 }
 
 fn secure_consensus_keys(
@@ -63,7 +64,7 @@ fn secure_consensus_keys(
     }
 
     (
-        local_signing_key.expect("local authority must be in authority set"),
+        local_signing_key.invariant("local authority must be in authority set"),
         public_keys,
     )
 }
@@ -108,7 +109,7 @@ fn explicit_env_overrides_strict_runtime_guards() {
 
 #[test]
 fn dag_engine_requires_explicit_consensus_signing_key() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
 
     let err = engine.produce_checkpoint().unwrap_err();
 
@@ -117,13 +118,13 @@ fn dag_engine_requires_explicit_consensus_signing_key() {
 
 #[test]
 fn configured_dag_engine_rejects_empty_checkpoint() {
-    let mut engine = BlockchainEngine::new_in_memory().unwrap();
+    let mut engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     let authorities = vec!["0x1".to_string(), "0x2".to_string(), "0x3".to_string()];
     engine.set_authorities("0x1".to_string(), authorities.clone());
     let (local_key, public_keys) = secure_consensus_keys(&authorities, "0x1");
     engine
         .set_consensus_signing_key(local_key, public_keys)
-        .unwrap();
+        .invariant("test operation");
 
     let err = engine.produce_checkpoint().unwrap_err();
 
@@ -133,12 +134,12 @@ fn configured_dag_engine_rejects_empty_checkpoint() {
 
 #[test]
 fn restarted_engine_does_not_create_empty_dag_progress() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let data_dir = temp_dir.path().to_str().unwrap();
+    let temp_dir = tempfile::tempdir().invariant("temp dir");
+    let data_dir = temp_dir.path().to_str().invariant("temp dir path utf8");
     let authorities = vec!["0x1".to_string(), "0x2".to_string(), "0x3".to_string()];
 
     {
-        let mut engine = BlockchainEngine::new_dir(data_dir).unwrap();
+        let mut engine = BlockchainEngine::new_dir(data_dir).invariant("dir engine");
         if engine.persistent_store.is_none() {
             return;
         }
@@ -146,14 +147,14 @@ fn restarted_engine_does_not_create_empty_dag_progress() {
         let (local_key, public_keys) = secure_consensus_keys(&authorities, "0x1");
         engine
             .set_consensus_signing_key(local_key, public_keys)
-            .unwrap();
+            .invariant("test operation");
 
         let err = engine.produce_checkpoint().unwrap_err();
         assert!(err.to_string().contains("No new transactions"));
         assert_eq!(engine.get_stats().height, 0);
     }
 
-    let mut restarted = BlockchainEngine::new_dir(data_dir).unwrap();
+    let mut restarted = BlockchainEngine::new_dir(data_dir).invariant("dir engine");
     if restarted.persistent_store.is_none() {
         return;
     }
@@ -161,7 +162,7 @@ fn restarted_engine_does_not_create_empty_dag_progress() {
     let (local_key, public_keys) = secure_consensus_keys(&authorities, "0x1");
     restarted
         .set_consensus_signing_key(local_key, public_keys)
-        .unwrap();
+        .invariant("test operation");
 
     assert_eq!(restarted.get_stats().pending_transactions, 0);
     assert_eq!(restarted.get_stats().height, 0);
@@ -171,11 +172,11 @@ fn restarted_engine_does_not_create_empty_dag_progress() {
 
 #[test]
 fn restart_repairs_missing_transaction_history_from_dag_state() {
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = signed_transfer_from(&sender, 0);
 
     let genesis = Checkpoint::genesis();
-    let prev_hash = genesis.hash().unwrap();
+    let prev_hash = genesis.hash().invariant("genesis hash");
     let vertex_id = [9u8; 32];
     let state_root = vec![7u8; 32];
     let timestamp = 42;
@@ -200,7 +201,7 @@ fn restart_repairs_missing_transaction_history_from_dag_state() {
     let mut broken_chain = Blockchain::new();
     broken_chain
         .add_checkpoint_with_validation(broken_checkpoint, false)
-        .unwrap();
+        .invariant("test operation");
     let mut chain = Arc::new(RwLock::new(broken_chain));
 
     let repaired = BlockchainEngine::repair_blockchain_from_dag_state(
@@ -212,7 +213,7 @@ fn restart_repairs_missing_transaction_history_from_dag_state() {
             last_checkpoint_round: 1,
         }),
     )
-    .unwrap();
+    .invariant("test operation");
 
     assert!(repaired);
     let repaired_chain = chain.read().unwrap_or_else(|e| e.into_inner());
@@ -223,19 +224,22 @@ fn restart_repairs_missing_transaction_history_from_dag_state() {
 
 #[test]
 fn committed_transaction_history_survives_metadata_stripping() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let data_dir = temp_dir.path().to_str().unwrap();
-    let engine = BlockchainEngine::new_dir(data_dir).unwrap();
+    let temp_dir = tempfile::tempdir().invariant("temp dir");
+    let data_dir = temp_dir.path().to_str().invariant("temp dir path utf8");
+    let engine = BlockchainEngine::new_dir(data_dir).invariant("dir engine");
     if engine.persistent_store.is_none() {
         return;
     }
 
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = signed_transfer_from(&sender, 0);
     let tx_hash = tx.transaction_hash().to_vec();
     let genesis_hash = {
         let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
-        chain.latest_checkpoint().hash().unwrap()
+        chain
+            .latest_checkpoint()
+            .hash()
+            .invariant("checkpoint hash")
     };
     let checkpoint = Checkpoint::new(
         1,
@@ -250,8 +254,10 @@ fn committed_transaction_history_survives_metadata_stripping() {
         let mut chain = engine.blockchain.write().unwrap_or_else(|e| e.into_inner());
         chain
             .add_checkpoint_with_validation(checkpoint, false)
-            .unwrap();
-        engine.persist_blockchain_snapshot(&chain).unwrap();
+            .invariant("test operation");
+        engine
+            .persist_blockchain_snapshot(&chain)
+            .invariant("persist blockchain snapshot");
     }
 
     let latest = engine.list_committed_transactions_from_history(10, |_| true);
@@ -261,19 +267,21 @@ fn committed_transaction_history_survives_metadata_stripping() {
 
     let found = engine
         .get_committed_transaction_from_history(&tx_hash)
-        .expect("transaction must be found in persistent history");
+        .invariant("transaction must be found in persistent history");
     assert_eq!(found.1, 1);
     assert_eq!(found.0.transaction_hash(), tx_hash.as_slice());
 }
 
 #[test]
 fn batch_submit_accepts_contiguous_sequences_for_same_sender() {
-    let engine = BlockchainEngine::new().unwrap();
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let engine = BlockchainEngine::new().invariant("default engine");
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx0 = signed_transfer_from(&sender, 0);
     let tx1 = signed_transfer_from(&sender, 1);
 
-    let hashes = engine.submit_transactions_batch(vec![tx0, tx1]).unwrap();
+    let hashes = engine
+        .submit_transactions_batch(vec![tx0, tx1])
+        .invariant("submit transactions batch");
 
     assert_eq!(hashes.len(), 2);
     assert_eq!(engine.pending_transaction_len(), 2);
@@ -281,15 +289,15 @@ fn batch_submit_accepts_contiguous_sequences_for_same_sender() {
 
 #[test]
 fn batch_submit_accepts_shuffled_contiguous_sequences_for_same_sender() {
-    let engine = BlockchainEngine::new().unwrap();
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let engine = BlockchainEngine::new().invariant("default engine");
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx0 = signed_transfer_from(&sender, 0);
     let tx1 = signed_transfer_from(&sender, 1);
     let tx2 = signed_transfer_from(&sender, 2);
 
     let hashes = engine
         .submit_transactions_batch(vec![tx2.clone(), tx0.clone(), tx1.clone()])
-        .unwrap();
+        .invariant("test operation");
 
     assert_eq!(hashes.len(), 3);
     let pending = engine.pending_transactions_snapshot();
@@ -306,20 +314,24 @@ fn gas_application_does_not_increment_sequence_twice() {
     let mut changeset = ChangeSet::new();
     changeset.get_or_create_change(sender).increment_sequence();
 
-    BlockchainEngine::apply_gas_and_sequence(&mut changeset, sender, 10, 10).unwrap();
+    BlockchainEngine::apply_gas_and_sequence(&mut changeset, sender, 10, 10)
+        .invariant("apply gas and sequence");
 
-    let sender_change = changeset.account_changes.get(&sender).unwrap();
+    let sender_change = changeset
+        .account_changes
+        .get(&sender)
+        .invariant("sender change");
     assert_eq!(sender_change.sequence_increment, 1);
     assert_eq!(sender_change.balance_delta, -10);
 }
 
 #[test]
 fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let signed_tx = signed_transfer_from(&sender, 0);
-    let dao =
-        AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS).unwrap();
+    let dao = AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS)
+        .invariant("dao address");
     let (supply_before, dao_balance_before) = {
         let state = engine.state_read();
         (
@@ -331,11 +343,15 @@ fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
         )
     };
 
-    let (_, changeset) = engine.execute_transaction_immediate(signed_tx).unwrap();
+    let (_, changeset) = engine
+        .execute_transaction_immediate(signed_tx)
+        .invariant("execute transaction immediate");
     assert!(!changeset.success);
     {
         let mut state = engine.state_write();
-        state.apply_changeset(&changeset).unwrap();
+        state
+            .apply_changeset(&changeset)
+            .invariant("apply changeset");
         assert_eq!(state.total_supply, supply_before);
         assert_eq!(
             state
@@ -344,8 +360,11 @@ fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
                 .unwrap_or(0),
             dao_balance_before
         );
-        let sender_address = AccountAddress::from_hex_literal(&sender.address).unwrap();
-        let sender_account = state.get_account(&sender_address).unwrap();
+        let sender_address =
+            AccountAddress::from_hex_literal(&sender.address).invariant("sender address");
+        let sender_account = state
+            .get_account(&sender_address)
+            .invariant("sender account");
         assert_eq!(sender_account.native_balance(), 0);
         assert_eq!(sender_account.sequence_number, 1);
     }
@@ -353,8 +372,8 @@ fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
 
 #[test]
 fn batch_submit_rejects_duplicate_transactions() {
-    let engine = BlockchainEngine::new().unwrap();
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let engine = BlockchainEngine::new().invariant("default engine");
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = signed_transfer_from(&sender, 0);
 
     let err = engine
@@ -366,11 +385,13 @@ fn batch_submit_rejects_duplicate_transactions() {
 
 #[test]
 fn batch_submit_rejects_transaction_already_indexed_in_pending_pool() {
-    let engine = BlockchainEngine::new().unwrap();
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let engine = BlockchainEngine::new().invariant("default engine");
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = signed_transfer_from(&sender, 0);
 
-    engine.submit_transactions_batch(vec![tx.clone()]).unwrap();
+    engine
+        .submit_transactions_batch(vec![tx.clone()])
+        .invariant("submit transaction batch");
     let err = engine.submit_transactions_batch(vec![tx]).unwrap_err();
 
     assert!(err.to_string().contains("already in pending pool"));
@@ -378,8 +399,8 @@ fn batch_submit_rejects_transaction_already_indexed_in_pending_pool() {
 
 #[test]
 fn batch_submit_rejects_sequence_gaps() {
-    let engine = BlockchainEngine::new().unwrap();
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let engine = BlockchainEngine::new().invariant("default engine");
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = signed_transfer_from(&sender, 1);
 
     let err = engine.submit_transactions_batch(vec![tx]).unwrap_err();
@@ -389,12 +410,12 @@ fn batch_submit_rejects_sequence_gaps() {
 
 #[test]
 fn deterministic_parallel_execution_matches_strict_serial_root() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     let mut txs = Vec::new();
 
     for _ in 0..16 {
-        let sender = generate_keypair(CurveType::Ed25519).unwrap();
-        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
+        let recipient = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
         fund_sender(&engine, &sender.address, 1_000_000);
 
         let tx =
@@ -402,7 +423,7 @@ fn deterministic_parallel_execution_matches_strict_serial_root() {
         let mut signed_tx = SignedTransaction::new(tx);
         signed_tx
             .sign(&sender.private_key, sender.curve_type)
-            .unwrap();
+            .invariant("test operation");
         txs.push(signed_tx);
     }
 
@@ -416,10 +437,10 @@ fn deterministic_parallel_execution_matches_strict_serial_root() {
 
     let strict_counts = engine
         .execute_tx_waves_parallel(txs.clone(), &strict_state, Some(123), false, true)
-        .unwrap();
+        .invariant("test operation");
     let parallel_counts = engine
         .execute_tx_waves_deterministic_parallel(txs, &parallel_state, Some(123), false)
-        .unwrap();
+        .invariant("test operation");
 
     let strict_root = strict_state
         .read()
@@ -436,8 +457,8 @@ fn deterministic_parallel_execution_matches_strict_serial_root() {
 
 #[test]
 fn account_info_prefers_native_state_balance_over_stale_coin_object() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
-    let owner = AccountAddress::from_hex_literal("0x1111").unwrap();
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
+    let owner = AccountAddress::from_hex_literal("0x1111").invariant("owner address");
 
     let mut coin_data = vec![0u8; 32];
     coin_data.extend_from_slice(&1_000u64.to_le_bytes());
@@ -456,15 +477,18 @@ fn account_info_prefers_native_state_balance_over_stale_coin_object() {
     engine
         .state_write()
         .apply_changeset_without_supply_validation(&cs)
-        .unwrap();
+        .invariant("test operation");
 
     let mut account = Account::with_native_balance(owner, 790);
     account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(790));
-    engine.state_write().save_account(&account).unwrap();
+    engine
+        .state_write()
+        .save_account(&account)
+        .invariant("save account");
 
     let info = engine
         .get_account_info("0x1111")
-        .expect("account info should be available");
+        .invariant("account info should be available");
 
     assert_eq!(
         info.token_balances.get(KANARI_TOKEN_TYPE).copied(),
@@ -474,10 +498,13 @@ fn account_info_prefers_native_state_balance_over_stale_coin_object() {
 
 #[test]
 fn apply_checkpoint_rejects_empty_checkpoint() {
-    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     let prev_hash = {
         let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
-        chain.latest_checkpoint().hash().unwrap()
+        chain
+            .latest_checkpoint()
+            .hash()
+            .invariant("checkpoint hash")
     };
     let state_root = engine
         .state
@@ -498,14 +525,14 @@ fn apply_checkpoint_rejects_empty_checkpoint() {
 
 #[test]
 fn stats_count_committed_transactions_from_queryable_history() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let data_dir = temp_dir.path().to_str().unwrap();
-    let engine = BlockchainEngine::new_dir(data_dir).unwrap();
+    let temp_dir = tempfile::tempdir().invariant("temp dir");
+    let data_dir = temp_dir.path().to_str().invariant("temp dir path utf8");
+    let engine = BlockchainEngine::new_dir(data_dir).invariant("dir engine");
     let Some(store) = engine.persistent_store.as_ref() else {
         return;
     };
 
-    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let first = signed_transfer_from(&sender, 0);
     let second = signed_transfer_from(&sender, 1);
     let location = PersistedTransactionLocation {
@@ -517,13 +544,13 @@ fn stats_count_committed_transactions_from_queryable_history() {
         let tx_hash = tx.transaction_hash().to_vec();
         store
             .save(&BlockchainEngine::transaction_payload_key(&tx_hash), tx)
-            .unwrap();
+            .invariant("test operation");
         store
             .save(
                 &BlockchainEngine::transaction_index_key(&tx_hash),
                 &location,
             )
-            .unwrap();
+            .invariant("test operation");
     }
 
     let stats = engine.get_stats();

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use kanari_types::error::KanariUnwrapExt;
 
 impl BlockchainEngine {
     pub fn new_dir(dir: &str) -> Result<Self> {
@@ -113,7 +114,9 @@ impl BlockchainEngine {
         tracing::info!("Preparing mempool, proof cache, and authority defaults");
 
         let mempool = Arc::new(RwLock::new(MempoolState::default()));
-        let proof_cache = Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+        let proof_cache = Arc::new(RwLock::new(LruCache::new(
+            NonZeroUsize::new(1000).invariant("proof cache capacity is non-zero"),
+        )));
 
         let authority_id = "0xDEFAULT_AUTHORITY".to_string();
         let authorities = vec![authority_id.clone()];

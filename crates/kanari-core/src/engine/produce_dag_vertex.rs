@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use kanari_types::error::KanariUnwrapExt;
 use log::{info, warn};
 use mysticeti_consensus::{
     committer::Committer as MysticetiCommitter,
@@ -73,11 +74,11 @@ impl MysticetiBackend {
         let committee = MysticetiCommittee::new_test(vec![1; authority_count]);
         let protocol_config = MysticetiConsensusProtocol::Mysticeti {
             leader_count: NonZeroUsize::new(authority_count.clamp(1, 2))
-                .expect("leader count is non-zero"),
+                .invariant("leader count is non-zero"),
         };
         let protocol = protocol_config
             .to_protocol(&committee)
-            .map_err(|e| anyhow::anyhow!("Failed to build Mysticeti protocol: {}", e))?;
+            .require("Failed to build Mysticeti protocol")?;
         let metrics = MysticetiMetrics::new_for_test(committee.len());
         let (storage, recovered) = MysticetiStorage::ephemeral(
             MysticetiAuthority::default(),
@@ -90,7 +91,7 @@ impl MysticetiBackend {
             MysticetiCommitter::new(committee.clone(), storage.block_reader().clone(), protocol);
         let protocol = protocol_config
             .to_protocol(&committee)
-            .map_err(|e| anyhow::anyhow!("Failed to rebuild Mysticeti protocol: {}", e))?;
+            .require("Failed to rebuild Mysticeti protocol")?;
         let core = MysticetiCore::open(
             block_handler,
             MysticetiAuthority::default(),
@@ -345,7 +346,7 @@ impl DagEngine {
         let local_public_key = local_signing_key.verifying_key().to_bytes().to_vec();
         let expected_public_key = authority_public_keys
             .get(&authority_id)
-            .ok_or_else(|| anyhow::anyhow!("Missing consensus public key for {}", authority_id))?;
+            .require("Missing consensus public key")?;
         if *expected_public_key != local_public_key {
             anyhow::bail!("Consensus signing key does not match local authority public key");
         }
@@ -674,7 +675,7 @@ impl DagEngine {
         let public_key_bytes = self
             .authority_public_keys
             .get(&vertex.author)
-            .ok_or_else(|| anyhow::anyhow!("Missing consensus public key for {}", vertex.author))?;
+            .require("Missing consensus public key")?;
         let public_key_bytes: [u8; 32] = public_key_bytes.as_slice().try_into().map_err(|_| {
             anyhow::anyhow!("Invalid consensus public key length for {}", vertex.author)
         })?;

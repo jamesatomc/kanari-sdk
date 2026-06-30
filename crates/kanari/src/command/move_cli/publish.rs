@@ -9,6 +9,7 @@ use crate::command::common::{
 };
 use anyhow::{Result, bail};
 use clap::*;
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use kanari_types::{GasEstimate, GasOperation};
 use log::error;
@@ -179,7 +180,7 @@ impl Publish {
 
                 let mut stx = SignedTransaction::new(transaction);
                 stx.sign(&wallet.private_key, wallet.curve_type)
-                    .map_err(|e| anyhow::anyhow!("Failed to sign module {}: {}", module_name, e))?;
+                    .require("Failed to sign module")?;
                 stx
             };
 
@@ -197,7 +198,8 @@ impl Publish {
             let rpc_request = RpcRequest {
                 jsonrpc: "2.0".to_string(),
                 method: methods::PUBLISH_MODULE.to_string(),
-                params: serde_json::to_value(pub_req).unwrap_or(serde_json::json!(null)),
+                params: serde_json::to_value(pub_req)
+                    .require("Failed to serialize publish request")?,
                 id: 1,
             };
 

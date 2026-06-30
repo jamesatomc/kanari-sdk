@@ -1,4 +1,5 @@
 use anyhow::Result;
+use kanari_types::error::KanariUnwrapExt;
 
 use kanari_move_runtime_v1::{ChangeSet, changeset::CreatedObject, state::StateManager};
 use move_core_types::account_address::AccountAddress;
@@ -263,9 +264,11 @@ fn test_coin_split_inflation() -> Result<()> {
     assert_eq!(bob_owned_final.len(), 1, "Bob should only own Coin B");
 
     // Verify Data of Coin A in DB
-    let stored_a = state.get_object(coin_a_id)?.expect("Coin A must exist");
+    let stored_a = state.get_object(coin_a_id)?.invariant("Coin A must exist");
     // Check last 8 bytes
-    let stored_balance_bytes: [u8; 8] = stored_a.data[32..40].try_into().unwrap();
+    let stored_balance_bytes: [u8; 8] = stored_a.data[32..40]
+        .try_into()
+        .invariant("stored coin balance bytes should be 8 bytes");
     let stored_balance = u64::from_le_bytes(stored_balance_bytes);
     assert_eq!(stored_balance, 500, "Coin A balance should be 500");
 
