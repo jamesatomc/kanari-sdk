@@ -270,19 +270,18 @@ impl StateManager {
             })
     }
 
-    fn report_supply_invariant_violation(context: &str, error: &anyhow::Error) {
+    fn report_supply_invariant_violation(context: &str, error: &anyhow::Error) -> Result<()> {
         log::error!(
             "[StateManager] Supply invariant check failed {}: {}",
             context,
             error
         );
 
-        assert!(
-            !Self::supply_invariant_fail_fast_enabled(),
-            "Supply invariant check failed {}: {}",
-            context,
-            error
-        );
+        if Self::supply_invariant_fail_fast_enabled() {
+            anyhow::bail!("Supply invariant check failed {}: {}", context, error);
+        }
+
+        Ok(())
     }
 
     fn save_token_metadata_field<T: Serialize + ?Sized>(
@@ -587,7 +586,7 @@ impl StateManager {
         }
 
         if let Err(e) = state.validate_supply_invariants() {
-            Self::report_supply_invariant_violation("on startup", &e);
+            Self::report_supply_invariant_violation("on startup", &e)?;
         }
 
         Ok(state)
@@ -1124,6 +1123,18 @@ impl StateManager {
         changeset: &ChangeSet,
         validate_supply: bool,
     ) -> Result<()> {
+        if validate_supply {
+            // Validate on a cloned snapshot so rejected transactions cannot poison live state.
+            let mut candidate = self.clone();
+            candidate.apply_changeset_with_options(changeset, false)?;
+            if let Err(error) = candidate.validate_supply_invariants() {
+                Self::report_supply_invariant_violation("after apply_changeset", &error)?;
+                return Err(error);
+            }
+            *self = candidate;
+            return Ok(());
+        }
+
         let supply_delta = changeset
             .account_changes
             .values()
@@ -1411,10 +1422,6 @@ impl StateManager {
             let df_key = Self::dynamic_field_key(object_id, name_bytes);
             // Record as None so commit() will delete it from RocksDB
             self.overlay.insert(df_key, None);
-        }
-
-        if validate_supply && let Err(e) = self.validate_supply_invariants() {
-            Self::report_supply_invariant_violation("after apply_changeset", &e);
         }
 
         Ok(())

@@ -423,6 +423,38 @@ fn apply_changeset_rejects_insufficient_debit_without_partial_writes() -> Result
 }
 
 #[test]
+fn apply_changeset_rejects_supply_invariant_violation_without_mutating_live_state() -> Result<()> {
+    let sender = AccountAddress::from_hex_literal("0x1111")?;
+    let recipient = AccountAddress::from_hex_literal("0x2222")?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(KANARI_TOKEN_TYPE)?;
+
+    state.save_account(&Account::with_native_balance(sender, 500))?;
+    set_native_supply_for_test(&mut state, base.total_supply + 400)?;
+    state.global_token_supplies.insert(
+        KANARI_TOKEN_TYPE.to_string(),
+        base.wallet_visible_supply + 500,
+    );
+
+    let root_before = state.compute_state_root();
+    let sender_balance_before = state.get_account(&sender).unwrap().native_balance();
+
+    let mut changeset = ChangeSet::new();
+    changeset.transfer(sender, recipient, 10);
+
+    let error = state.apply_changeset(&changeset).unwrap_err();
+    assert!(error.to_string().contains("native supply overcount"));
+    assert_eq!(state.compute_state_root(), root_before);
+    assert!(state.get_account(&recipient).is_none());
+    assert_eq!(
+        state.get_account(&sender).unwrap().native_balance(),
+        sender_balance_before
+    );
+
+    Ok(())
+}
+
+#[test]
 fn unrelated_object_creation_preserves_native_balance_cache() -> Result<()> {
     let owner = AccountAddress::from_hex_literal("0x1111")?;
     let mut state = StateManager::new_in_memory();
