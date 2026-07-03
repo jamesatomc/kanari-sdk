@@ -5,7 +5,7 @@ use crate::command::common::{
     check_node_connection, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, resolve_sender,
     sign_and_submit_transaction,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use kanari_rpc_client::RpcClient;
 use kanari_types::transaction::Transaction;
@@ -40,6 +40,10 @@ impl Burn {
         // Convert Kanari to Mist (1 KANARI = 10^9 Mist)
         const MIST_PER_KANARI: f64 = 1_000_000_000.0;
         let amount_mist = (self.amount * MIST_PER_KANARI).round() as u64;
+        ensure!(
+            amount_mist > 0,
+            "--amount is too small; it rounds to 0 Mist"
+        );
         eprintln!("  Amount (Mist): {}", amount_mist);
 
         // Connect to RPC server

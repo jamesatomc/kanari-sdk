@@ -1,7 +1,7 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use kanari_types::error::KanariUnwrapExt;
 use log::{info, warn};
 use mysticeti_consensus::{
@@ -330,6 +330,7 @@ pub struct DagEngine {
     engine: Arc<BlockchainEngine>,
     consensus: Arc<RwLock<CoreDagConsensus>>,
     authority_id: String,
+    authorities: Vec<String>,
     local_signing_key: ed25519_dalek::SigningKey,
     authority_public_keys: BTreeMap<String, Vec<u8>>,
     staged_checkpoints: Arc<RwLock<BTreeMap<VertexId, StagedCheckpoint>>>,
@@ -367,11 +368,12 @@ impl DagEngine {
         authority_public_keys: BTreeMap<String, Vec<u8>>,
     ) -> Result<Self> {
         let state = Self::aligned_dag_state(&engine);
-        let consensus = CoreDagConsensus::new(authority_id.clone(), authorities, state)?;
+        let consensus = CoreDagConsensus::new(authority_id.clone(), authorities.clone(), state)?;
         let dag_engine = Self {
             engine,
             consensus: Arc::new(RwLock::new(consensus)),
             authority_id,
+            authorities,
             local_signing_key,
             authority_public_keys,
             staged_checkpoints: Arc::new(RwLock::new(BTreeMap::new())),
@@ -428,7 +430,35 @@ impl DagEngine {
         self.engine.persist_dag_state(state)
     }
 
+    fn checkpoint_producer_for_sequence(authorities: &[String], _sequence: u64) -> Option<String> {
+        if authorities.is_empty() {
+            return None;
+        }
+
+        let mut authorities = authorities.to_vec();
+        authorities.sort();
+        authorities.dedup();
+        authorities.first().cloned()
+    }
+
+    fn ensure_local_checkpoint_producer(&self) -> Result<u64> {
+        let next_sequence = self.engine.get_stats().height.saturating_add(1);
+        let producer = Self::checkpoint_producer_for_sequence(&self.authorities, next_sequence)
+            .require("No checkpoint producer configured")?;
+        if producer != self.authority_id {
+            anyhow::bail!(
+                "SYNC_WAITING: local authority {} is not checkpoint producer for checkpoint {}; waiting for {}",
+                self.authority_id,
+                next_sequence,
+                producer
+            );
+        }
+
+        Ok(next_sequence)
+    }
+
     pub fn produce_vertex(&self) -> Result<CheckpointProductionInfo> {
+        let next_checkpoint_sequence = self.ensure_local_checkpoint_producer()?;
         let policy = {
             let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
             consensus.production_policy()
@@ -530,7 +560,13 @@ impl DagEngine {
             .to_bytes()
             .to_vec();
 
-        self.stage_locally_produced_vertex(&vertex, verified_state, to_execute, validate_supply)?;
+        self.stage_locally_produced_vertex(
+            &vertex,
+            next_checkpoint_sequence,
+            verified_state,
+            to_execute,
+            validate_supply,
+        )?;
         let checkpoint = self.finalize_staged_checkpoint(vertex.id)?;
         let checkpoint_info = Some(CheckpointInfo {
             sequence: checkpoint.sequence,
@@ -559,6 +595,7 @@ impl DagEngine {
     fn stage_locally_produced_vertex(
         &self,
         vertex: &DagVertex,
+        checkpoint_sequence: u64,
         verified_state: StateManager,
         to_execute: Vec<SignedTransaction>,
         validate_supply: bool,
@@ -577,7 +614,7 @@ impl DagEngine {
             chain.latest_checkpoint().hash()?
         };
         let checkpoint = Checkpoint::new(
-            self.engine.get_stats().height.saturating_add(1),
+            checkpoint_sequence,
             vec![vertex.id],
             vertex.transactions.clone(),
             vertex.metadata.state_root.clone(),
@@ -790,6 +827,9 @@ impl BlockchainEngine {
     ) -> Result<()> {
         let runtime = &self.runtime_pool[0];
         let mut state_write = state_arc.write().unwrap_or_else(|e| e.into_inner());
+        state_write
+            .repair_legacy_native_wallet_overcount()
+            .context("Failed to repair legacy native wallet overcount before DAG checkpoint prologue")?;
         let clock_id = runtime.ensure_system_clock(&mut state_write)?;
         let changeset = runtime.execute_clock_consensus_commit_prologue(clock_id, timestamp_ms)?;
         state_write.apply_changeset(&changeset)?;

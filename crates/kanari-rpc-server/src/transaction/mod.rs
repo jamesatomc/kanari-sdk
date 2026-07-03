@@ -466,7 +466,7 @@ pub async fn handle_submit_transaction(
 
             Transaction::new_transfer_with_gas(
                 tx_data.sender.clone(),
-                recipient.to_string(),
+                recipient.to_hex_literal(),
                 amount,
                 tx_data.sequence_number,
                 tx_data.gas_limit,

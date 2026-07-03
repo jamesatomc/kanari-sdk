@@ -68,6 +68,30 @@ function Get-NodeRpcUrl {
     return "http://127.0.0.1:$RpcPort"
 }
 
+function Get-RpcConnectHost {
+    param(
+        [string]$RpcHost,
+        [string]$LanIp
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RpcHost)) {
+        return "127.0.0.1"
+    }
+
+    if ($RpcHost -eq "0.0.0.0" -or $RpcHost -eq "::") {
+        if ($LanIp) {
+            return $LanIp
+        }
+        return "127.0.0.1"
+    }
+
+    if ($RpcHost -eq "localhost") {
+        return "127.0.0.1"
+    }
+
+    return $RpcHost
+}
+
 function Find-KanariNodeExecutable {
     $localBuilds = @(
         @{

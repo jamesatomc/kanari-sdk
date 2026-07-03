@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result, bail};
-use kanari_crypto::wallet::load_wallet;
-use kanari_rpc_api::{SignedTransactionData, TransactionStatus};
+use kanari_crypto::wallet::{Wallet, load_wallet};
+use kanari_rpc_api::{CallFunctionRequest, SignedTransactionData, TransactionStatus};
 use kanari_rpc_client::RpcClient;
 use kanari_types::GasConfig;
 use kanari_types::address::Address;
@@ -89,6 +89,28 @@ pub async fn check_node_connection(client: &RpcClient, rpc: &str) -> Result<u64>
     }
 }
 
+pub fn sign_call_function_request(
+    mut request: CallFunctionRequest,
+    wallet: &Wallet,
+) -> Result<CallFunctionRequest> {
+    let transaction = Transaction::ExecuteFunction {
+        sender: request.sender.clone(),
+        module: format!("{}::{}", request.package, request.module),
+        function: request.function.clone(),
+        type_args: request.type_args.clone(),
+        args: request.args.clone(),
+        gas_limit: request.gas_limit,
+        gas_price: request.gas_price,
+        sequence_number: request.sequence_number,
+    };
+
+    let mut signed_tx = SignedTransaction::new(transaction);
+    signed_tx
+        .sign(&wallet.private_key, wallet.curve_type)
+        .context("Failed to sign transaction")?;
+    request.signature = Some(signed_tx.signature);
+    Ok(request)
+}
 /// Sign and submit a transaction to the RPC node (async)
 pub async fn sign_and_submit_transaction(
     client: &RpcClient,

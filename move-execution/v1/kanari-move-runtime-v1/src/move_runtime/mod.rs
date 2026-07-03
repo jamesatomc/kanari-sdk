@@ -164,15 +164,14 @@ impl MoveRuntime {
                 }
             },
             _ if cfg!(miri) => Arc::from(ObjectStorage::boxed_inmemory()),
-            _ => match ObjectStorage::boxed_with_persistence() {
+            _ => match ObjectStorage::boxed_with_store(state.store()) {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] DB load failed. Fallback to in-memory: {}", e);
+                    log::warn!("[RUNTIME] shared object store load failed: {}", e);
                     Arc::from(ObjectStorage::boxed_inmemory())
                 }
             },
         };
-
         let resolver = KanariMoveResolver {
             state: state.clone(),
             _object_storage: object_storage.clone(),

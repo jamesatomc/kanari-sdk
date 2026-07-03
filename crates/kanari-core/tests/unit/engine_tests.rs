@@ -34,13 +34,13 @@ fn signed_transfer_from(
 
 fn fund_sender(engine: &BlockchainEngine, address: &str, balance: u64) {
     let addr = AccountAddress::from_hex_literal(address).invariant("valid account address");
-    let mut account = Account::with_native_balance(addr, balance);
-    account.set_token_balance(KANARI_TOKEN_TYPE.to_string(), BalanceRecord::new(balance));
+    let mut funding = ChangeSet::new();
+    funding.mint(addr, balance);
     engine
         .state
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .save_account(&account)
+        .apply_changeset(&funding)
         .invariant("test operation");
 }
 
@@ -130,6 +130,30 @@ fn configured_dag_engine_rejects_empty_checkpoint() {
 
     assert!(err.to_string().contains("No new transactions"));
     assert_eq!(engine.get_stats().height, 0);
+}
+
+#[test]
+fn non_checkpoint_producer_waits_instead_of_committing_local_checkpoint() {
+    let mut engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
+    let authorities = vec!["0x1".to_string(), "0x2".to_string()];
+    engine.set_authorities("0x2".to_string(), authorities.clone());
+    let (local_key, public_keys) = secure_consensus_keys(&authorities, "0x2");
+    engine
+        .set_consensus_signing_key(local_key, public_keys)
+        .invariant("test operation");
+
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
+    let tx = signed_transfer_from(&sender, 0);
+    engine
+        .submit_transactions_batch(vec![tx])
+        .invariant("submit transaction");
+
+    let err = engine.produce_checkpoint().unwrap_err();
+
+    assert!(err.to_string().contains("SYNC_WAITING"));
+    assert!(err.to_string().contains("not checkpoint producer"));
+    assert_eq!(engine.get_stats().height, 0);
+    assert_eq!(engine.get_stats().pending_transactions, 1);
 }
 
 #[test]
@@ -368,6 +392,53 @@ fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
         assert_eq!(sender_account.native_balance(), 0);
         assert_eq!(sender_account.sequence_number, 1);
     }
+}
+
+#[test]
+fn checkpoint_burn_keeps_native_supply_invariants() {
+    let mut engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
+    let authorities = vec!["0x1".to_string(), "0x2".to_string(), "0x3".to_string()];
+    engine.set_authorities("0x1".to_string(), authorities.clone());
+    let (local_key, public_keys) = secure_consensus_keys(&authorities, "0x1");
+    engine
+        .set_consensus_signing_key(local_key, public_keys)
+        .invariant("consensus key");
+
+    let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
+    let sender_addr = AccountAddress::from_hex_literal(&sender.address).invariant("sender address");
+    let initial_balance = 1_000_000_000u64;
+    {
+        let mut state = engine.state_write();
+        let mut funding = ChangeSet::new();
+        funding.mint(sender_addr, initial_balance);
+        state.apply_changeset(&funding).invariant("fund sender");
+        state.validate_supply_invariants().invariant("funded state");
+    }
+
+    let burn_amount = 100_000_000u64;
+    let tx = Transaction::new_burn(sender.tagged_address(), burn_amount, 0);
+    let gas_cost = 100_000u64;
+    let mut signed_tx = SignedTransaction::new(tx);
+    signed_tx
+        .sign(&sender.private_key, sender.curve_type)
+        .invariant("sign burn");
+
+    engine
+        .submit_transactions_batch(vec![signed_tx])
+        .invariant("submit burn");
+    engine
+        .produce_checkpoint()
+        .invariant("produce burn checkpoint");
+
+    let state = engine.state_read();
+    state
+        .validate_supply_invariants()
+        .invariant("burned state invariants");
+    let sender_account = state.get_account(&sender_addr).invariant("sender account");
+    assert_eq!(
+        sender_account.native_balance(),
+        initial_balance - burn_amount - gas_cost
+    );
 }
 
 #[test]

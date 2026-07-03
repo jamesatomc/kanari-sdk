@@ -7,8 +7,10 @@ param(
     [string]$ReplicaBaseDataDir = "$env:USERPROFILE\.kanari\node-db",
     [int]$BasePeerPort = 19000,
     [int]$BaseRpcPort = 19001,
+    [string]$RpcHost = "0.0.0.0",
     [switch]$ResetReplicaData,
     [switch]$ResetSourceData,
+    [switch]$AllowUnsafeResetPath,
     [switch]$AllowReuseData,
     [switch]$DisableFailFast,
     [switch]$SkipHealthCheck,
@@ -30,6 +32,33 @@ function Test-DirectoryHasEntries {
     return $null -ne (Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
 }
 
+function Assert-SafeResetPath {
+    param(
+        [string]$Path,
+        [string]$Label
+    )
+
+    if ($AllowUnsafeResetPath) {
+        return
+    }
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $fullTrim = $fullPath.TrimEnd([char[]]@('\', '/'))
+    $kanariHome = [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE ".kanari"))
+    $kanariTrim = $kanariHome.TrimEnd([char[]]@('\', '/'))
+    $homeTrim = ([System.IO.Path]::GetFullPath($env:USERPROFILE)).TrimEnd([char[]]@('\', '/'))
+    $rootTrim = ([System.IO.Path]::GetPathRoot($fullPath)).TrimEnd([char[]]@('\', '/'))
+    $kanariPrefix = $kanariTrim + [System.IO.Path]::DirectorySeparatorChar
+
+    if ($fullTrim -eq $homeTrim -or $fullTrim -eq $kanariTrim -or $fullTrim -eq $rootTrim) {
+        throw "$Label reset path is too broad: $fullPath"
+    }
+
+    if (-not $fullTrim.StartsWith($kanariPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label reset path must be under $kanariTrim unless -AllowUnsafeResetPath is passed: $fullPath"
+    }
+}
+
 Write-Host "Starting Kanari Multi-Node Setup..." -ForegroundColor Green
 Write-Host ""
 
@@ -45,6 +74,7 @@ Write-Host "Node count: $NodeCount" -ForegroundColor Cyan
 Write-Host "Network: $Network" -ForegroundColor Cyan
 Write-Host "Source node data dir (node1): $SourceNodeDataDir" -ForegroundColor Cyan
 Write-Host "Replica base data dir (node2..N): $ReplicaBaseDataDir" -ForegroundColor Cyan
+Write-Host "RPC bind host: $RpcHost" -ForegroundColor Cyan
 Write-Host "Supply fail-fast: $($env:KANARI_FAIL_FAST_ON_SUPPLY_MISMATCH)" -ForegroundColor Cyan
 Write-Host "Allow reuse existing data: $AllowReuseData" -ForegroundColor Cyan
 Write-Host "Consensus key dir: $ConsensusKeyDir" -ForegroundColor Cyan
@@ -87,6 +117,7 @@ if ($hasReusableData -and -not $AllowReuseData -and (-not $ResetSourceData -or -
 
 if ($ResetSourceData) {
     Write-Host "ResetSourceData enabled: clearing source node database..." -ForegroundColor Yellow
+    Assert-SafeResetPath -Path $SourceNodeDataDir -Label "SourceNodeDataDir"
     Get-ChildItem -LiteralPath $SourceNodeDataDir -Force -ErrorAction SilentlyContinue |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 } else {
@@ -98,6 +129,7 @@ if ($ResetReplicaData) {
     for ($i = 2; $i -le $NodeCount; $i++) {
         $nodeDir = Join-Path $ReplicaBaseDataDir "node$i"
         if (Test-Path $nodeDir) {
+            Assert-SafeResetPath -Path $nodeDir -Label "Replica node$i"
             Remove-Item -LiteralPath $nodeDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -124,6 +156,7 @@ try {
 
 if ($ResetConsensusKeys -and (Test-Path $ConsensusKeyDir)) {
     Write-Host "ResetConsensusKeys enabled: clearing consensus keys..." -ForegroundColor Yellow
+    Assert-SafeResetPath -Path $ConsensusKeyDir -Label "ConsensusKeyDir"
     Remove-Item -LiteralPath $ConsensusKeyDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -150,8 +183,10 @@ if ($missingConsensusKeys) {
 
 $localIp = Get-LanIpAddress
 if (-not $localIp) {
-    Write-Host "Warning: no LAN IPv4 detected. Bootstrap may fail if peers cannot resolve node1." -ForegroundColor Yellow
+    Write-Host "Warning: no LAN IPv4 detected. Using 127.0.0.1 for local bootstrap and RPC health checks." -ForegroundColor Yellow
 }
+$bootstrapHost = if ($localIp) { $localIp } else { "127.0.0.1" }
+$rpcConnectHost = Get-RpcConnectHost -RpcHost $RpcHost -LanIp $localIp
 
 Write-Host ""
 $startNow = Read-Host "Start all $NodeCount nodes now with node1 as source? (Y/N)"
@@ -170,18 +205,18 @@ for ($i = 1; $i -le $NodeCount; $i++) {
 
     if ($i -eq 1) {
         $dataDir = $SourceNodeDataDir
-        $argString = "-NoExit -ExecutionPolicy Bypass -File `"$scriptPath`" -NodeId $i -Network $Network -DataDir `"$dataDir`" -BasePeerPort $BasePeerPort -BaseRpcPort $BaseRpcPort -Authorities `"$authoritiesStr`" -ConsensusKeyDir `"$ConsensusKeyDir`""
+        $argString = "-NoExit -ExecutionPolicy Bypass -File `"$scriptPath`" -NodeId $i -Network $Network -DataDir `"$dataDir`" -BasePeerPort $BasePeerPort -BaseRpcPort $BaseRpcPort -RpcHost `"$RpcHost`" -Authorities `"$authoritiesStr`" -ConsensusKeyDir `"$ConsensusKeyDir`""
     } else {
         $dataDir = Get-NodeDataDir -NodeId $i -DataDir "" -BaseDataDir $ReplicaBaseDataDir
-        $bootstrapAddr = "/ip4/$localIp/tcp/$BasePeerPort"
-        $argString = "-NoExit -ExecutionPolicy Bypass -File `"$scriptPath`" -NodeId $i -Network $Network -DataDir `"$dataDir`" -BasePeerPort $BasePeerPort -BaseRpcPort $BaseRpcPort -Authorities `"$authoritiesStr`" -Bootstrap `"$bootstrapAddr`" -ConsensusKeyDir `"$ConsensusKeyDir`""
+        $bootstrapAddr = "/ip4/$bootstrapHost/tcp/$BasePeerPort"
+        $argString = "-NoExit -ExecutionPolicy Bypass -File `"$scriptPath`" -NodeId $i -Network $Network -DataDir `"$dataDir`" -BasePeerPort $BasePeerPort -BaseRpcPort $BaseRpcPort -RpcHost `"$RpcHost`" -Authorities `"$authoritiesStr`" -Bootstrap `"$bootstrapAddr`" -ConsensusKeyDir `"$ConsensusKeyDir`""
     }
 
-    Write-Host "Launching node $i | Authority 0x$i | P2P $nodeP2pPort | RPC $nodeRpcPort | DataDir $dataDir" -ForegroundColor Cyan
+    Write-Host "Launching node $i | Authority 0x$i | P2P $nodeP2pPort | RPC $RpcHost`:$nodeRpcPort | DataDir $dataDir" -ForegroundColor Cyan
     Start-Process -FilePath $currentPS -ArgumentList $argString -WindowStyle Normal
 
     if ($i -eq 1) {
-        Write-Host "Waiting 5 seconds for node1 source to initialize on ${localIp}:$BasePeerPort..." -ForegroundColor Cyan
+        Write-Host "Waiting 5 seconds for node1 source to initialize on ${bootstrapHost}:$BasePeerPort..." -ForegroundColor Cyan
         Start-Sleep -Seconds 5
     } else {
         Start-Sleep -Milliseconds 600
@@ -198,7 +233,7 @@ if (-not $SkipHealthCheck) {
 
     for ($i = 1; $i -le $NodeCount; $i++) {
         $ports = Get-NodePorts -NodeId $i -BasePeerPort $BasePeerPort -BaseRpcPort $BaseRpcPort
-        $rpcUrl = Get-NodeRpcUrl -HostIp $localIp -RpcPort $ports.RpcPort
+        $rpcUrl = Get-NodeRpcUrl -HostIp $rpcConnectHost -RpcPort $ports.RpcPort
         if ($i -eq 1) {
             Test-NodeHealth -RpcUrl $rpcUrl -NodeId $i -RequireBootstrappedState
         } else {

@@ -192,8 +192,9 @@ impl MoveVMState {
                 && let Ok(mut created_obj) =
                     bcs::from_bytes::<crate::changeset::CreatedObject>(&obj_bytes)
             {
+                // Keep the mirrored payload current for VM resource reads, but leave
+                // object versioning to StateManager so authorities stay deterministic.
                 created_obj.data = blob.to_vec();
-                created_obj.version += 1;
 
                 let updated_bytes = bcs::to_bytes(&created_obj)?;
                 self.store.save(obj_key.as_bytes(), &updated_bytes)?;

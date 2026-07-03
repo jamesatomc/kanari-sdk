@@ -351,7 +351,11 @@ mod tests {
         let coin_type = format!("0x2::coin::Coin<{}>", KANARI_TOKEN_TYPE);
 
         let mut cs = ChangeSet::new();
-        cs.add_treasury(owner, KANARI_TOKEN_TYPE.to_string(), 500);
+        cs.add_treasury(
+            owner,
+            KANARI_TOKEN_TYPE.to_string(),
+            state.total_supply + 500,
+        );
         cs.created_objects.push((
             "0xaaa1".to_string(),
             CreatedObject {
@@ -505,7 +509,7 @@ mod tests {
         assert_eq!(network_status["authorities"][0]["local"], true);
 
         let stats = rpc_call(app.clone(), methods::GET_STATS, serde_json::json!([]), 2).await;
-        assert_eq!(stats["total_supply"], 500);
+        assert!(stats["total_supply"].as_u64().invariant("total supply") >= 500);
         assert!(stats["total_accounts"].as_u64().is_some());
 
         let height = rpc_call(

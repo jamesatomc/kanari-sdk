@@ -3,14 +3,13 @@
 
 use crate::command::common::{
     check_node_connection, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, normalize_addr,
-    resolve_sender, resolve_transaction_gas,
+    resolve_sender, resolve_transaction_gas, sign_call_function_request,
 };
 use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_api::CallFunctionRequest;
 use kanari_rpc_client::RpcClient;
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
-use kanari_types::transaction::Transaction;
 
 fn read_coin_balance(data: &[u8]) -> Option<u64> {
     if data.len() < 40 {
@@ -126,7 +125,7 @@ impl Transfer {
             sender: sender_tagged.clone(),
             package: "0x2".to_string(),
             module: "kanari".to_string(),
-            function: "transfer_amount".to_string(),
+            function: "transfer".to_string(),
             type_args: vec![],
             args: vec![
                 move_core_types::account_address::AccountAddress::from_hex_literal(&coin_object_id)
@@ -144,25 +143,7 @@ impl Transfer {
             signature: None,
             execute_immediate: Some(true),
         };
-
-        let dummy_tx = Transaction::ExecuteFunction {
-            sender: sender_tagged.clone(),
-            module: "0x2::kanari".to_string(),
-            function: "transfer_amount".to_string(),
-            type_args: vec![],
-            args: call_req.args.clone(),
-            gas_limit: call_req.gas_limit,
-            gas_price: call_req.gas_price,
-            sequence_number: call_req.sequence_number,
-        };
-
-        let mut signed_tx = kanari_types::transaction::SignedTransaction::new(dummy_tx);
-        signed_tx
-            .sign(&wallet.private_key, wallet.curve_type)
-            .context("Failed to sign transaction")?;
-
-        let mut final_call_req = call_req;
-        final_call_req.signature = Some(signed_tx.signature.clone());
+        let final_call_req = sign_call_function_request(call_req, &wallet)?;
 
         eprintln!("  Gas Limit: {}", final_call_req.gas_limit);
         eprintln!("  Gas Price: {} Mist/gas", final_call_req.gas_price);

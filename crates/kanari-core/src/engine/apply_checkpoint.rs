@@ -43,6 +43,9 @@ impl BlockchainEngine {
     ) -> Result<()> {
         let runtime = &self.runtime_pool[0];
         let mut state_write = state_arc.write().unwrap_or_else(|e| e.into_inner());
+        state_write
+            .repair_legacy_native_wallet_overcount()
+            .context("Failed to repair legacy native wallet overcount before checkpoint prologue")?;
         let clock_id = runtime.ensure_system_clock(&mut state_write)?;
         let changeset = runtime.execute_clock_consensus_commit_prologue(clock_id, timestamp_ms)?;
         state_write.apply_changeset(&changeset)?;
@@ -98,12 +101,17 @@ impl BlockchainEngine {
             self.apply_system_prologue_to_state(&state_arc, checkpoint.timestamp, false)?;
         }
 
-        self.execute_tx_waves_strict_serial(
-            to_execute.clone(),
-            &state_arc,
-            Some(checkpoint.timestamp),
-            false, // persist_objects = false
-        )?;
+        if self
+            .apply_zero_effect_native_batch(&to_execute, &state_arc)?
+            .is_none()
+        {
+            self.execute_tx_waves_deterministic_parallel(
+                to_execute.clone(),
+                &state_arc,
+                Some(checkpoint.timestamp),
+                false, // persist_objects = false
+            )?;
+        }
 
         let verified_state = state_arc.read().unwrap_or_else(|e| e.into_inner()).clone();
         let computed_root = verified_state.compute_state_root();
@@ -114,10 +122,13 @@ impl BlockchainEngine {
     fn finalize_checkpoint(
         &self,
         checkpoint: Checkpoint,
-        new_state: StateManager,
+        mut new_state: StateManager,
         validate_supply: bool,
     ) -> Result<()> {
         if validate_supply {
+            new_state
+                .repair_legacy_native_wallet_overcount()
+                .context("Failed to repair native wallet supply before checkpoint commit")?;
             new_state
                 .validate_supply_invariants()
                 .context("Supply invariants failed before checkpoint commit")?;

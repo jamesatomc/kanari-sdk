@@ -16,7 +16,7 @@ fn test_multiple_mints_consolidate_into_single_balance() -> Result<()> {
 
     let mut state = StateManager::new_in_memory();
     let alice = AccountAddress::from_hex_literal("0x1111")?;
-    let token_type = "0x2::kanari::KANARI";
+    let token_type = "0x2::james::JAMES";
 
     // First mint: 100 tokens
     println!("=== First Mint (100 tokens) ===");
@@ -72,7 +72,7 @@ fn test_changeset_merge_consolidates_token_balances() -> Result<()> {
     // rather than duplicated.
 
     let alice = AccountAddress::from_hex_literal("0x1111")?;
-    let token_type = "0x2::kanari::KANARI";
+    let token_type = "0x2::james::JAMES";
 
     // Create first ChangeSet with 100 tokens
     let mut cs1 = ChangeSet::new();
@@ -115,7 +115,7 @@ fn test_changeset_consolidation_with_treasury() -> Result<()> {
 
     let alice = AccountAddress::from_hex_literal("0x1111")?;
     let bob = AccountAddress::from_hex_literal("0x2222")?;
-    let token_type = "0x2::kanari::KANARI";
+    let token_type = "0x2::james::JAMES";
 
     let mut state = StateManager::new_in_memory();
 
@@ -155,7 +155,7 @@ fn test_multiple_owners_and_token_types() -> Result<()> {
 
     let alice = AccountAddress::from_hex_literal("0x1111")?;
     let bob = AccountAddress::from_hex_literal("0x2222")?;
-    let token_kanari = "0x2::kanari::KANARI";
+    let token_kanari = "0x2::james::JAMES";
     let token_thb = "0x2::thb::THB";
 
     let mut state = StateManager::new_in_memory();
