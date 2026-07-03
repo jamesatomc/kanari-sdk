@@ -597,6 +597,23 @@ impl SyncManager {
         self.divergent_peers_guard().contains_key(peer_id)
     }
 
+    fn release_divergent_peer_if_height_advanced(
+        &self,
+        peer_info: &PeerInfoMsg,
+    ) -> Option<DivergentPeerInfo> {
+        let mut divergent = self.divergent_peers_guard();
+        let should_release = divergent
+            .get(&peer_info.peer_id)
+            .map(|info| peer_info.height > info.height)
+            .unwrap_or(false);
+
+        if should_release {
+            return divergent.remove(&peer_info.peer_id);
+        }
+
+        None
+    }
+
     fn should_request_checkpoint_sequence(&self, sequence: u64, now: u64) -> bool {
         let mut pending = self.pending_checkpoint_requests_guard();
         match pending.get(&sequence).copied() {
@@ -746,6 +763,7 @@ impl SyncManager {
             stats.height,
             checkpoint.transactions.len()
         );
+
 
         if checkpoint.sequence <= stats.height {
             info!(
@@ -1054,6 +1072,15 @@ impl SyncManager {
                 &local_checkpoint_hash,
                 &local_state_root,
             );
+
+            if let Some(previous_divergence) =
+                self.release_divergent_peer_if_height_advanced(&peer_info)
+            {
+                info!(
+                    "[SYNC] Peer {} advanced from quarantined height {} to {}. Releasing divergence quarantine and retrying sync.",
+                    peer_info.peer_id, previous_divergence.height, peer_info.height
+                );
+            }
         }
 
         if peer_info.height == stats.height {
@@ -1335,6 +1362,32 @@ mod tests {
             Some("peer-1".to_string())
         );
         assert_eq!(sync.max_eligible_peer_height(), stats.height);
+    }
+
+    #[tokio::test]
+    async fn test_divergent_peer_is_released_after_it_advances_height() {
+        let sync = new_sync_manager();
+        let stats = sync.engine.get_stats();
+        let local_checkpoint_hash = sync.engine.latest_checkpoint_hash_hex();
+
+        sync.handle_peer_info(peer_info(stats.height, &local_checkpoint_hash, "deadbeef"))
+            .await;
+
+        assert!(sync.is_peer_divergent("peer-1"));
+
+        sync.handle_peer_info(peer_info(
+            stats.height + 5,
+            "future-checkpoint",
+            "future-root",
+        ))
+        .await;
+
+        assert!(!sync.is_peer_divergent("peer-1"));
+        assert_eq!(
+            sync.best_peer_for_height(stats.height + 1),
+            Some("peer-1".to_string())
+        );
+        assert_eq!(sync.max_eligible_peer_height(), stats.height + 5);
     }
 
     #[test]

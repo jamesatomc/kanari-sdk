@@ -584,8 +584,8 @@ impl BlockchainEngine {
         self.mempool_read().pending_txs.len()
     }
 
-    pub(crate) fn get_expected_sequence(&self, address_hex: &str) -> u64 {
-        let mut seq = self
+    fn expected_sequence_snapshot(&self, address_hex: &str) -> u64 {
+        let base_sequence = self
             .state
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -593,8 +593,24 @@ impl BlockchainEngine {
             .map(|acc| acc.sequence_number)
             .unwrap_or(0);
 
-        seq += self.pending_tx_count_for_sender(address_hex);
-        seq
+        base_sequence + self.pending_tx_count_for_sender(address_hex)
+    }
+
+    pub(crate) fn get_expected_sequence(&self, address_hex: &str) -> u64 {
+        const MAX_SNAPSHOT_RETRIES: usize = 4;
+
+        let mut expected = self.expected_sequence_snapshot(address_hex);
+        for _ in 0..MAX_SNAPSHOT_RETRIES {
+            let current = self.expected_sequence_snapshot(address_hex);
+            if current == expected {
+                return current;
+            }
+
+            expected = current;
+            std::hint::spin_loop();
+        }
+
+        expected
     }
 
     fn resolve_account_objects(
