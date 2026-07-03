@@ -5,8 +5,8 @@ import 'package:http/http.dart' as http;
 import 'package:kanari_crypto/kanari_crypto.dart';
 
 import '../../core/bcs_utils.dart';
-import '../../core/token_utils.dart' as token_utils;
 import '../../core/rpc_utils.dart';
+import '../../core/token_utils.dart' as token_utils;
 import '../../kanari_wallet.dart';
 import '../../models/account.dart';
 import '../../models/transaction.dart';
@@ -37,24 +37,15 @@ class TransactionOperations {
       'gas_price': Bcs.u64(),
       'sequence_number': Bcs.u64(),
     }),
-    'Transfer': Bcs.struct('Transfer', {
-      'from': Bcs.string(),
-      'to': Bcs.string(),
-      'amount': Bcs.u64(),
-      'gas_limit': Bcs.u64(),
-      'gas_price': Bcs.u64(),
-      'sequence_number': Bcs.u64(),
-    }),
-    'Burn': Bcs.struct('Burn', {
-      'from': Bcs.string(),
-      'amount': Bcs.u64(),
-      'gas_limit': Bcs.u64(),
-      'gas_price': Bcs.u64(),
-      'sequence_number': Bcs.u64(),
-    }),
   });
 
   TransactionOperations(this.url, this.queries, this.client);
+
+  void _requirePositiveAmount(int amount, String name) {
+    if (amount <= 0) {
+      throw ArgumentError.value(amount, name, 'must be greater than 0');
+    }
+  }
 
   String _getSenderForTx(KanariWallet wallet) => wallet.taggedAddress;
 
@@ -174,16 +165,26 @@ class TransactionOperations {
     );
   }
 
-  String _findSpendableCoinObjectId(AccountInfo account, String tokenType) {
+  String _findSpendableCoinObjectId(
+    AccountInfo account,
+    String tokenType,
+    int amount, {
+    bool requireExactAmount = false,
+  }) {
     final wantedToken = BcsUtils.normalizeTokenType(tokenType);
 
     for (final obj in account.ownedObjects ?? const []) {
-      if (_normalizedTokenTypeFromCoinObject(obj.type) != wantedToken) {
+      final objToken = _normalizedTokenTypeFromCoinObject(obj.type);
+      if (objToken == null ||
+          !BcsUtils.tokenTypesEqual(objToken, wantedToken)) {
         continue;
       }
 
       final coinBalance = _readCoinBalance(obj.data);
-      if (coinBalance == null || coinBalance == 0) {
+      if (coinBalance == null || coinBalance < amount) {
+        continue;
+      }
+      if (requireExactAmount && coinBalance != amount) {
         continue;
       }
 
@@ -191,8 +192,11 @@ class TransactionOperations {
     }
 
     throw Exception(
-      'No spendable Coin<$tokenType> object found.\n'
-      'This wallet needs a spendable Coin object for the selected token.',
+      requireExactAmount
+          ? 'No Coin<$tokenType> object with exactly $amount found.\n'
+                'This transfer entry moves the whole Coin object.'
+          : 'No spendable Coin<$tokenType> object with at least $amount found.\n'
+                'This wallet needs one Coin object large enough for this transfer.',
     );
   }
 
@@ -203,11 +207,20 @@ class TransactionOperations {
     required int amount,
     required int gasLimit,
     required int gasPrice,
+    String function = 'transfer_amount',
+    bool includeAmountArg = true,
+    bool requireExactAmount = false,
   }) async {
+    _requirePositiveAmount(amount, 'amount');
     final account = await queries.getAccount(wallet.address);
     final normalizedRecipient = BcsUtils.normalizeAddress(recipient);
     final wantedToken = BcsUtils.normalizeTokenType(tokenType);
-    final coinObjectId = _findSpendableCoinObjectId(account, wantedToken);
+    final coinObjectId = _findSpendableCoinObjectId(
+      account,
+      wantedToken,
+      amount,
+      requireExactAmount: requireExactAmount,
+    );
 
     final parts = wantedToken.split('::');
     if (parts.length < 3) {
@@ -218,7 +231,7 @@ class TransactionOperations {
 
     final args = <List<int>>[
       BcsUtils.hexToBytes(BcsUtils.normalizeObjectId(coinObjectId)),
-      BcsUtils.encodeU64(amount),
+      if (includeAmountArg) BcsUtils.encodeU64(amount),
       BcsUtils.hexToBytes(normalizedRecipient),
     ];
 
@@ -226,7 +239,7 @@ class TransactionOperations {
       wallet: wallet,
       package: parts[0],
       module: parts[1],
-      function: 'transfer_amount',
+      function: function,
       typeArgs: const <String>[],
       args: args,
       gasLimit: gasLimit,
@@ -249,6 +262,7 @@ class TransactionOperations {
       amount: amount,
       gasLimit: gasLimit,
       gasPrice: gasPrice,
+      function: 'transfer',
     );
   }
 
@@ -260,7 +274,7 @@ class TransactionOperations {
     List<String> typeArgs = const [],
     List<List<int>> args = const [],
     int gasLimit = TransactionConstants.defaultGasLimit,
-    int gasPrice = 0,
+    int gasPrice = TransactionConstants.defaultGasPrice,
     bool? executeImmediate,
   }) async {
     final account = await queries.getAccount(wallet.address);
@@ -307,13 +321,17 @@ class TransactionOperations {
     int gasLimit = TransactionConstants.defaultGasLimit,
     int gasPrice = TransactionConstants.defaultGasPrice,
   }) async {
+    _requirePositiveAmount(amount, 'amount');
     final account = await queries.getAccount(wallet.address);
     final senderAddress = _getSenderForTx(wallet);
 
     final txData = {
-      'Burn': {
-        'from': senderAddress,
-        'amount': amount,
+      'ExecuteFunction': {
+        'sender': senderAddress,
+        'module': TransactionConstants.nativeKanariModule,
+        'function': TransactionConstants.nativeBurnAmountFunction,
+        'type_args': const <String>[],
+        'args': [BcsUtils.encodeU64(amount)],
         'gas_limit': gasLimit,
         'gas_price': gasPrice,
         'sequence_number': account.sequenceNumber,
@@ -342,7 +360,7 @@ class TransactionOperations {
     required String tokenType,
     required int amount,
     int gasLimit = TransactionConstants.defaultGasLimit,
-    int gasPrice = 0,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) async {
     return _transferCoinObject(
       wallet: wallet,

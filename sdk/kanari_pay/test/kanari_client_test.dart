@@ -127,14 +127,15 @@ void main() {
       expect(result.hash, '0xtxhash');
       expect(result.status, 'success');
 
-      // Verify params normalization and serialization
+      // Verify KANARI transfer uses the Coin<KANARI> entry function.
       expect(capturedParams, isNotNull);
       final txData = capturedParams!;
       expect(txData['sender'], 'Ed25519:0x123');
       expect(txData['package'], '0x2');
       expect(txData['module'], 'kanari');
-      expect(txData['function'], 'transfer_amount');
+      expect(txData['function'], 'transfer');
       expect(txData['sequence_number'], 5);
+      expect(txData['args'], hasLength(3));
       expect(txData['signature'], isA<List>());
     });
 

@@ -610,12 +610,14 @@ export default function Home() {
 
   const onlineNodes = nodes.filter((node) => node.online);
   const maxHeight = Math.max(0, ...nodes.map((node) => node.height ?? 0));
-  const syncedNodes = onlineNodes.filter((node) => (node.height ?? 0) >= maxHeight).length;
+  const syncedAuthorityNodes = onlineNodes.filter((node) => (node.height ?? 0) >= maxHeight);
+  const syncedNodes = syncedAuthorityNodes.length;
   const laggingNodes = onlineNodes.length - syncedNodes;
   const offlineNodes = nodes.length - onlineNodes.length;
   const totalTransactions = maxNullable(nodes.map((node) => node.totalTransactions));
   const totalAccounts = maxNullable(nodes.map((node) => node.totalAccounts));
-  const pendingTransactions = nodes.reduce((sum, node) => sum + (node.pendingTransactions ?? 0), 0);
+  const pendingTransactions =
+    maxNullable((syncedAuthorityNodes.length > 0 ? syncedAuthorityNodes : onlineNodes).map((node) => node.pendingTransactions)) ?? 0;
 
   const networkStatusLabel = useMemo(() => {
     if (nodes.length === 0) return "Loading network";
@@ -757,7 +759,7 @@ export default function Home() {
       <section className="stat-grid explorer-stat-grid">
         <StatCard label="Nodes" value={`${onlineNodes.length}/${nodes.length || configuredEndpoints.length}`} detail={offlineNodes ? `${offlineNodes} offline` : `${laggingNodes} lagging`} />
         <StatCard label="Height" value={formatNumber(maxHeight || blockHeight)} detail="Highest reported checkpoint height" />
-        <StatCard label="Transactions" value={formatNumber(totalTransactions)} detail={`${formatNumber(pendingTransactions)} pending in mempool`} />
+        <StatCard label="Transactions" value={formatNumber(totalTransactions)} detail={`${formatNumber(pendingTransactions)} pending on synced authority`} />
         <StatCard label="Tokens" value={formatNumber(tokenCount)} detail={`${formatNumber(totalAccounts)} accounts indexed`} />
       </section>
 
@@ -865,3 +867,4 @@ export default function Home() {
     </div>
   );
 }
+

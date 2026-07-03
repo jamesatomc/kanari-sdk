@@ -4,6 +4,7 @@ import '../core/bcs_utils.dart';
 import '../kanari_wallet.dart';
 import '../models/transaction.dart';
 import '../modules/escrow/escrow.dart';
+import '../modules/transactions/constants.dart';
 
 /// EscrowClient - facade that uses internal modules
 class EscrowClient {
@@ -25,8 +26,8 @@ class EscrowClient {
     required int amount,
     required String description,
     required String tokenType,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) {
     return _operations.createDeal(
       wallet: wallet,
@@ -45,8 +46,8 @@ class EscrowClient {
     required String dealObjectId,
     required String coinType,
     required String proofObjectId,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) {
     return _operations.confirmDelivery(
       wallet: wallet,
@@ -63,8 +64,8 @@ class EscrowClient {
     required String dealObjectId,
     required String coinType,
     required String proofObjectId,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) {
     return _operations.releaseFunds(
       wallet: wallet,
@@ -82,8 +83,8 @@ class EscrowClient {
     required String coinType,
     required String reason,
     required String proofObjectId,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) {
     return _operations.raiseDispute(
       wallet: wallet,
@@ -147,7 +148,7 @@ class EscrowClient {
       for (final obj in account.ownedObjects ?? const []) {
         final tokenType = BcsUtils.extractCoinTypeFromObjectType(obj.type);
         if (tokenType != null) {
-          coinTypes.add(tokenType);
+          coinTypes.add(BcsUtils.normalizeTokenType(tokenType));
         }
       }
 

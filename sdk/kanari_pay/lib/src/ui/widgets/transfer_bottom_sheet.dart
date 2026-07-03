@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/token_utils.dart' as token_utils;
 import '../../models/account.dart';
+import '../../modules/transactions/constants.dart';
 import '../../providers/wallet_provider.dart';
 import 'app_ui.dart';
 import 'token_logo.dart';
@@ -65,6 +66,10 @@ class _TransferBottomSheetState extends State<TransferBottomSheet> {
       ),
     );
   }
+
+  int get _nativeGasReserveBaseUnits =>
+      TransactionConstants.defaultGasLimit *
+      TransactionConstants.defaultGasPrice;
 
   @override
   Widget build(BuildContext context) {
@@ -202,9 +207,10 @@ class _TransferBottomSheetState extends State<TransferBottomSheet> {
 
   void _fillMaxAmount(WalletState walletState, String selectedTokenValue) {
     if (selectedTokenValue == WalletState.kanariTokenType) {
+      final spendable = walletState.kanariBalance - _nativeGasReserveBaseUnits;
       _amountController.text = token_utils
           .displayAmountFromBaseUnits(
-            walletState.kanariBalance,
+            spendable > 0 ? spendable : 0,
             token_utils.kanariDecimals,
           )
           .toStringAsFixed(6);
@@ -250,9 +256,28 @@ class _TransferBottomSheetState extends State<TransferBottomSheet> {
     final selectedTokenValue = _selectedTokenType.isEmpty
         ? WalletState.kanariTokenType
         : _selectedTokenType;
-    final availableAmount = _availableAmount(walletState, selectedTokenValue);
-    if (amount > availableAmount) {
+    final selectedToken = selectedTokenValue == WalletState.kanariTokenType
+        ? null
+        : walletState.tokenBalances.firstWhere(
+            (token) => token.tokenType == selectedTokenValue,
+          );
+    final decimals = selectedToken?.decimals ?? token_utils.kanariDecimals;
+    final rawAmount = token_utils.baseUnitsFromDisplayAmount(amount, decimals);
+    final availableBaseUnits = _availableBaseUnits(
+      walletState,
+      selectedTokenValue,
+    );
+    if (rawAmount > availableBaseUnits) {
       _showMessage(context, 'Amount exceeds available balance.', isError: true);
+      return;
+    }
+    if (selectedTokenValue != WalletState.kanariTokenType &&
+        walletState.kanariBalance < _nativeGasReserveBaseUnits) {
+      _showMessage(
+        context,
+        'Insufficient KANARI balance for gas.',
+        isError: true,
+      );
       return;
     }
 
@@ -271,21 +296,12 @@ class _TransferBottomSheetState extends State<TransferBottomSheet> {
 
     String? result;
     if (selectedTokenValue == WalletState.kanariTokenType) {
-      result = await walletState.transfer(
-        recipient,
-        token_utils.baseUnitsFromDisplayAmount(
-          amount,
-          token_utils.kanariDecimals,
-        ),
-      );
+      result = await walletState.transfer(recipient, rawAmount);
     } else {
-      final selectedToken = walletState.tokenBalances.firstWhere(
-        (token) => token.tokenType == selectedTokenValue,
-      );
       result = await walletState.transferToken(
         recipient,
         selectedTokenValue,
-        token_utils.baseUnitsFromDisplayAmount(amount, selectedToken.decimals),
+        rawAmount,
       );
     }
 
@@ -300,18 +316,16 @@ class _TransferBottomSheetState extends State<TransferBottomSheet> {
     );
   }
 
-  double _availableAmount(WalletState walletState, String selectedTokenValue) {
+  int _availableBaseUnits(WalletState walletState, String selectedTokenValue) {
     if (selectedTokenValue == WalletState.kanariTokenType) {
-      return token_utils.displayAmountFromBaseUnits(
-        walletState.kanariBalance,
-        token_utils.kanariDecimals,
-      );
+      final spendable = walletState.kanariBalance - _nativeGasReserveBaseUnits;
+      return spendable > 0 ? spendable : 0;
     }
 
     final token = walletState.tokenBalances.firstWhere(
       (item) => item.tokenType == selectedTokenValue,
     );
-    return token_utils.displayAmountFromBaseUnits(token.amount, token.decimals);
+    return token.amount;
   }
 
   void _showMessage(

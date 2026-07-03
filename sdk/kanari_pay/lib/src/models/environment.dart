@@ -1,6 +1,6 @@
 enum KanariEnvironment {
   local('http://127.0.0.1:6767'),
-  dev('http://192.168.1.103:19001');
+  dev('http://192.168.1.101:19001');
 
   final String url;
   const KanariEnvironment(this.url);
