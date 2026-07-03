@@ -430,7 +430,7 @@ impl DagEngine {
         self.engine.persist_dag_state(state)
     }
 
-    fn checkpoint_producer_for_sequence(authorities: &[String], _sequence: u64) -> Option<String> {
+    fn checkpoint_producer_for_sequence(authorities: &[String], sequence: u64) -> Option<String> {
         if authorities.is_empty() {
             return None;
         }
@@ -438,31 +438,62 @@ impl DagEngine {
         let mut authorities = authorities.to_vec();
         authorities.sort();
         authorities.dedup();
-        authorities.first().cloned()
+
+        authorities
+            .get(sequence.saturating_sub(1) as usize % authorities.len())
+            .cloned()
     }
 
-    fn ensure_local_checkpoint_producer(&self) -> Result<u64> {
-        let next_sequence = self.engine.get_stats().height.saturating_add(1);
-        let producer = Self::checkpoint_producer_for_sequence(&self.authorities, next_sequence)
-            .require("No checkpoint producer configured")?;
-        if producer != self.authority_id {
-            anyhow::bail!(
-                "SYNC_WAITING: local authority {} is not checkpoint producer for checkpoint {}; waiting for {}",
-                self.authority_id,
-                next_sequence,
-                producer
-            );
-        }
+    fn signed_vertex(
+        &self,
+        vertex_id: VertexId,
+        round: u64,
+        parents: Vec<VertexId>,
+        transactions: Vec<SignedTransaction>,
+        state_root: Vec<u8>,
+        timestamp: u64,
+    ) -> Result<DagVertex> {
+        use ed25519_dalek::Signer;
 
-        Ok(next_sequence)
+        let mut vertex = DagVertex::new(
+            round,
+            self.authority_id.clone(),
+            "kanari-v2-mysticeti".to_string(),
+            parents,
+            transactions,
+            state_root,
+            timestamp,
+        );
+        vertex.id = vertex_id;
+        vertex.signature = self
+            .local_signing_key
+            .sign(&vertex.signing_digest()?)
+            .to_bytes()
+            .to_vec();
+        Ok(vertex)
     }
 
     pub fn produce_vertex(&self) -> Result<CheckpointProductionInfo> {
-        let next_checkpoint_sequence = self.ensure_local_checkpoint_producer()?;
+        let next_checkpoint_sequence = self.engine.get_stats().height.saturating_add(1);
+        let is_canonical_producer =
+            Self::checkpoint_producer_for_sequence(&self.authorities, next_checkpoint_sequence)
+                .require("No checkpoint producer configured")?
+                == self.authority_id;
         let policy = {
             let consensus = self.consensus.read().unwrap_or_else(|e| e.into_inner());
             consensus.production_policy()
         };
+
+        if !is_canonical_producer && policy.should_wait_for_current_round_quorum() {
+            anyhow::bail!(
+                "DAG_WAITING: local authority {} already proposed in round {}; waiting for parent quorum {}/{} before proposing next DAG vertex",
+                self.authority_id,
+                policy.current_round,
+                policy.parent_author_count,
+                policy.quorum_size
+            );
+        }
+
         let mut transactions = self.engine.pending_transactions_snapshot();
         transactions.sort_by(|a, b| {
             a.transaction
@@ -491,6 +522,55 @@ impl DagEngine {
                 .saturating_add(1)
                 .max(chain.height().saturating_add(1))
         };
+
+        let mysticeti_block = {
+            let mut consensus = self.consensus.write().unwrap_or_else(|e| e.into_inner());
+            consensus
+                .mysticeti
+                .propose_block(&transactions, timestamp)?
+        };
+        let (vertex_id, round, parents) = mysticeti_block
+            .map(|block| (block.vertex_id, block.round, block.parents))
+            .unwrap_or((
+                policy.parent_ids.first().copied().unwrap_or([0u8; 32]),
+                policy.target_round,
+                policy.parent_ids,
+            ));
+
+        if !is_canonical_producer {
+            let vertex = self.signed_vertex(
+                vertex_id,
+                round,
+                parents,
+                transactions,
+                self.engine.state_read().compute_state_root(),
+                timestamp,
+            )?;
+
+            {
+                let mut consensus = self.consensus.write().unwrap_or_else(|e| e.into_inner());
+                consensus.add_vertex(vertex.clone())?;
+            }
+            self.persist_consensus_state()?;
+
+            let vertex_id = hex::encode(vertex.id);
+            info!(
+                "[DAG v2] Proposed DAG-only vertex {} round {} txs {}",
+                vertex_id, vertex.round, tx_count
+            );
+
+            return Ok(CheckpointProductionInfo {
+                vertex_id,
+                round: vertex.round,
+                tx_count,
+                executed: 0,
+                failed: 0,
+                events: Vec::new(),
+                checkpoint: None,
+                vertex: Some(vertex),
+            });
+        }
+
         let (state_root, executed, failed, verified_state, to_execute, validate_supply) = {
             let state_snapshot = self.engine.state_read().clone();
             let state_arc = Arc::new(RwLock::new(state_snapshot));
@@ -528,37 +608,14 @@ impl DagEngine {
             )
         };
 
-        let mysticeti_block = {
-            let mut consensus = self.consensus.write().unwrap_or_else(|e| e.into_inner());
-            consensus
-                .mysticeti
-                .propose_block(&transactions, timestamp)?
-        };
-        let (vertex_id, round, parents) = mysticeti_block
-            .map(|block| (block.vertex_id, block.round, block.parents))
-            .unwrap_or((
-                policy.parent_ids.first().copied().unwrap_or([0u8; 32]),
-                policy.target_round,
-                policy.parent_ids,
-            ));
-
-        let mut vertex = DagVertex::new(
+        let vertex = self.signed_vertex(
+            vertex_id,
             round,
-            self.authority_id.clone(),
-            "kanari-v2-mysticeti".to_string(),
             parents,
             transactions,
             state_root,
             timestamp,
-        );
-        vertex.id = vertex_id;
-        use ed25519_dalek::Signer;
-        let signing_digest = vertex.signing_digest()?;
-        vertex.signature = self
-            .local_signing_key
-            .sign(&signing_digest)
-            .to_bytes()
-            .to_vec();
+        )?;
 
         self.stage_locally_produced_vertex(
             &vertex,
@@ -576,7 +633,7 @@ impl DagEngine {
 
         let vertex_id = hex::encode(vertex.id);
         info!(
-            "[DAG v2] Produced Mysticeti-backed vertex {} round {} txs {}",
+            "[DAG v2] Produced checkpoint vertex {} round {} txs {}",
             vertex_id, vertex.round, tx_count
         );
 

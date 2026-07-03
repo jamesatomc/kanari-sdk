@@ -16,22 +16,16 @@ use tracing::{error, info, warn};
 
 use std::time::Duration;
 
-const REQUEST_RETRY_COOLDOWN_MS: u64 = 2_000;
-const DAG_VERTEX_REQUEST_RETRY_COOLDOWN_MS: u64 = 1_000;
+const REQUEST_RETRY_COOLDOWN_MS: u64 = 100;
+const DAG_VERTEX_REQUEST_RETRY_COOLDOWN_MS: u64 = 100;
 const MAX_CHECKPOINTS_PER_REQUEST: u64 = 200;
 const MAX_DAG_VERTICES_PER_RESPONSE: usize = 8;
+const MAX_PROACTIVE_CHECKPOINT_PUSH: u64 = 4;
 
 #[derive(Clone)]
 struct BufferedCheckpointCandidate {
     checkpoint: CheckpointSyncData,
     source_peer_id: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct DivergentPeerInfo {
-    height: u64,
-    latest_checkpoint_hash: String,
-    latest_state_root: String,
 }
 
 pub struct SyncManager {
@@ -44,8 +38,8 @@ pub struct SyncManager {
     checkpoint_buffer: Mutex<BTreeMap<u64, VecDeque<BufferedCheckpointCandidate>>>,
     /// Last advertised height by peer id.
     peer_heights: Mutex<BTreeMap<String, u64>>,
-    /// Peers that advertised a conflicting state root and should not be used for sync.
-    divergent_peers: Mutex<BTreeMap<String, DivergentPeerInfo>>,
+    /// Peers that advertised conflicting committed checkpoint history and should not be used for sync.
+    divergent_peers: Mutex<BTreeMap<String, u64>>,
     /// Last request timestamp per checkpoint sequence to avoid request spam while still retrying fast.
     pending_checkpoint_requests: Mutex<BTreeMap<u64, u64>>,
     /// Last request timestamp per DAG parent round to avoid request storms while catching up.
@@ -64,16 +58,9 @@ impl SyncManager {
         local_state_root: &str,
         peer_info: &PeerInfoMsg,
     ) -> Option<&'static str> {
-        let state_root_mismatch = peer_info.latest_state_root != local_state_root;
-        if state_root_mismatch {
-            if peer_info.latest_checkpoint_hash != local_checkpoint_hash {
-                Some("checkpoint-history-and-state-root")
-            } else {
-                Some("state-root")
-            }
-        } else {
-            None
-        }
+        (peer_info.latest_checkpoint_hash != local_checkpoint_hash
+            && peer_info.latest_state_root != local_state_root)
+            .then_some("checkpoint-history-and-state-root")
     }
 
     fn checkpoint_buffer_guard(
@@ -88,9 +75,7 @@ impl SyncManager {
         self.peer_heights.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn divergent_peers_guard(
-        &self,
-    ) -> std::sync::MutexGuard<'_, BTreeMap<String, DivergentPeerInfo>> {
+    fn divergent_peers_guard(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, u64>> {
         self.divergent_peers
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -142,7 +127,7 @@ impl SyncManager {
         tokio::spawn(async move {
             loop {
                 sync.check_sync_status().await;
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
         });
     }
@@ -154,12 +139,11 @@ impl SyncManager {
 
         // Fallback to P2P sync if we are behind
         if stats.height < max_seen {
-            let target_peer = self.best_peer_for_height(stats.height + 1);
             info!(
-                "[SYNC] Behind network P2P (current: {}, max seen: {}, target: {:?}). Requesting checkpoints via P2P...",
-                stats.height, max_seen, target_peer
+                "[SYNC] Behind network P2P (current: {}, max seen: {}). Requesting checkpoints across eligible peers...",
+                stats.height, max_seen
             );
-            self.request_checkpoints(stats.height + 1, max_seen, target_peer.as_deref())
+            self.request_checkpoints(stats.height + 1, max_seen, None)
                 .await;
         }
     }
@@ -557,14 +541,7 @@ impl SyncManager {
     fn mark_peer_divergent(&self, peer_info: &PeerInfoMsg) {
         {
             let mut divergent = self.divergent_peers_guard();
-            divergent.insert(
-                peer_info.peer_id.clone(),
-                DivergentPeerInfo {
-                    height: peer_info.height,
-                    latest_checkpoint_hash: peer_info.latest_checkpoint_hash.clone(),
-                    latest_state_root: peer_info.latest_state_root.clone(),
-                },
-            );
+            divergent.insert(peer_info.peer_id.clone(), peer_info.height);
         }
 
         self.peer_heights_guard().remove(&peer_info.peer_id);
@@ -575,11 +552,9 @@ impl SyncManager {
         peer_info: &PeerInfoMsg,
         local_height: u64,
         local_checkpoint_hash: &str,
-        local_state_root: &str,
     ) {
         if peer_info.height != local_height
             || peer_info.latest_checkpoint_hash != local_checkpoint_hash
-            || peer_info.latest_state_root != local_state_root
         {
             return;
         }
@@ -587,7 +562,7 @@ impl SyncManager {
         let mut divergent = self.divergent_peers_guard();
         if divergent.remove(&peer_info.peer_id).is_some() {
             info!(
-                "[SYNC] Peer {} now matches local checkpoint/state again. Clearing divergence quarantine.",
+                "[SYNC] Peer {} now matches local checkpoint again. Clearing divergence quarantine.",
                 peer_info.peer_id
             );
         }
@@ -597,14 +572,11 @@ impl SyncManager {
         self.divergent_peers_guard().contains_key(peer_id)
     }
 
-    fn release_divergent_peer_if_height_advanced(
-        &self,
-        peer_info: &PeerInfoMsg,
-    ) -> Option<DivergentPeerInfo> {
+    fn release_divergent_peer_if_height_advanced(&self, peer_info: &PeerInfoMsg) -> Option<u64> {
         let mut divergent = self.divergent_peers_guard();
         let should_release = divergent
             .get(&peer_info.peer_id)
-            .map(|info| peer_info.height > info.height)
+            .map(|height| peer_info.height > *height)
             .unwrap_or(false);
 
         if should_release {
@@ -790,13 +762,8 @@ impl SyncManager {
                     "[SYNC] Gap detected after {} #{}. Current: {}, buffered: {}. Requesting missing checkpoints...",
                     received_label, sequence, new_stats.height, latest_buffered
                 );
-                let target_peer = self.best_peer_for_height(new_stats.height + 1);
-                self.request_checkpoints(
-                    new_stats.height + 1,
-                    latest_buffered - 1,
-                    target_peer.as_deref(),
-                )
-                .await;
+                self.request_checkpoints(new_stats.height + 1, latest_buffered - 1, None)
+                    .await;
             }
         }
     }
@@ -935,8 +902,7 @@ impl SyncManager {
 
                     self.log_buffered_gap(stats.height);
 
-                    let target_peer = self.best_peer_for_height(stats.height + 1);
-                    self.request_checkpoints(stats.height + 1, max_seen, target_peer.as_deref())
+                    self.request_checkpoints(stats.height + 1, max_seen, None)
                         .await;
                 }
                 break;
@@ -991,6 +957,63 @@ impl SyncManager {
         }
     }
 
+    fn send_checkpoint_response_to_peer(
+        &self,
+        sequence: u64,
+        request_timestamp: u64,
+        requester_peer_id: Option<&str>,
+        responder_peer_id: Option<&str>,
+    ) -> bool {
+        let Some(checkpoint_sync) = self.engine.get_checkpoint_sync(sequence) else {
+            warn!("[SYNC] Checkpoint #{} not found in our engine", sequence);
+            return false;
+        };
+
+        let Ok(data_str) = serde_json::to_string(&checkpoint_sync) else {
+            warn!("[SYNC] Failed to serialize checkpoint #{}", sequence);
+            return false;
+        };
+
+        let msg = match (requester_peer_id, responder_peer_id) {
+            (Some(requester_peer_id), Some(responder_peer_id)) => {
+                P2PMessage::TargetedCheckpointResponse(CheckpointResponseMsg {
+                    sequence,
+                    request_timestamp,
+                    requester_peer_id: requester_peer_id.to_string(),
+                    responder_peer_id: responder_peer_id.to_string(),
+                    checkpoint_data: data_str,
+                })
+            }
+            _ => P2PMessage::CheckpointResponse(data_str),
+        };
+
+        self.send_network_message(msg, "[SYNC] Failed to send checkpoint response")
+    }
+
+    fn push_missing_checkpoints_to_lagging_peer(&self, peer_info: &PeerInfoMsg, local_height: u64) {
+        let start = peer_info.height.saturating_add(1);
+        let end = local_height.min(start + MAX_PROACTIVE_CHECKPOINT_PUSH - 1);
+        if start > end {
+            return;
+        }
+
+        let timestamp = Self::current_timestamp();
+        for sequence in start..=end {
+            self.send_checkpoint_response_to_peer(
+                sequence,
+                timestamp,
+                Some(&peer_info.peer_id),
+                Some(&self.local_peer_id),
+            );
+            self.send_checkpoint_response_to_peer(sequence, timestamp, None, None);
+        }
+
+        info!(
+            "[SYNC] Peer {} is behind at height {} (current: {}). Pushed checkpoint response(s) for {}..={}",
+            peer_info.peer_id, peer_info.height, local_height, start, end
+        );
+    }
+
     async fn handle_checkpoint_request(
         &self,
         sequence: u64,
@@ -1002,34 +1025,12 @@ impl SyncManager {
             "[SYNC] Received checkpoint request for sequence {}",
             sequence
         );
-        if let Some(checkpoint_sync) = self.engine.get_checkpoint_sync(sequence) {
-            info!(
-                "[SYNC] Found checkpoint #{} with {} txs, sending response",
-                sequence,
-                checkpoint_sync.checkpoint.transactions.len()
-            );
-            if let Ok(data_str) = serde_json::to_string(&checkpoint_sync) {
-                let msg = if let (Some(requester_peer_id), Some(responder_peer_id)) =
-                    (requester_peer_id, responder_peer_id)
-                {
-                    P2PMessage::TargetedCheckpointResponse(CheckpointResponseMsg {
-                        sequence,
-                        request_timestamp,
-                        requester_peer_id: requester_peer_id.to_string(),
-                        responder_peer_id: responder_peer_id.to_string(),
-                        checkpoint_data: data_str,
-                    })
-                } else {
-                    P2PMessage::CheckpointResponse(data_str)
-                };
-                self.send_network_message(msg, "[SYNC] Failed to send checkpoint response");
-            }
-        } else {
-            warn!(
-                "[SYNC] Checkpoint #{} not found in our engine for request",
-                sequence
-            );
-        }
+        self.send_checkpoint_response_to_peer(
+            sequence,
+            request_timestamp,
+            requester_peer_id,
+            responder_peer_id,
+        );
     }
 
     async fn handle_checkpoint_response(
@@ -1069,7 +1070,6 @@ impl SyncManager {
                 &peer_info,
                 stats.height,
                 &local_checkpoint_hash,
-                &local_state_root,
             );
 
             if let Some(previous_divergence) =
@@ -1077,7 +1077,7 @@ impl SyncManager {
             {
                 info!(
                     "[SYNC] Peer {} advanced from quarantined height {} to {}. Releasing divergence quarantine and retrying sync.",
-                    peer_info.peer_id, previous_divergence.height, peer_info.height
+                    peer_info.peer_id, previous_divergence, peer_info.height
                 );
             }
         }
@@ -1116,13 +1116,8 @@ impl SyncManager {
             .cloned()
         {
             warn!(
-                "[SYNC] Peer {} remains quarantined due to divergent history at height {} (peer_checkpoint={}, peer_state_root={}). Local checkpoint={}, local_state_root={}.",
-                peer_info.peer_id,
-                divergence.height,
-                divergence.latest_checkpoint_hash,
-                divergence.latest_state_root,
-                local_checkpoint_hash,
-                local_state_root
+                "[SYNC] Peer {} remains quarantined due to divergent history at height {}.",
+                peer_info.peer_id, divergence
             );
             return;
         }
@@ -1138,10 +1133,12 @@ impl SyncManager {
                 stats.height,
             )
             .await;
+        } else if peer_info.height < stats.height {
+            self.push_missing_checkpoints_to_lagging_peer(&peer_info, stats.height);
         } else {
             info!(
-                "[SYNC] Peer {} is at height {} (current: {}). We are synced or ahead.",
-                peer_info.peer_id, peer_info.height, stats.height
+                "[SYNC] Peer {} is aligned at height {}.",
+                peer_info.peer_id, stats.height
             );
         }
     }
@@ -1163,7 +1160,6 @@ impl SyncManager {
         let mut sent = 0u64;
 
         for sequence in from..=actual_to {
-            // Check if we already have this checkpoint in buffer before requesting
             {
                 let buffer = self.checkpoint_buffer_guard();
                 if buffer.contains_key(&sequence) {
@@ -1175,12 +1171,15 @@ impl SyncManager {
                 continue;
             }
 
-            let msg = if let Some(target_peer_id) = target_peer_id {
+            let target = target_peer_id
+                .map(str::to_string)
+                .or_else(|| self.best_peer_for_height(sequence));
+            let msg = if let Some(responder_peer_id) = target {
                 P2PMessage::TargetedCheckpointRequest(CheckpointRequestMsg {
                     sequence,
                     timestamp,
                     requester_peer_id: self.local_peer_id.clone(),
-                    responder_peer_id: target_peer_id.to_string(),
+                    responder_peer_id,
                 })
             } else {
                 P2PMessage::CheckpointRequest(sequence, timestamp)
@@ -1197,6 +1196,7 @@ impl SyncManager {
             }
             sent += 1;
         }
+
         info!(
             "[SYNC] Sent {} checkpoint requests starting from {}",
             sent, from
@@ -1293,8 +1293,10 @@ mod tests {
     fn test_retry_cooldown_throttles_rapid_duplicate_checkpoint_request() {
         let sync = new_sync_manager();
         assert!(sync.should_request_checkpoint_sequence(7, 1_000));
-        assert!(!sync.should_request_checkpoint_sequence(7, 1_500));
-        assert!(sync.should_request_checkpoint_sequence(7, 3_500));
+        assert!(
+            !sync.should_request_checkpoint_sequence(7, 1_000 + REQUEST_RETRY_COOLDOWN_MS - 1,)
+        );
+        assert!(sync.should_request_checkpoint_sequence(7, 1_000 + REQUEST_RETRY_COOLDOWN_MS,));
     }
 
     #[test]
@@ -1329,7 +1331,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_divergent_peer_is_quarantined_from_sync_targets() {
+    async fn test_state_root_mismatch_only_remains_eligible_for_sync_targets() {
         let sync = new_sync_manager();
         let stats = sync.engine.get_stats();
         let local_checkpoint_hash = sync.engine.latest_checkpoint_hash_hex();
@@ -1337,9 +1339,12 @@ mod tests {
         sync.handle_peer_info(peer_info(stats.height, &local_checkpoint_hash, "deadbeef"))
             .await;
 
-        assert!(sync.is_peer_divergent("peer-1"));
-        assert_eq!(sync.best_peer_for_height(stats.height), None);
-        assert_eq!(sync.max_eligible_peer_height(), 0);
+        assert!(!sync.is_peer_divergent("peer-1"));
+        assert_eq!(
+            sync.best_peer_for_height(stats.height),
+            Some("peer-1".to_string())
+        );
+        assert_eq!(sync.max_eligible_peer_height(), stats.height);
     }
 
     #[tokio::test]
@@ -1367,9 +1372,8 @@ mod tests {
     async fn test_divergent_peer_is_released_after_it_advances_height() {
         let sync = new_sync_manager();
         let stats = sync.engine.get_stats();
-        let local_checkpoint_hash = sync.engine.latest_checkpoint_hash_hex();
 
-        sync.handle_peer_info(peer_info(stats.height, &local_checkpoint_hash, "deadbeef"))
+        sync.handle_peer_info(peer_info(stats.height, "different-checkpoint", "deadbeef"))
             .await;
 
         assert!(sync.is_peer_divergent("peer-1"));

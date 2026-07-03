@@ -267,3 +267,47 @@ fn test_add_network_vertex_does_not_create_committed_progress() {
     assert_eq!(stats.height, 0);
     assert_eq!(stats.total_transactions, 0);
 }
+
+#[test]
+fn test_non_assigned_authority_proposes_dag_vertex_without_checkpoint_commit() {
+    let engine = Arc::new(BlockchainEngine::new_in_memory().invariant("in-memory engine"));
+    let auth1_key = authority_key(11);
+    let auth2_key = authority_key(22);
+    let public_keys = BTreeMap::from([
+        (
+            "auth1".to_string(),
+            auth1_key.verifying_key().to_bytes().to_vec(),
+        ),
+        (
+            "auth2".to_string(),
+            auth2_key.verifying_key().to_bytes().to_vec(),
+        ),
+    ]);
+    let authorities = vec!["auth1".to_string(), "auth2".to_string()];
+    let dag_engine = DagEngine::new_secure(
+        engine.clone(),
+        "auth2".to_string(),
+        authorities.clone(),
+        auth2_key,
+        public_keys,
+    )
+    .invariant("test operation");
+
+    assert_eq!(
+        DagEngine::checkpoint_producer_for_sequence(&authorities, 1),
+        Some("auth1".to_string())
+    );
+    engine
+        .submit_transactions_batch(vec![signed_transfer(0)])
+        .invariant("submit tx");
+
+    let produced = dag_engine.produce_vertex().invariant("produce DAG vertex");
+
+    assert!(produced.checkpoint.is_none());
+    assert_eq!(
+        produced.vertex.as_ref().map(|v| v.author.as_str()),
+        Some("auth2")
+    );
+    assert_eq!(produced.tx_count, 1);
+    assert_eq!(engine.get_stats().height, 0);
+}
