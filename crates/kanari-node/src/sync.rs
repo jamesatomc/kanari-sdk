@@ -764,7 +764,6 @@ impl SyncManager {
             checkpoint.transactions.len()
         );
 
-
         if checkpoint.sequence <= stats.height {
             info!(
                 "[SYNC] Received old {} #{} (current: {}) - ignoring",

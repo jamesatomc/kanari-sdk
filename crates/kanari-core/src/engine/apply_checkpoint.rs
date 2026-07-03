@@ -45,7 +45,9 @@ impl BlockchainEngine {
         let mut state_write = state_arc.write().unwrap_or_else(|e| e.into_inner());
         state_write
             .repair_legacy_native_wallet_overcount()
-            .context("Failed to repair legacy native wallet overcount before checkpoint prologue")?;
+            .context(
+                "Failed to repair legacy native wallet overcount before checkpoint prologue",
+            )?;
         let clock_id = runtime.ensure_system_clock(&mut state_write)?;
         let changeset = runtime.execute_clock_consensus_commit_prologue(clock_id, timestamp_ms)?;
         state_write.apply_changeset(&changeset)?;
