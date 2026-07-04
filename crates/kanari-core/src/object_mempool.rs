@@ -141,7 +141,7 @@ mod tests {
             TransactionExpiration::None,
         )
         .unwrap();
-        SignedObjectTransaction::new(data).unwrap()
+        SignedObjectTransaction::new(data, "0x1".to_string()).unwrap()
     }
 
     #[test]
