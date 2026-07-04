@@ -91,6 +91,14 @@ pub struct ObjectDelete {
     pub kind: ObjectDeleteKind,
 }
 
+/// Permanent proof that an object ID was consumed. Object IDs are never reused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectTombstone {
+    pub object_ref: ObjectRef,
+    pub deletion_transaction: [u8; 32],
+    pub kind: ObjectDeleteKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GasCostSummary {
     pub computation_cost: u64,
@@ -148,6 +156,10 @@ impl ObjectTransactionEffectsV1 {
         let mut ids = std::collections::BTreeSet::new();
         for write in self.created.iter().chain(self.mutated.iter()) {
             ensure!(
+                write.previous_transaction == self.transaction_digest,
+                "Object write is bound to a different transaction digest"
+            );
+            ensure!(
                 write.object_ref.version == self.lamport_version,
                 "Written object {} does not use transaction Lamport version",
                 write.object_ref.object_id
@@ -186,6 +198,14 @@ impl ObjectTransactionEffectsV1 {
             );
         }
         Ok(())
+    }
+
+    pub fn tombstones(&self) -> impl Iterator<Item = ObjectTombstone> + '_ {
+        self.deleted.iter().map(|deleted| ObjectTombstone {
+            object_ref: deleted.object_ref,
+            deletion_transaction: self.transaction_digest,
+            kind: deleted.kind,
+        })
     }
 }
 
