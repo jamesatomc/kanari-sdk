@@ -84,3 +84,56 @@ fn legacy_owner_index_is_migrated_to_owned_objects_index() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn exact_object_reference_is_accepted() -> Result<()> {
+    let owner = AccountAddress::from_hex_literal("0x7")?;
+    let canonical_id = kanari_types::object::ObjectID::from_hex_literal("0xdddd")?
+        .to_hex_literal();
+    let storage = ObjectStorage::new();
+    storage.store_object(StoredObject {
+        id: canonical_id.clone(),
+        owner,
+        type_name: "0x2::coin::Coin<0x2::kanari::KANARI>".to_string(),
+        data: vec![9; 40],
+        version: 4,
+    })?;
+
+    let reference = storage
+        .get_object_ref(&canonical_id)?
+        .expect("object reference must exist");
+    let loaded = storage.validate_object_ref(&reference)?;
+
+    assert_eq!(loaded.id, canonical_id);
+    assert_eq!(loaded.version, 4);
+    Ok(())
+}
+
+#[test]
+fn stale_object_reference_is_rejected() -> Result<()> {
+    let owner = AccountAddress::from_hex_literal("0x8")?;
+    let canonical_id = kanari_types::object::ObjectID::from_hex_literal("0xeeee")?
+        .to_hex_literal();
+    let storage = ObjectStorage::new();
+    storage.store_object(StoredObject {
+        id: canonical_id.clone(),
+        owner,
+        type_name: "0x2::coin::Coin<0x2::kanari::KANARI>".to_string(),
+        data: vec![1; 40],
+        version: 1,
+    })?;
+
+    let stale = storage
+        .get_object_ref(&canonical_id)?
+        .expect("object reference must exist");
+    storage.store_object(StoredObject {
+        id: canonical_id,
+        owner,
+        type_name: "0x2::coin::Coin<0x2::kanari::KANARI>".to_string(),
+        data: vec![2; 40],
+        version: 2,
+    })?;
+
+    assert!(storage.validate_object_ref(&stale).is_err());
+    Ok(())
+}
