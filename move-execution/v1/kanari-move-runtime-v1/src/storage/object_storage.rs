@@ -4,6 +4,7 @@
 use crate::common::keys::owned_objects_key;
 use crate::storage::persistent_store::{PersistentStore, PersistentStoreError};
 use anyhow::Result;
+use kanari_types::object::{ObjectID, ObjectRef, Owner, compute_object_digest};
 use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::TypeTag;
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,37 @@ pub trait ObjectStore: Send + Sync {
         owner: AccountAddress,
         coin_type: &TypeTag,
     ) -> Vec<StoredObject>;
+
+    /// Resolve the exact `(id, version, digest)` committed by storage.
+    fn get_object_ref(&self, id: &str) -> Result<Option<ObjectRef>, ObjectStorageError> {
+        self.get_object(id)
+            .map(|object| object.object_ref().map_err(ObjectStorageError::from))
+            .transpose()
+    }
+
+    /// Reject stale or forged object dependencies before Move execution.
+    fn validate_object_ref(
+        &self,
+        expected: &ObjectRef,
+    ) -> Result<StoredObject, ObjectStorageError> {
+        let id = expected.object_id.to_hex_literal();
+        let object = self
+            .get_object(&id)
+            .ok_or_else(|| anyhow::anyhow!("Input object {} does not exist", id))?;
+        let actual = object.object_ref()?;
+        if actual != *expected {
+            return Err(anyhow::anyhow!(
+                "Object reference mismatch for {}: expected version {} digest {}, found version {} digest {}",
+                id,
+                expected.version,
+                expected.digest,
+                actual.version,
+                actual.digest
+            )
+            .into());
+        }
+        Ok(object)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +98,35 @@ pub struct StoredObject {
     pub type_name: String,
     pub data: Vec<u8>,
     pub version: u64,
+}
+
+impl StoredObject {
+    /// Transitional object metadata derived from the legacy storage row.
+    ///
+    /// New writes will eventually persist `Owner` and digest directly. Until
+    /// then, legacy rows are interpreted as address-owned objects and receive a
+    /// deterministic digest over their complete consensus representation.
+    pub fn object_id(&self) -> Result<ObjectID> {
+        ObjectID::from_hex_literal(&self.id)
+    }
+
+    pub fn owner_kind(&self) -> Owner {
+        Owner::AddressOwner(self.owner)
+    }
+
+    pub fn object_ref(&self) -> Result<ObjectRef> {
+        let id = self.object_id()?;
+        let owner = self.owner_kind();
+        let digest = compute_object_digest(
+            id,
+            self.version,
+            &owner,
+            &self.type_name,
+            &self.data,
+            None,
+        )?;
+        Ok(ObjectRef::new(id, self.version, digest))
+    }
 }
 
 struct InnerState {
