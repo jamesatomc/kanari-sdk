@@ -8,6 +8,8 @@ pub mod object_admission;
 pub mod object_gas;
 pub mod object_mempool;
 mod object_transaction_engine_v2;
+mod object_command_effects;
+mod object_command_executor;
 
 pub use consensus::{Checkpoint, DagVertex};
 pub use engine::{BlockchainEngine, CheckpointProductionInfo, CheckpointSyncData};
