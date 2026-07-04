@@ -12,7 +12,11 @@ use move_core_types::account_address::AccountAddress;
 pub(crate) const FEE_SINK_TOTAL: &[u8] = b"system:object_fee_sink_total";
 
 pub(crate) fn metadata_key(id: ObjectID) -> Vec<u8> {
-    [b"system:object_metadata:".as_slice(), id.to_hex_literal().as_bytes()].concat()
+    [
+        b"system:object_metadata:".as_slice(),
+        id.to_hex_literal().as_bytes(),
+    ]
+    .concat()
 }
 
 fn projected_owner(owner: &Owner) -> AccountAddress {
@@ -51,8 +55,14 @@ fn verify_write(write: &ObjectWrite) -> Result<()> {
         &write.contents,
         Some(write.previous_transaction),
     )?;
-    ensure!(digest == write.object_ref.digest, "Invalid object write digest");
-    ensure!(write.previous_transaction != [0; 32], "Missing transaction digest");
+    ensure!(
+        digest == write.object_ref.digest,
+        "Invalid object write digest"
+    );
+    ensure!(
+        write.previous_transaction != [0; 32],
+        "Missing transaction digest"
+    );
     Ok(())
 }
 
@@ -63,7 +73,9 @@ impl StateManager {
         owner: Option<AccountAddress>,
         add: bool,
     ) -> Result<()> {
-        let Some(owner) = owner else { return Ok(()); };
+        let Some(owner) = owner else {
+            return Ok(());
+        };
         let key = owned_objects_key(&owner);
         let mut ids: Vec<String> = self.load_internal(&key)?.unwrap_or_default();
         update_sorted(&mut ids, &id.to_hex_literal(), add);

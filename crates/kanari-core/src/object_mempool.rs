@@ -44,10 +44,7 @@ impl ObjectMempool {
 
     /// Admit a transaction after an authority has already verified signatures
     /// and exact object references against its state snapshot.
-    pub fn admit_verified(
-        &mut self,
-        transaction: SignedObjectTransaction,
-    ) -> Result<Vec<u8>> {
+    pub fn admit_verified(&mut self, transaction: SignedObjectTransaction) -> Result<Vec<u8>> {
         transaction.data.validate()?;
         let digest = transaction.digest()?;
         ensure!(
@@ -155,9 +152,7 @@ mod tests {
     #[test]
     fn conflicting_mutable_object_is_rejected() {
         let mut pool = ObjectMempool::new();
-        let first = pool
-            .admit_verified(transaction("0x10", "0x20"))
-            .unwrap();
+        let first = pool.admit_verified(transaction("0x10", "0x20")).unwrap();
         let conflict = pool.admit_verified(transaction("0x10", "0x21"));
         assert!(conflict.is_err());
 

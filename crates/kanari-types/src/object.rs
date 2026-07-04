@@ -14,9 +14,7 @@ use std::fmt;
 /// An address and an object ID share the same 32-byte representation, but they
 /// have different protocol semantics. Keeping a distinct type prevents code
 /// from accidentally treating an object dependency as an account resource.
-#[derive(
-    Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
-)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectID(AccountAddress);
 
 impl ObjectID {
@@ -62,16 +60,17 @@ impl fmt::Display for ObjectID {
 }
 
 /// Digest of the canonical object representation.
-#[derive(
-    Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
-)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectDigest(pub [u8; 32]);
 
 impl ObjectDigest {
     pub const ZERO: Self = Self([0; 32]);
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        ensure!(bytes.len() == 32, "Object digest must contain exactly 32 bytes");
+        ensure!(
+            bytes.len() == 32,
+            "Object digest must contain exactly 32 bytes"
+        );
         let mut digest = [0u8; 32];
         digest.copy_from_slice(bytes);
         Ok(Self(digest))
@@ -323,8 +322,24 @@ mod tests {
     fn object_digest_changes_with_version() {
         let id = ObjectID::from_hex_literal("0x42").unwrap();
         let owner = Owner::AddressOwner(AccountAddress::from_hex_literal("0x7").unwrap());
-        let first = compute_object_digest(id, 1, &owner, "0x2::coin::Coin<0x2::kanari::KANARI>", &[1, 2, 3], None).unwrap();
-        let second = compute_object_digest(id, 2, &owner, "0x2::coin::Coin<0x2::kanari::KANARI>", &[1, 2, 3], None).unwrap();
+        let first = compute_object_digest(
+            id,
+            1,
+            &owner,
+            "0x2::coin::Coin<0x2::kanari::KANARI>",
+            &[1, 2, 3],
+            None,
+        )
+        .unwrap();
+        let second = compute_object_digest(
+            id,
+            2,
+            &owner,
+            "0x2::coin::Coin<0x2::kanari::KANARI>",
+            &[1, 2, 3],
+            None,
+        )
+        .unwrap();
         assert_ne!(first, second);
     }
 

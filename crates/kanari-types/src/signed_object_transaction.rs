@@ -26,7 +26,10 @@ impl SignedObjectTransaction {
     pub fn new(data: ObjectTransactionData, sender_authenticator: String) -> Result<Self> {
         data.validate()?;
         let signer = Address::parse_to_account_address(&sender_authenticator)?;
-        ensure!(signer == data.sender, "Sender authenticator does not match sender address");
+        ensure!(
+            signer == data.sender,
+            "Sender authenticator does not match sender address"
+        );
         Ok(Self {
             data,
             sender_authenticator,
@@ -64,8 +67,9 @@ impl SignedObjectTransaction {
             "Sponsor authenticator does not match gas owner"
         );
         self.sponsor_signature = Some(
-            sign_message(private_key, &self.digest()?, curve_type)
-                .map_err(|error| anyhow::anyhow!("Failed to sign sponsored gas payment: {error}"))?,
+            sign_message(private_key, &self.digest()?, curve_type).map_err(|error| {
+                anyhow::anyhow!("Failed to sign sponsored gas payment: {error}")
+            })?,
         );
         self.sponsor_authenticator = Some(sponsor_authenticator);
         Ok(())
@@ -73,7 +77,10 @@ impl SignedObjectTransaction {
 
     pub fn verify(&self) -> Result<()> {
         self.data.validate()?;
-        ensure!(!self.sender_signature.is_empty(), "Missing sender signature");
+        ensure!(
+            !self.sender_signature.is_empty(),
+            "Missing sender signature"
+        );
         ensure!(
             Address::parse_to_account_address(&self.sender_authenticator)? == self.data.sender,
             "Sender authenticator does not match sender address"
@@ -81,8 +88,9 @@ impl SignedObjectTransaction {
 
         let digest = self.digest()?;
         ensure!(
-            verify_signature(&self.sender_authenticator, &digest, &self.sender_signature)
-                .map_err(|error| anyhow::anyhow!("Sender signature verification failed: {error}"))?,
+            verify_signature(&self.sender_authenticator, &digest, &self.sender_signature).map_err(
+                |error| anyhow::anyhow!("Sender signature verification failed: {error}")
+            )?,
             "Invalid object transaction sender signature"
         );
 
@@ -137,7 +145,9 @@ mod tests {
                 module: "pay".to_string(),
                 function: "transfer".to_string(),
                 type_args: vec![],
-                arguments: vec![CallArg::Object(ObjectArg::ImmOrOwnedObject(object_ref("0x10")))],
+                arguments: vec![CallArg::Object(ObjectArg::ImmOrOwnedObject(object_ref(
+                    "0x10",
+                )))],
             }),
             GasData {
                 payment: vec![object_ref("0x20")],

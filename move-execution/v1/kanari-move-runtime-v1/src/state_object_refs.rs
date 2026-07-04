@@ -35,17 +35,11 @@ impl StateManager {
         self.load_internal(&metadata_key(object_id))
     }
 
-    pub fn save_object_protocol_metadata(
-        &mut self,
-        metadata: &ObjectMetadata,
-    ) -> Result<()> {
+    pub fn save_object_protocol_metadata(&mut self, metadata: &ObjectMetadata) -> Result<()> {
         self.save_internal(&metadata_key(metadata.id), metadata)
     }
 
-    pub fn get_object_tombstone(
-        &self,
-        object_id: ObjectID,
-    ) -> Result<Option<ObjectTombstone>> {
+    pub fn get_object_tombstone(&self, object_id: ObjectID) -> Result<Option<ObjectTombstone>> {
         self.load_internal(&tombstone_key(object_id))
     }
 
@@ -194,9 +188,11 @@ mod tests {
 
         let reference = state.get_object_ref_exact(id).unwrap().unwrap();
         assert_eq!(reference.version, 3);
-        assert!(state
-            .validate_address_owned_object_ref(&reference, owner)
-            .is_ok());
+        assert!(
+            state
+                .validate_address_owned_object_ref(&reference, owner)
+                .is_ok()
+        );
     }
 
     #[test]

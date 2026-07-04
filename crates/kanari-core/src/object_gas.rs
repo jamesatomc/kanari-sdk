@@ -153,15 +153,17 @@ impl BlockchainEngine {
         );
         effects.gas_object = Some(primary_write.object_ref);
         effects.mutated.push(primary_write);
-        effects.deleted.extend(
-            gas_objects
-                .into_iter()
-                .skip(1)
-                .map(|(object_ref, _)| ObjectDelete {
-                    object_ref,
-                    kind: ObjectDeleteKind::Deleted,
-                }),
-        );
+        effects
+            .deleted
+            .extend(
+                gas_objects
+                    .into_iter()
+                    .skip(1)
+                    .map(|(object_ref, _)| ObjectDelete {
+                        object_ref,
+                        kind: ObjectDeleteKind::Deleted,
+                    }),
+            );
         effects.validate()?;
 
         Ok(ObjectGasPlan {

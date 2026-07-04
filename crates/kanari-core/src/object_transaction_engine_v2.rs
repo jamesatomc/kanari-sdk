@@ -104,8 +104,7 @@ fn validate_inputs(state: &StateManager, tx: &SignedObjectTransaction) -> Result
         .ok_or_else(|| anyhow::anyhow!("Gas fee overflow"))?;
     let mut available = 0u64;
     for payment in &tx.data.gas_data.payment {
-        let object = state
-            .validate_address_owned_object_ref(payment, tx.data.gas_data.owner)?;
+        let object = state.validate_address_owned_object_ref(payment, tx.data.gas_data.owner)?;
         available = available
             .checked_add(native_coin_balance(&object.type_, &object.data)?)
             .ok_or_else(|| anyhow::anyhow!("Gas balance overflow"))?;
@@ -148,7 +147,10 @@ impl BlockchainEngine {
         );
 
         let mut index: Vec<Vec<u8>> = store.load(INDEX_KEY)?.unwrap_or_default();
-        ensure!(index.len() < MAX_PENDING, "Object transaction mempool is full");
+        ensure!(
+            index.len() < MAX_PENDING,
+            "Object transaction mempool is full"
+        );
         let mut locks: LockMap = store.load(LOCKS_KEY)?.unwrap_or_default();
         let mutable_ids = tx.data.mutable_input_ids();
         for object_id in &mutable_ids {
@@ -188,7 +190,10 @@ impl BlockchainEngine {
 
     pub fn pending_object_transactions(&self) -> Result<Vec<SignedObjectTransaction>> {
         let state = self.state_read();
-        let index = state.store.load::<Vec<Vec<u8>>>(INDEX_KEY)?.unwrap_or_default();
+        let index = state
+            .store
+            .load::<Vec<Vec<u8>>>(INDEX_KEY)?
+            .unwrap_or_default();
         let mut transactions = Vec::with_capacity(index.len());
         for digest in index {
             if let Some(transaction) = state.store.load(&pending_key(&digest))? {

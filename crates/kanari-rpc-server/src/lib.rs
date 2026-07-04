@@ -31,16 +31,14 @@ use crate::{
         handle_verify_module,
     },
     nft::{handle_get_nfts_by_collection, handle_get_owned_nfts, handle_list_collections},
-    transaction::{
-        handle_call_function, handle_get_transaction, handle_publish_module,
-        handle_submit_transaction, handle_view_function,
-    },
+    transaction::{handle_get_transaction, handle_view_function},
 };
 
 pub mod balance;
 pub mod block;
 pub mod module;
 pub mod nft;
+pub mod object_transaction;
 pub mod transaction;
 
 type TransactionBroadcaster = Arc<dyn Fn(SignedTransaction) -> Result<()> + Send + Sync>;
@@ -167,6 +165,15 @@ async fn handle_rpc(
     info!("RPC request: method={}, id={}", request.method, request.id);
 
     let response = match request.method.as_str() {
+        object_transaction::SUBMIT_OBJECT_TRANSACTION => {
+            object_transaction::submit(&state, &request).await
+        }
+        object_transaction::EXECUTE_OBJECT_TRANSACTION => {
+            object_transaction::execute(&state, &request).await
+        }
+        object_transaction::GET_PENDING_OBJECT_TRANSACTIONS => {
+            object_transaction::pending(&state, &request).await
+        }
         // Account & Balance
         methods::GET_ACCOUNT => handle_get_account(&state, &request).await,
         methods::GET_TOKEN_BALANCE => handle_get_token_balance(&state, &request).await,
@@ -182,20 +189,17 @@ async fn handle_rpc(
         }
         methods::GET_BLOCK_HEIGHT => handle_get_block_height(&state, &request).await,
         methods::GET_STATS => handle_get_stats(&state, &request).await,
-        methods::SUBMIT_TRANSACTION => handle_submit_transaction(&state, &request).await,
 
         // Health
         methods::HEALTH => handle_health(&state, &request).await,
         methods::GET_NETWORK_STATUS => handle_network_status(&state, &request).await,
 
         // Module operations
-        methods::PUBLISH_MODULE => handle_publish_module(&state, &request).await,
         methods::GET_MODULE => handle_get_module(&state, &request).await,
         methods::LIST_MODULES => handle_list_modules(&state, &request).await,
         methods::VERIFY_MODULE => handle_verify_module(&state, &request).await,
 
         // Function calls
-        methods::CALL_FUNCTION => handle_call_function(&state, &request).await,
         methods::VIEW_FUNCTION => handle_view_function(&state, &request).await,
 
         // Object queries

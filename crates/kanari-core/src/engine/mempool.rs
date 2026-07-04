@@ -10,9 +10,7 @@ impl BlockchainEngine {
         &self,
         _signed_txs: Vec<SignedTransaction>,
     ) -> Result<Vec<Vec<u8>>> {
-        anyhow::bail!(
-            "Legacy account transactions are disabled; use submit_protocol_transaction"
-        )
+        anyhow::bail!("Legacy account transactions are disabled; use submit_protocol_transaction")
     }
 
     /// Immediate account execution is intentionally unavailable after cutover.
@@ -20,9 +18,7 @@ impl BlockchainEngine {
         &self,
         _signed_tx: SignedTransaction,
     ) -> Result<(Vec<u8>, ChangeSet)> {
-        anyhow::bail!(
-            "Legacy account execution is disabled; use execute_object_command_now"
-        )
+        anyhow::bail!("Legacy account execution is disabled; use execute_object_command_now")
     }
 
     pub(crate) fn pending_tx_count_for_sender(&self, _sender: &str) -> u64 {

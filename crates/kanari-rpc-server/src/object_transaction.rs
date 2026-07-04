@@ -22,14 +22,17 @@ struct SubmitResponse {
 }
 
 pub async fn submit(state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
-    let transaction: SignedObjectTransaction = match serde_json::from_value(request.params.clone()) {
+    let transaction: SignedObjectTransaction = match serde_json::from_value(request.params.clone())
+    {
         Ok(transaction) => transaction,
         Err(error) => return invalid_params_response(request.id, error.to_string()),
     };
     match state.engine.submit_protocol_transaction(transaction) {
         Ok(digest) => respond_with_serialize(
             request.id,
-            SubmitResponse { digest: format!("0x{}", hex::encode(digest)) },
+            SubmitResponse {
+                digest: format!("0x{}", hex::encode(digest)),
+            },
         ),
         Err(error) => invalid_params_response(request.id, error.to_string()),
     }
@@ -44,7 +47,10 @@ pub async fn execute(state: &RpcServerState, request: &RpcRequest) -> RpcRespons
         Ok(digest) => digest,
         Err(error) => return invalid_params_response(request.id, error.to_string()),
     };
-    match state.engine.execute_submitted_object_command(&digest, input.gas_used) {
+    match state
+        .engine
+        .execute_submitted_object_command(&digest, input.gas_used)
+    {
         Ok(effects) => respond_with_serialize(request.id, effects),
         Err(error) => internal_error_response(request.id, error.to_string()),
     }

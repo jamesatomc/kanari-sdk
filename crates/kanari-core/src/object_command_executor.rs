@@ -7,7 +7,10 @@ use kanari_types::object_transaction::ObjectTransactionKind;
 use kanari_types::signed_object_transaction::SignedObjectTransaction;
 
 impl BlockchainEngine {
-    pub fn submit_protocol_transaction(&self, transaction: SignedObjectTransaction) -> Result<Vec<u8>> {
+    pub fn submit_protocol_transaction(
+        &self,
+        transaction: SignedObjectTransaction,
+    ) -> Result<Vec<u8>> {
         transaction.verify()?;
         {
             let state = self.state_read();
@@ -15,7 +18,10 @@ impl BlockchainEngine {
                 state.validate_address_owned_object_ref(&reference, transaction.data.sender)?;
             }
             for reference in &transaction.data.gas_data.payment {
-                state.validate_address_owned_object_ref(reference, transaction.data.gas_data.owner)?;
+                state.validate_address_owned_object_ref(
+                    reference,
+                    transaction.data.gas_data.owner,
+                )?;
             }
         }
         self.submit_object_transaction(transaction)
@@ -26,7 +32,8 @@ impl BlockchainEngine {
         digest: &[u8],
         gas_used: u64,
     ) -> Result<kanari_types::object_effects::ObjectTransactionEffectsV1> {
-        let transaction = self.pending_object_transactions()?
+        let transaction = self
+            .pending_object_transactions()?
             .into_iter()
             .find(|transaction| transaction.digest().ok().as_deref() == Some(digest))
             .ok_or_else(|| anyhow::anyhow!("Pending object transaction was not found"))?;

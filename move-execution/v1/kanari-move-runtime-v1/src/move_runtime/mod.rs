@@ -61,13 +61,6 @@ pub struct MoveRuntime {
     pub(crate) module_publish_lock: Arc<Mutex<()>>,
 }
 
-#[derive(serde::Serialize)]
-struct AutoMergeReceiptData {
-    owner: AccountAddress,
-    merged_count: u64,
-    total_amount: u64,
-}
-
 type LoadedMutableObject = (usize, String, AccountAddress, String, u64);
 
 #[derive(Clone)]
@@ -895,11 +888,6 @@ impl MoveRuntime {
         // Preload object arguments so native object borrows can resolve them from extensions.
         self.preload_objects_for_execution(&mut session, &args)?;
 
-        let mut auto_merged_coin_ids = Vec::new();
-        let mut merged_coin_types = std::collections::HashSet::new();
-        let mut total_merge_reads: u64 = 0;
-        let mut synthetic_events = Vec::new();
-
         let mut ty_args_loaded = vec![];
         for tag in type_args.iter() {
             ty_args_loaded.push(
@@ -967,65 +955,6 @@ impl MoveRuntime {
                                 && stored_obj.owner != std_addr
                             {
                                 return Err(anyhow::anyhow!("Ownership verification failed"));
-                            }
-                        }
-
-                        let is_coin = struct_tag.module.as_str() == "coin"
-                            && struct_tag.name.as_str() == "Coin";
-                        if is_coin
-                            && let Some(s_addr) = sender
-                            && let Some(coin_t) = struct_tag.type_params.first()
-                        {
-                            let merge_key = format!("{:?}_{}", s_addr, coin_t);
-                            if !merged_coin_types.contains(&merge_key) {
-                                merged_coin_types.insert(merge_key);
-                                let all_coins: Vec<_> = self
-                                    .object_storage
-                                    .get_coins_by_type_and_owner(s_addr, coin_t)
-                                    .into_iter()
-                                    .take(200)
-                                    .collect();
-                                total_merge_reads += all_coins.len() as u64;
-
-                                if all_coins.len() > 1 {
-                                    let mut total_balance: u64 = 0;
-                                    let mut successfully_merged_ids = Vec::new();
-                                    for c in &all_coins {
-                                        if c.data.len() == 40 {
-                                            let mut bal_bytes = [0u8; 8];
-                                            bal_bytes.copy_from_slice(&c.data[32..40]);
-                                            if let Some(new_total) = total_balance
-                                                .checked_add(u64::from_le_bytes(bal_bytes))
-                                            {
-                                                total_balance = new_total;
-                                                if c.id != stored_obj.id {
-                                                    successfully_merged_ids.push(c.id.clone());
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if stored_obj.data.len() == 40 {
-                                        stored_obj.data[32..40]
-                                            .copy_from_slice(&total_balance.to_le_bytes());
-                                    }
-                                    for id in &successfully_merged_ids {
-                                        auto_merged_coin_ids.push(id.clone());
-                                    }
-
-                                    if let Ok(event_bytes) = bcs::to_bytes(&AutoMergeReceiptData {
-                                        owner: s_addr,
-                                        merged_count: successfully_merged_ids.len() as u64,
-                                        total_amount: total_balance,
-                                    }) {
-                                        let event_type = TypeTag::Struct(Box::new(StructTag {
-                                            address: KanariAddress::kanari_system_account_address(),
-                                            module: Identifier::new("system_events")?,
-                                            name: Identifier::new("AutoMergeReceipt")?,
-                                            type_params: vec![TypeTag::Struct(struct_tag.clone())],
-                                        }));
-                                        synthetic_events.push((event_type, event_bytes));
-                                    }
-                                }
                             }
                         }
 
@@ -1128,7 +1057,6 @@ impl MoveRuntime {
                         .iter()
                         .find(|(i, _, _, _, _)| *i == idx as usize)
                     {
-                        auto_merged_coin_ids.retain(|merged_id| merged_id != id);
                         self.upsert_created_object(
                             &mut cs,
                             *owner,
@@ -1203,17 +1131,6 @@ impl MoveRuntime {
                 for deleted_obj in deleted_objects {
                     cs.add_deleted_object(deleted_obj.object_id);
                 }
-                for merged_id in auto_merged_coin_ids {
-                    cs.add_deleted_object(merged_id);
-                }
-                for (evt_type, evt_data) in synthetic_events {
-                    cs.add_event(Event {
-                        key: Default::default(),
-                        sequence_number: 0,
-                        type_tag: evt_type.to_string(),
-                        event_data: evt_data,
-                    });
-                }
 
                 for op in dynamic_fields_ops {
                     match op {
@@ -1235,7 +1152,7 @@ impl MoveRuntime {
                 }
 
                 if let Some((gas_limit, gas_price)) = gas_info {
-                    let complexity = 1 + (total_merge_reads as u32 / 10);
+                    let complexity = 1;
                     let gas_op = GasOperation::ExecuteFunction { complexity };
                     let (written, deleted) = self.calculate_storage_impact(&move_changeset, &cs);
                     self.apply_gas_info(
@@ -1252,7 +1169,7 @@ impl MoveRuntime {
             }
             Err(e) => {
                 if let Some((gas_limit, gas_price)) = gas_info {
-                    let penalty_complexity = 5 + (total_merge_reads as u32);
+                    let penalty_complexity = 5;
                     let _ = self.apply_gas_info(
                         &mut cs,
                         sender,

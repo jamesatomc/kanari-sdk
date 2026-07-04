@@ -6,9 +6,7 @@
 use crate::state::StateManager;
 use crate::state_object_apply_helpers::FEE_SINK_TOTAL;
 use anyhow::{Result, ensure};
-use kanari_types::object_effects::{
-    ObjectTombstone, ObjectTransactionEffectsV1, ObjectWriteKind,
-};
+use kanari_types::object_effects::{ObjectTombstone, ObjectTransactionEffectsV1, ObjectWriteKind};
 
 impl StateManager {
     /// Validate and stage effects in the overlay without committing them.
@@ -25,7 +23,10 @@ impl StateManager {
 
         let mut next = self.clone();
         for write in &effects.created {
-            ensure!(write.kind == ObjectWriteKind::Created, "Invalid create effect");
+            ensure!(
+                write.kind == ObjectWriteKind::Created,
+                "Invalid create effect"
+            );
             ensure!(
                 write.previous_object_ref.is_none(),
                 "Create has previous reference"
@@ -93,10 +94,7 @@ mod tests {
         GasCostSummary, ObjectDelete, ObjectDeleteKind, ObjectWrite,
     };
 
-    fn immutable_create(
-        id: ObjectID,
-        transaction_digest: [u8; 32],
-    ) -> ObjectTransactionEffectsV1 {
+    fn immutable_create(id: ObjectID, transaction_digest: [u8; 32]) -> ObjectTransactionEffectsV1 {
         let write = ObjectWrite::new(
             id,
             1,
@@ -108,11 +106,8 @@ mod tests {
             ObjectWriteKind::Created,
         )
         .unwrap();
-        let mut effects = ObjectTransactionEffectsV1::new(
-            transaction_digest,
-            1,
-            GasCostSummary::default(),
-        );
+        let mut effects =
+            ObjectTransactionEffectsV1::new(transaction_digest, 1, GasCostSummary::default());
         effects.created.push(write);
         effects
     }
@@ -121,7 +116,9 @@ mod tests {
     fn stages_without_persisting_until_commit() {
         let mut state = StateManager::new_in_memory();
         let id = ObjectID::from_hex_literal("0xa00").unwrap();
-        state.stage_object_effects(&immutable_create(id, [7; 32])).unwrap();
+        state
+            .stage_object_effects(&immutable_create(id, [7; 32]))
+            .unwrap();
         assert!(state.get_object_ref_exact(id).unwrap().is_some());
         assert!(!state.overlay.is_empty());
         state.commit().unwrap();
@@ -132,7 +129,9 @@ mod tests {
     fn accepts_immutable_object_without_account() {
         let mut state = StateManager::new_in_memory();
         let id = ObjectID::from_hex_literal("0xa01").unwrap();
-        state.apply_object_effects(&immutable_create(id, [1; 32])).unwrap();
+        state
+            .apply_object_effects(&immutable_create(id, [1; 32]))
+            .unwrap();
         assert_eq!(state.get_object_owner(id).unwrap(), Some(Owner::Immutable));
     }
 
@@ -140,7 +139,9 @@ mod tests {
     fn deletion_tombstone_prevents_object_id_reuse() {
         let mut state = StateManager::new_in_memory();
         let id = ObjectID::from_hex_literal("0xa02").unwrap();
-        state.apply_object_effects(&immutable_create(id, [2; 32])).unwrap();
+        state
+            .apply_object_effects(&immutable_create(id, [2; 32]))
+            .unwrap();
         let reference = state.get_object_ref_exact(id).unwrap().unwrap();
 
         let mut deletion = ObjectTransactionEffectsV1::new(
@@ -155,6 +156,10 @@ mod tests {
         state.apply_object_effects(&deletion).unwrap();
 
         assert!(state.get_object_tombstone(id).unwrap().is_some());
-        assert!(state.apply_object_effects(&immutable_create(id, [4; 32])).is_err());
+        assert!(
+            state
+                .apply_object_effects(&immutable_create(id, [4; 32]))
+                .is_err()
+        );
     }
 }

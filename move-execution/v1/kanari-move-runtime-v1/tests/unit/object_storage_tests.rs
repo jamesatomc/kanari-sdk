@@ -88,8 +88,7 @@ fn legacy_owner_index_is_migrated_to_owned_objects_index() -> Result<()> {
 #[test]
 fn exact_object_reference_is_accepted() -> Result<()> {
     let owner = AccountAddress::from_hex_literal("0x7")?;
-    let canonical_id = kanari_types::object::ObjectID::from_hex_literal("0xdddd")?
-        .to_hex_literal();
+    let canonical_id = kanari_types::object::ObjectID::from_hex_literal("0xdddd")?.to_hex_literal();
     let storage = ObjectStorage::new();
     storage.store_object(StoredObject {
         id: canonical_id.clone(),
@@ -112,8 +111,7 @@ fn exact_object_reference_is_accepted() -> Result<()> {
 #[test]
 fn stale_object_reference_is_rejected() -> Result<()> {
     let owner = AccountAddress::from_hex_literal("0x8")?;
-    let canonical_id = kanari_types::object::ObjectID::from_hex_literal("0xeeee")?
-        .to_hex_literal();
+    let canonical_id = kanari_types::object::ObjectID::from_hex_literal("0xeeee")?.to_hex_literal();
     let storage = ObjectStorage::new();
     storage.store_object(StoredObject {
         id: canonical_id.clone(),

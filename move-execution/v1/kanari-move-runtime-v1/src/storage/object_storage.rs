@@ -117,14 +117,8 @@ impl StoredObject {
     pub fn object_ref(&self) -> Result<ObjectRef> {
         let id = self.object_id()?;
         let owner = self.owner_kind();
-        let digest = compute_object_digest(
-            id,
-            self.version,
-            &owner,
-            &self.type_name,
-            &self.data,
-            None,
-        )?;
+        let digest =
+            compute_object_digest(id, self.version, &owner, &self.type_name, &self.data, None)?;
         Ok(ObjectRef::new(id, self.version, digest))
     }
 }

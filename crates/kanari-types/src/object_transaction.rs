@@ -134,7 +134,10 @@ impl GasData {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(self.budget > 0, "Gas budget must be greater than zero");
-        ensure!(!self.payment.is_empty(), "At least one gas object is required");
+        ensure!(
+            !self.payment.is_empty(),
+            "At least one gas object is required"
+        );
         let ids: BTreeSet<_> = self
             .payment
             .iter()
@@ -246,7 +249,10 @@ impl ObjectTransactionData {
         match &self.kind {
             ObjectTransactionKind::MoveCall(call) => {
                 ensure!(!call.module.is_empty(), "Move module name cannot be empty");
-                ensure!(!call.function.is_empty(), "Move function name cannot be empty");
+                ensure!(
+                    !call.function.is_empty(),
+                    "Move function name cannot be empty"
+                );
             }
             ObjectTransactionKind::Publish { modules, .. } => {
                 ensure!(!modules.is_empty(), "Publish transaction has no modules");
@@ -308,7 +314,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(transaction.owned_input_refs().collect::<Vec<_>>(), vec![coin]);
+        assert_eq!(
+            transaction.owned_input_refs().collect::<Vec<_>>(),
+            vec![coin]
+        );
         assert!(transaction.mutable_input_ids().contains(&coin.object_id));
     }
 
