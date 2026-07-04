@@ -32,16 +32,32 @@ jobs:
         run: python .github/scripts/apply_object_cutover.py
 
       - name: Format
-        run: cargo fmt --all
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fmt --all 2>&1 | tee object-cutover.log
 
       - name: Check protocol crates
-        run: cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core -p kanari-rpc-server
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core -p kanari-rpc-server 2>&1 | tee -a object-cutover.log
 
       - name: Test object protocol
+        shell: bash
         run: |
-          cargo test -p kanari-types --lib object
-          cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture
-          cargo test -p kanari-core --lib object_ -- --nocapture
+          set -o pipefail
+          cargo test -p kanari-types --lib object 2>&1 | tee -a object-cutover.log
+          cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture 2>&1 | tee -a object-cutover.log
+          cargo test -p kanari-core --lib object_ -- --nocapture 2>&1 | tee -a object-cutover.log
+
+      - name: Upload cutover log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: object-cutover-log
+          path: object-cutover.log
+          retention-days: 1
 
       - name: Commit validated cutover
         run: |
