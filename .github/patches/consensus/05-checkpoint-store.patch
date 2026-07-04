@@ -1,0 +1,81 @@
+--- /dev/null	2026-07-04 14:58:27.355347198 +0000
++++ /tmp/kanari-cutover/crates/kanari-core/src/object_checkpoint_store.rs	2026-07-04 16:54:50.496572277 +0000
+@@ -0,0 +1,78 @@
++// Copyright (c) KanariNetwork, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++use crate::engine::BlockchainEngine;
++use anyhow::{Result, ensure};
++use kanari_types::object::ObjectID;
++use kanari_types::object_effects::ObjectTransactionEffectsV1;
++use kanari_types::signed_object_transaction::SignedObjectTransaction;
++use std::collections::BTreeMap;
++
++type LockMap = BTreeMap<ObjectID, Vec<u8>>;
++const INDEX_KEY: &[u8] = b"mempool:object:index";
++const LOCKS_KEY: &[u8] = b"mempool:object:locks";
++
++fn keyed(prefix: &[u8], digest: &[u8]) -> Vec<u8> {
++    let mut key = prefix.to_vec();
++    key.extend_from_slice(hex::encode(digest).as_bytes());
++    key
++}
++
++fn pending_key(digest: &[u8]) -> Vec<u8> { keyed(b"mempool:object:tx:", digest) }
++fn executed_key(digest: &[u8]) -> Vec<u8> { keyed(b"object_tx:executed:", digest) }
++fn payload_key(digest: &[u8]) -> Vec<u8> { keyed(b"object_tx:payload:", digest) }
++fn effects_key(digest: &[u8]) -> Vec<u8> { keyed(b"object_tx:effects:", digest) }
++
++impl BlockchainEngine {
++    pub(crate) fn object_checkpoint_bookkeeping(
++        &self,
++        transactions: &[SignedObjectTransaction],
++        effects: &[ObjectTransactionEffectsV1],
++    ) -> Result<(Vec<(Vec<u8>, Vec<u8>)>, Vec<Vec<u8>>)> {
++        ensure!(transactions.len() == effects.len(), "Transaction/effects mismatch");
++        let store = self.state_read().store.clone();
++        let mut index: Vec<Vec<u8>> = store.load(INDEX_KEY)?.unwrap_or_default();
++        let mut locks: LockMap = store.load(LOCKS_KEY)?.unwrap_or_default();
++        let mut updates = Vec::new();
++        let mut deletes = Vec::new();
++
++        for (transaction, effects) in transactions.iter().zip(effects) {
++            let digest = transaction.digest()?;
++            ensure!(
++                digest.as_slice() == effects.transaction_digest.as_slice(),
++                "Effects digest mismatch"
++            );
++            index.retain(|entry| entry.as_slice() != digest.as_slice());
++            for object_id in transaction.data.mutable_input_ids() {
++                if locks
++                    .get(&object_id)
++                    .is_some_and(|holder| holder.as_slice() == digest.as_slice())
++                {
++                    locks.remove(&object_id);
++                }
++            }
++            updates.push((executed_key(&digest), bcs::to_bytes(&true)?));
++            updates.push((payload_key(&digest), bcs::to_bytes(transaction)?));
++            updates.push((effects_key(&digest), bcs::to_bytes(effects)?));
++            deletes.push(pending_key(&digest));
++        }
++        updates.push((INDEX_KEY.to_vec(), bcs::to_bytes(&index)?));
++        updates.push((LOCKS_KEY.to_vec(), bcs::to_bytes(&locks)?));
++        Ok((updates, deletes))
++    }
++
++    pub fn get_object_transaction_history(
++        &self,
++        digest: &[u8],
++    ) -> Result<Option<(SignedObjectTransaction, ObjectTransactionEffectsV1)>> {
++        let state = self.state_read();
++        let Some(transaction) = state.store.load(&payload_key(digest))? else {
++            return Ok(None);
++        };
++        let effects = state
++            .store
++            .load(&effects_key(digest))?
++            .ok_or_else(|| anyhow::anyhow!("Object transaction effects are missing"))?;
++        Ok(Some((transaction, effects)))
++    }
++}
