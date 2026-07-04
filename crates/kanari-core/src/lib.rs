@@ -5,11 +5,10 @@ pub mod blockchain;
 pub mod consensus;
 pub mod engine;
 pub mod object_mempool;
-pub mod object_transaction_engine;
+mod object_transaction_engine_v2;
 
 pub use consensus::{Checkpoint, DagVertex};
 pub use engine::{BlockchainEngine, CheckpointProductionInfo, CheckpointSyncData};
 pub use kanari_rpc_api::{BlockData, BlockchainStats, FullBlockData};
 pub use object_mempool::ObjectMempool;
-
 pub use kanari_move_runtime_v1;
