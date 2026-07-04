@@ -1,0 +1,114 @@
+--- /tmp/kanari-orig/crates/kanari-core/src/blockchain.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-core/src/blockchain.rs	2026-07-04 16:47:54.242066515 +0000
+@@ -4,6 +4,7 @@
+ use crate::consensus::Checkpoint;
+ use anyhow::Result;
+ use kanari_types::error::KanariUnwrapExt;
++use kanari_types::signed_object_transaction::SignedObjectTransaction;
+ use kanari_types::transaction::SignedTransaction;
+ use serde::{Deserialize, Serialize};
+ use std::collections::{HashMap, HashSet, VecDeque};
+@@ -85,7 +86,7 @@
+     fn retained_transaction_count(&self) -> usize {
+         self.dag_checkpoints
+             .iter()
+-            .map(|checkpoint| checkpoint.transactions.len())
++            .map(|checkpoint| checkpoint.transactions.len() + checkpoint.object_transactions.len())
+             .sum()
+     }
+ 
+@@ -104,13 +105,23 @@
+                 }
+                 self.tx_location_index
+                     .insert(hash, (checkpoint.sequence, index));
+-
+-                while self.tx_hash_queue.len() > MAX_RETAINED_TX_HASHES {
+-                    if let Some(old_hash) = self.tx_hash_queue.pop_front() {
+-                        self.executed_tx_hashes.remove(&old_hash);
+-                        self.tx_location_index.remove(&old_hash);
+-                    }
++            }
++            let base_index = checkpoint.transactions.len();
++            for (offset, tx) in checkpoint.object_transactions.iter().enumerate() {
++                let hash = tx.digest().unwrap_or_default();
++                if self.executed_tx_hashes.insert(hash.clone()) {
++                    self.tx_hash_queue.push_back(hash.clone());
++                    self.total_transaction_count = self.total_transaction_count.saturating_add(1);
+                 }
++                self.tx_location_index
++                    .insert(hash, (checkpoint.sequence, base_index + offset));
++            }
++        }
++
++        while self.tx_hash_queue.len() > MAX_RETAINED_TX_HASHES {
++            if let Some(old_hash) = self.tx_hash_queue.pop_front() {
++                self.executed_tx_hashes.remove(&old_hash);
++                self.tx_location_index.remove(&old_hash);
+             }
+         }
+     }
+@@ -143,6 +154,15 @@
+                     anyhow::bail!("Replay attack detected: Transaction already executed");
+                 }
+             }
++            for tx in checkpoint.object_transactions.iter() {
++                let tx_hash = tx.digest()?;
++                if !seen_txs.insert(tx_hash.clone()) {
++                    anyhow::bail!("Duplicate object transaction found within checkpoint");
++                }
++                if self.executed_tx_hashes.contains(&tx_hash) {
++                    anyhow::bail!("Replay attack detected: object transaction already executed");
++                }
++            }
+         }
+ 
+         self.track_checkpoint_transactions(&checkpoint);
+@@ -156,6 +176,11 @@
+                 self.executed_tx_hashes.remove(&hash);
+                 self.tx_location_index.remove(&hash);
+             }
++            for tx in evicted.object_transactions.iter() {
++                let hash = tx.digest().unwrap_or_default();
++                self.executed_tx_hashes.remove(&hash);
++                self.tx_location_index.remove(&hash);
++            }
+         }
+         Ok(())
+     }
+@@ -170,6 +195,16 @@
+             self.tx_location_index
+                 .insert(hash, (checkpoint.sequence, index));
+         }
++        let base_index = checkpoint.transactions.len();
++        for (offset, tx) in checkpoint.object_transactions.iter().enumerate() {
++            let hash = tx.digest().unwrap_or_default();
++            if self.executed_tx_hashes.insert(hash.clone()) {
++                self.tx_hash_queue.push_back(hash.clone());
++                self.total_transaction_count = self.total_transaction_count.saturating_add(1);
++            }
++            self.tx_location_index
++                .insert(hash, (checkpoint.sequence, base_index + offset));
++        }
+ 
+         while self.tx_hash_queue.len() > MAX_RETAINED_TX_HASHES {
+             if let Some(old_hash) = self.tx_hash_queue.pop_front() {
+@@ -222,6 +257,19 @@
+                 .map(|tx| (tx, checkpoint.sequence, checkpoint.state_root.as_slice()))
+         })
+     }
++    pub fn get_object_transaction_location(
++        &self,
++        tx_hash: &[u8],
++    ) -> Option<(&SignedObjectTransaction, u64, &[u8])> {
++        self.dag_checkpoints.iter().rev().find_map(|checkpoint| {
++            checkpoint
++                .object_transactions
++                .iter()
++                .find(|tx| tx.digest().ok().as_deref() == Some(tx_hash))
++                .map(|tx| (tx, checkpoint.sequence, checkpoint.state_root.as_slice()))
++        })
++    }
++
+ }
+ 
+ impl Default for Blockchain {
