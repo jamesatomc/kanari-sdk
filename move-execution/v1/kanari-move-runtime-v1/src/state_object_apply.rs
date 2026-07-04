@@ -11,8 +11,11 @@ use kanari_types::object_effects::{
 };
 
 impl StateManager {
-    /// Apply effects without reading or writing account state.
-    pub fn apply_object_effects(&mut self, effects: &ObjectTransactionEffectsV1) -> Result<()> {
+    /// Validate and stage effects in the overlay without committing them.
+    ///
+    /// Callers may add auxiliary updates, such as mempool finalization and a
+    /// replay marker, before one `commit()` persists the complete transition.
+    pub fn stage_object_effects(&mut self, effects: &ObjectTransactionEffectsV1) -> Result<()> {
         effects.validate()?;
         let fee = effects.gas_cost_summary.net_gas_usage()?;
         ensure!(
@@ -67,9 +70,14 @@ impl StateManager {
                 .ok_or_else(|| anyhow::anyhow!("Fee counter overflow"))?;
             next.save_internal(FEE_SINK_TOTAL, &total)?;
         }
-        next.commit()?;
         *self = next;
         Ok(())
+    }
+
+    /// Apply effects without reading or writing account state.
+    pub fn apply_object_effects(&mut self, effects: &ObjectTransactionEffectsV1) -> Result<()> {
+        self.stage_object_effects(effects)?;
+        self.commit()
     }
 
     pub fn object_fee_sink_total(&self) -> Result<u64> {
@@ -107,6 +115,17 @@ mod tests {
         );
         effects.created.push(write);
         effects
+    }
+
+    #[test]
+    fn stages_without_persisting_until_commit() {
+        let mut state = StateManager::new_in_memory();
+        let id = ObjectID::from_hex_literal("0xa00").unwrap();
+        state.stage_object_effects(&immutable_create(id, [7; 32])).unwrap();
+        assert!(state.get_object_ref_exact(id).unwrap().is_some());
+        assert!(!state.overlay.is_empty());
+        state.commit().unwrap();
+        assert!(state.overlay.is_empty());
     }
 
     #[test]
