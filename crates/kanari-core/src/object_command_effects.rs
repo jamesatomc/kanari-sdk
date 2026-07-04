@@ -68,7 +68,10 @@ impl BlockchainEngine {
                 ensure!(total >= *amount, "Insufficient selected coin balance");
 
                 let output = output_id(digest, 0)?;
-                ensure!(state.get_object_ref_exact(output)?.is_none(), "Pay output already exists");
+                ensure!(
+                    !state.object_id_has_history(output)?,
+                    "Pay output object ID has already been used"
+                );
                 let (_, template) = loaded.first().cloned()
                     .ok_or_else(|| anyhow::anyhow!("Pay requires a coin input"))?;
                 let mut output_data = template.data.clone();
