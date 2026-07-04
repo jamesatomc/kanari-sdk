@@ -1,9 +1,6 @@
 name: Object-Centric Protocol Checks
 
 on:
-  push:
-    branches:
-      - object-centric
   pull_request:
     branches:
       - kanari-sdk
@@ -41,11 +38,11 @@ jobs:
       - name: Test object transaction types
         run: cargo test -p kanari-types --lib object
 
-      - name: Test runtime object references
-        run: cargo test -p kanari-move-runtime-v1 --lib object_ref
+      - name: Test runtime object state
+        run: cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture
 
-      - name: Test core object mempool
-        run: cargo test -p kanari-core --lib object_mempool
+      - name: Test core object path
+        run: cargo test -p kanari-core --lib object_ -- --nocapture
 
       - name: Verify formatting
         run: cargo fmt --all -- --check
