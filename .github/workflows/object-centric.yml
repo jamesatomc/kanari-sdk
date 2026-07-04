@@ -1,0 +1,47 @@
+name: Object-Centric Protocol Checks
+
+on:
+  push:
+    branches:
+      - object-centric
+  pull_request:
+    branches:
+      - kanari-sdk
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  object-centric-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check object-centric crates
+        run: cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core
+
+      - name: Test object transaction types
+        run: cargo test -p kanari-types --lib object
+
+      - name: Test runtime object references
+        run: cargo test -p kanari-move-runtime-v1 --lib object_ref
+
+      - name: Test core object mempool
+        run: cargo test -p kanari-core --lib object_mempool
+
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
