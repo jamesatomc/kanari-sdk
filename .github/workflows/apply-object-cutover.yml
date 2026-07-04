@@ -33,6 +33,7 @@ jobs:
           python .github/scripts/apply_object_cutover.py
           python .github/scripts/apply_object_transfer_cli.py
           python .github/scripts/apply_shared_pay_gas.py
+          python .github/scripts/apply_shared_pay_gas_tests.py
 
       - name: Format
         shell: bash
