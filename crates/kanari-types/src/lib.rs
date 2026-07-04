@@ -19,6 +19,7 @@ pub mod collection;
 pub mod deny_list;
 pub mod error;
 pub mod object;
+pub mod object_effects;
 pub mod object_transaction;
 pub mod signed_object_transaction;
 
