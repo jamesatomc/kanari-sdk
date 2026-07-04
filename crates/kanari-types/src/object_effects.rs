@@ -3,9 +3,7 @@
 
 //! Canonical effects emitted by object-centric execution.
 
-use crate::object::{
-    ObjectID, ObjectRef, ObjectVersion, Owner, compute_object_digest,
-};
+use crate::object::{ObjectID, ObjectRef, ObjectVersion, Owner, compute_object_digest};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +23,8 @@ pub enum ObjectDeleteKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectWrite {
     pub object_ref: ObjectRef,
+    /// Exact pre-state dependency. Required for mutations and absent for creation.
+    pub previous_object_ref: Option<ObjectRef>,
     pub owner: Owner,
     pub type_name: String,
     pub contents: Vec<u8>,
@@ -36,12 +36,35 @@ impl ObjectWrite {
     pub fn new(
         id: ObjectID,
         version: ObjectVersion,
+        previous_object_ref: Option<ObjectRef>,
         owner: Owner,
         type_name: String,
         contents: Vec<u8>,
         previous_transaction: [u8; 32],
         kind: ObjectWriteKind,
     ) -> Result<Self> {
+        match kind {
+            ObjectWriteKind::Created => ensure!(
+                previous_object_ref.is_none(),
+                "Created object cannot contain a previous object reference"
+            ),
+            ObjectWriteKind::Mutated => ensure!(
+                previous_object_ref.is_some(),
+                "Mutated object requires its exact previous object reference"
+            ),
+            ObjectWriteKind::Unwrapped => {}
+        }
+        if let Some(previous) = previous_object_ref {
+            ensure!(
+                previous.object_id == id,
+                "Previous object reference has a different object ID"
+            );
+            ensure!(
+                version > previous.version,
+                "Object version must advance after mutation"
+            );
+        }
+
         let digest = compute_object_digest(
             id,
             version,
@@ -52,6 +75,7 @@ impl ObjectWrite {
         )?;
         Ok(Self {
             object_ref: ObjectRef::new(id, version, digest),
+            previous_object_ref,
             owner,
             type_name,
             contents,
@@ -134,6 +158,18 @@ impl ObjectTransactionEffectsV1 {
                 write.object_ref.object_id
             );
         }
+        ensure!(
+            self.created
+                .iter()
+                .all(|write| write.kind == ObjectWriteKind::Created),
+            "Created effects contain a non-created write"
+        );
+        ensure!(
+            self.mutated
+                .iter()
+                .all(|write| write.kind != ObjectWriteKind::Created),
+            "Mutated effects contain a created write"
+        );
         for deleted in &self.deleted {
             ensure!(
                 ids.insert(deleted.object_ref.object_id),
@@ -167,6 +203,7 @@ pub fn next_lamport_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object::ObjectDigest;
 
     #[test]
     fn lamport_version_uses_highest_mutable_input() {
@@ -175,12 +212,32 @@ mod tests {
     }
 
     #[test]
+    fn mutation_requires_previous_object_reference() {
+        let id = ObjectID::from_hex_literal("0x42").unwrap();
+        assert!(
+            ObjectWrite::new(
+                id,
+                2,
+                None,
+                Owner::Immutable,
+                "0x2::package::Package".to_string(),
+                vec![1, 2],
+                [1; 32],
+                ObjectWriteKind::Mutated,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn write_digest_commits_previous_transaction() {
         let id = ObjectID::from_hex_literal("0x42").unwrap();
+        let previous = ObjectRef::new(id, 1, ObjectDigest([7; 32]));
         let owner = Owner::Immutable;
         let first = ObjectWrite::new(
             id,
             2,
+            Some(previous),
             owner.clone(),
             "0x2::package::Package".to_string(),
             vec![1, 2],
@@ -191,6 +248,7 @@ mod tests {
         let second = ObjectWrite::new(
             id,
             2,
+            Some(previous),
             owner,
             "0x2::package::Package".to_string(),
             vec![1, 2],
