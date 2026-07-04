@@ -80,10 +80,8 @@ impl StateManager {
                 "Created effects contain a non-created write"
             );
             ensure!(
-                candidate
-                    .get_object(&write.object_ref.object_id.to_hex_literal())?
-                    .is_none(),
-                "Created object {} already exists",
+                !candidate.object_id_has_history(write.object_ref.object_id)?,
+                "Object ID {} has already been used",
                 write.object_ref.object_id
             );
             changeset.created_objects.push((
@@ -121,6 +119,9 @@ impl StateManager {
                 owner: write.owner.clone(),
                 previous_transaction: Some(effects.transaction_digest),
             })?;
+        }
+        for tombstone in effects.tombstones() {
+            candidate.save_object_tombstone(&tombstone)?;
         }
 
         candidate.commit()?;
@@ -167,6 +168,34 @@ mod tests {
             state.get_object_ref_exact(id).unwrap().unwrap(),
             write.object_ref
         );
+    }
+
+    #[test]
+    fn rejects_reused_object_id() {
+        let mut state = StateManager::new_in_memory();
+        let id = ObjectID::from_hex_literal("0x902").unwrap();
+        let owner = move_core_types::account_address::AccountAddress::from_hex_literal("0x77")
+            .unwrap();
+        let tx_digest = [6; 32];
+        let write = ObjectWrite::new(
+            id,
+            1,
+            None,
+            Owner::AddressOwner(owner),
+            "0x2::example::Record".to_string(),
+            vec![1],
+            tx_digest,
+            ObjectWriteKind::Created,
+        )
+        .unwrap();
+        let mut effects = ObjectTransactionEffectsV1::new(
+            tx_digest,
+            1,
+            GasCostSummary::default(),
+        );
+        effects.created.push(write);
+        state.apply_object_effects_v1(&effects).unwrap();
+        assert!(state.apply_object_effects_v1(&effects).is_err());
     }
 
     #[test]
