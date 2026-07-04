@@ -11,6 +11,7 @@ mod kanari_gas_meter;
 pub mod move_runtime;
 
 pub mod state;
+mod state_object_refs;
 pub mod storage;
 
 pub use changeset::ChangeSet;
