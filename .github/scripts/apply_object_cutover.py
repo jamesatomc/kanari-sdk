@@ -74,7 +74,10 @@ def disable_legacy_rpc_routes() -> None:
         "    transaction::{\n        handle_call_function, handle_get_transaction, handle_publish_module,\n        handle_submit_transaction, handle_view_function,\n    },\n",
         "    transaction::{handle_get_transaction, handle_view_function},\n",
     )
-    text = text.replace("pub mod nft;\npub mod transaction;\n", "pub mod nft;\npub mod object_transaction;\npub mod transaction;\n")
+    text = text.replace(
+        "pub mod nft;\npub mod transaction;\n",
+        "pub mod nft;\npub mod object_transaction;\npub mod transaction;\n",
+    )
     marker = "    let response = match request.method.as_str() {\n"
     routes = marker + "        object_transaction::SUBMIT_OBJECT_TRANSACTION => object_transaction::submit(&state, &request).await,\n        object_transaction::EXECUTE_OBJECT_TRANSACTION => object_transaction::execute(&state, &request).await,\n        object_transaction::GET_PENDING_OBJECT_TRANSACTIONS => object_transaction::pending(&state, &request).await,\n"
     if "object_transaction::SUBMIT_OBJECT_TRANSACTION" not in text:
@@ -85,6 +88,28 @@ def disable_legacy_rpc_routes() -> None:
         "        methods::CALL_FUNCTION => handle_call_function(&state, &request).await,\n",
     ):
         text = text.replace(route, "")
+    path.write_text(text)
+
+
+def switch_rpc_broadcaster() -> None:
+    path = Path("crates/kanari-rpc-server/src/lib.rs")
+    text = path.read_text()
+    text = text.replace(
+        "use kanari_types::transaction::SignedTransaction;\n",
+        "use kanari_types::signed_object_transaction::SignedObjectTransaction;\n",
+    )
+    text = text.replace(
+        "Fn(SignedTransaction) -> Result<()>",
+        "Fn(SignedObjectTransaction) -> Result<()>",
+    )
+    text = text.replace(
+        "signed_tx: SignedTransaction",
+        "signed_tx: SignedObjectTransaction",
+    )
+    text = text.replace(
+        "broadcaster: impl Fn(SignedTransaction) -> Result<()>",
+        "broadcaster: impl Fn(SignedObjectTransaction) -> Result<()>",
+    )
     path.write_text(text)
 
 
@@ -103,4 +128,5 @@ def register_object_bootstrap() -> None:
 
 remove_runtime_auto_merge()
 disable_legacy_rpc_routes()
+switch_rpc_broadcaster()
 register_object_bootstrap()
