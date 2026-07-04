@@ -12,6 +12,8 @@ pub mod move_runtime;
 
 pub mod state;
 mod state_object_effects;
+mod state_object_apply;
+mod state_object_apply_helpers;
 mod state_object_refs;
 pub mod storage;
 
