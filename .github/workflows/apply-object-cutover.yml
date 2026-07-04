@@ -29,7 +29,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Apply cutover
-        run: python .github/scripts/apply_object_cutover.py
+        run: |
+          python .github/scripts/apply_object_cutover.py
+          python .github/scripts/apply_object_transfer_cli.py
+          python .github/scripts/apply_shared_pay_gas.py
 
       - name: Format
         shell: bash
@@ -43,11 +46,20 @@ jobs:
           set -o pipefail
           cargo build -p kanari-framework-builder 2>&1 | tee -a object-cutover.log
 
-      - name: Check protocol crates
+      - name: Check object protocol, RPC, node, and CLI
         shell: bash
         run: |
           set -o pipefail
-          cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core -p kanari-rpc-server 2>&1 | tee -a object-cutover.log
+          cargo check \
+            -p kanari-types \
+            -p kanari-move-runtime-v1 \
+            -p kanari-core \
+            -p kanari-rpc-api \
+            -p kanari-rpc-client \
+            -p kanari-rpc-server \
+            -p kanari-node \
+            -p kanari \
+            2>&1 | tee -a object-cutover.log
 
       - name: Test object protocol
         shell: bash
@@ -56,6 +68,7 @@ jobs:
           cargo test -p kanari-types --lib object 2>&1 | tee -a object-cutover.log
           cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture 2>&1 | tee -a object-cutover.log
           cargo test -p kanari-core --lib object_ -- --nocapture 2>&1 | tee -a object-cutover.log
+          cargo test -p kanari-rpc-client --lib 2>&1 | tee -a object-cutover.log
 
       - name: Upload cutover log
         if: always()
@@ -74,5 +87,5 @@ jobs:
           git config user.name 'kanari-object-bot'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
-          git commit -m 'refactor: apply object-only runtime cutover [object-cutover]'
+          git commit -m 'fix: route CLI transfer through object transactions [object-cutover]'
           git push origin HEAD:object-centric
