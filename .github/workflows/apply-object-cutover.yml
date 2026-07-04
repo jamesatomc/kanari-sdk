@@ -1,0 +1,57 @@
+name: Apply Object Cutover
+
+on:
+  push:
+    branches:
+      - object-centric
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-object-cutover
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[object-cutover]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: object-centric
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Apply cutover
+        run: python .github/scripts/apply_object_cutover.py
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Check protocol crates
+        run: cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core -p kanari-rpc-server
+
+      - name: Test object protocol
+        run: |
+          cargo test -p kanari-types --lib object
+          cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture
+          cargo test -p kanari-core --lib object_ -- --nocapture
+
+      - name: Commit validated cutover
+        run: |
+          if git diff --quiet; then
+            echo 'No cutover changes required'
+            exit 0
+          fi
+          git config user.name 'kanari-object-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: apply object-only runtime cutover [object-cutover]'
+          git push origin HEAD:object-centric
