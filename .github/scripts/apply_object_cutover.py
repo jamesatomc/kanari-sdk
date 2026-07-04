@@ -88,5 +88,19 @@ def disable_legacy_rpc_routes() -> None:
     path.write_text(text)
 
 
+def register_object_bootstrap() -> None:
+    path = Path("move-execution/v1/kanari-move-runtime-v1/src/lib.rs")
+    text = path.read_text()
+    if "mod state_object_bootstrap;" not in text:
+        text = replace_once(
+            text,
+            "mod state_object_apply_helpers;\n",
+            "mod state_object_apply_helpers;\nmod state_object_bootstrap;\n",
+            "object bootstrap module",
+        )
+    path.write_text(text)
+
+
 remove_runtime_auto_merge()
 disable_legacy_rpc_routes()
+register_object_bootstrap()
