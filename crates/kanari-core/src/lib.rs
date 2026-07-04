@@ -4,6 +4,7 @@
 pub mod blockchain;
 pub mod consensus;
 pub mod engine;
+pub mod object_admission;
 pub mod object_gas;
 pub mod object_mempool;
 mod object_transaction_engine_v2;
