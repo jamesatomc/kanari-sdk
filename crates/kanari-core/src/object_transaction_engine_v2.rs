@@ -3,11 +3,13 @@
 
 use crate::engine::BlockchainEngine;
 use anyhow::{Context, Result, ensure};
+use kanari_move_runtime_v1::changeset::CreatedObject;
 use kanari_move_runtime_v1::state::StateManager;
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
-use kanari_types::object::{ObjectID, ObjectRef};
+use kanari_types::object::{ObjectID, ObjectRef, Owner, compute_object_digest};
 use kanari_types::object_transaction::{ObjectArg, ObjectTransactionKind, TransactionExpiration};
 use kanari_types::signed_object_transaction::SignedObjectTransaction;
+use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::{StructTag, TypeTag};
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -31,46 +33,117 @@ fn executed_key(digest: &[u8]) -> Vec<u8> {
 fn native_coin_balance(type_name: &str, data: &[u8]) -> Result<u64> {
     let coin = StructTag::from_str(type_name)
         .with_context(|| format!("Invalid gas coin type: {type_name}"))?;
-    ensure!(coin.module.as_str() == "coin" && coin.name.as_str() == "Coin", "Gas object must be Coin<KANARI>");
+    ensure!(
+        coin.module.as_str() == "coin" && coin.name.as_str() == "Coin",
+        "Gas object must be Coin<KANARI>"
+    );
     let expected = StructTag::from_str(KANARI_TOKEN_TYPE)?;
     let Some(TypeTag::Struct(token)) = coin.type_params.first() else {
         anyhow::bail!("Gas coin is missing its token type");
     };
-    ensure!(token.as_ref() == &expected, "Gas coin must contain native KANARI");
-    ensure!(data.len() >= UID_SIZE + U64_SIZE, "Malformed gas coin contents");
-    Ok(u64::from_le_bytes(data[UID_SIZE..UID_SIZE + U64_SIZE].try_into()?))
+    ensure!(
+        token.as_ref() == &expected,
+        "Gas coin must contain native KANARI"
+    );
+    ensure!(
+        data.len() >= UID_SIZE + U64_SIZE,
+        "Malformed gas coin contents"
+    );
+    Ok(u64::from_le_bytes(
+        data[UID_SIZE..UID_SIZE + U64_SIZE].try_into()?,
+    ))
+}
+
+fn validate_object_ref_exact(state: &StateManager, expected: &ObjectRef) -> Result<CreatedObject> {
+    let object = state
+        .get_object(&expected.object_id.to_hex_literal())?
+        .ok_or_else(|| anyhow::anyhow!("Input object {} does not exist", expected.object_id))?;
+    let owner = Owner::AddressOwner(object.owner);
+    let digest = compute_object_digest(
+        expected.object_id,
+        object.version,
+        &owner,
+        &object.type_,
+        &object.data,
+        None,
+    )?;
+    let actual = ObjectRef::new(expected.object_id, object.version, digest);
+    ensure!(
+        actual == *expected,
+        "Object reference mismatch for {}: expected version {} digest {}, found version {} digest {}",
+        expected.object_id,
+        expected.version,
+        expected.digest,
+        actual.version,
+        actual.digest
+    );
+    Ok(object)
+}
+
+fn validate_address_owned_object_ref(
+    state: &StateManager,
+    expected: &ObjectRef,
+    owner: AccountAddress,
+) -> Result<CreatedObject> {
+    let object = validate_object_ref_exact(state, expected)?;
+    ensure!(
+        object.owner == owner,
+        "Address {} does not own object {}",
+        owner.to_hex_literal(),
+        expected.object_id
+    );
+    Ok(object)
 }
 
 fn validate_inputs(state: &StateManager, tx: &SignedObjectTransaction) -> Result<()> {
     tx.data.validate()?;
-    ensure!(matches!(tx.data.expiration, TransactionExpiration::None), "Epoch expiration is not enabled yet");
-    ensure!(!matches!(&tx.data.kind, ObjectTransactionKind::Publish { .. }), "Object package publishing is not enabled yet");
+    ensure!(
+        matches!(tx.data.expiration, TransactionExpiration::None),
+        "Epoch expiration is not enabled yet"
+    );
+    ensure!(
+        !matches!(&tx.data.kind, ObjectTransactionKind::Publish { .. }),
+        "Object package publishing is not enabled yet"
+    );
 
     for input in tx.data.input_objects() {
         match input {
-            ObjectArg::ImmOrOwnedObject(reference) | ObjectArg::Receiving(reference) => {
-                state.validate_address_owned_object_ref(reference, tx.data.sender)?;
+            ObjectArg::ImmOrOwnedObject(reference) => {
+                validate_address_owned_object_ref(state, reference, tx.data.sender)?;
+            }
+            ObjectArg::Receiving(reference) => {
+                validate_object_ref_exact(state, reference)?;
             }
             ObjectArg::SharedObject { .. } => anyhow::bail!("Shared objects are not enabled yet"),
         }
     }
 
-    let required = tx.data.gas_data.budget
+    let required = tx
+        .data
+        .gas_data
+        .budget
         .checked_mul(tx.data.gas_data.price)
         .ok_or_else(|| anyhow::anyhow!("Gas fee overflow"))?;
     let mut available = 0u64;
     for payment in &tx.data.gas_data.payment {
-        let object = state.validate_address_owned_object_ref(payment, tx.data.gas_data.owner)?;
-        available = available.checked_add(native_coin_balance(&object.type_, &object.data)?)
+        let object = validate_address_owned_object_ref(state, payment, tx.data.gas_data.owner)?;
+        available = available
+            .checked_add(native_coin_balance(&object.type_, &object.data)?)
             .ok_or_else(|| anyhow::anyhow!("Gas balance overflow"))?;
     }
-    ensure!(available >= required, "Insufficient gas coin balance: need {required}, found {available}");
+    ensure!(
+        available >= required,
+        "Insufficient gas coin balance: need {required}, found {available}"
+    );
     Ok(())
 }
 
 fn release_locks(locks: &mut LockMap, tx: &SignedObjectTransaction, digest: &[u8]) {
     for object_id in tx.data.mutable_input_ids() {
-        if locks.get(&object_id).is_some_and(|holder| holder.as_slice() == digest) {
+        if locks
+            .get(&object_id)
+            .is_some_and(|holder| holder.as_slice() == digest)
+        {
             locks.remove(&object_id);
         }
     }
@@ -84,8 +157,16 @@ impl BlockchainEngine {
         validate_inputs(&state, &tx)?;
         let store = state.store.clone();
 
-        ensure!(store.load::<bool>(&executed_key(&digest))?.is_none(), "Object transaction already executed");
-        ensure!(store.load::<SignedObjectTransaction>(&pending_key(&digest))?.is_none(), "Object transaction already pending");
+        ensure!(
+            store.load::<bool>(&executed_key(&digest))?.is_none(),
+            "Object transaction already executed"
+        );
+        ensure!(
+            store
+                .load::<SignedObjectTransaction>(&pending_key(&digest))?
+                .is_none(),
+            "Object transaction already pending"
+        );
 
         let mut index: Vec<Vec<u8>> = store.load(INDEX_KEY)?.unwrap_or_default();
         ensure!(index.len() < MAX_PENDING, "Object transaction mempool is full");
@@ -93,7 +174,10 @@ impl BlockchainEngine {
         let mutable_ids = tx.data.mutable_input_ids();
         for object_id in &mutable_ids {
             if let Some(holder) = locks.get(object_id) {
-                anyhow::bail!("Mutable object {object_id} is reserved by {}", hex::encode(holder));
+                anyhow::bail!(
+                    "Mutable object {object_id} is reserved by {}",
+                    hex::encode(holder)
+                );
             }
         }
         for object_id in mutable_ids {
@@ -103,16 +187,24 @@ impl BlockchainEngine {
         index.sort();
         index.dedup();
 
-        store.apply_raw_changes(&[
-            (pending_key(&digest), bcs::to_bytes(&tx)?),
-            (INDEX_KEY.to_vec(), bcs::to_bytes(&index)?),
-            (LOCKS_KEY.to_vec(), bcs::to_bytes(&locks)?),
-        ], &[])?;
+        store.apply_raw_changes(
+            &[
+                (pending_key(&digest), bcs::to_bytes(&tx)?),
+                (INDEX_KEY.to_vec(), bcs::to_bytes(&index)?),
+                (LOCKS_KEY.to_vec(), bcs::to_bytes(&locks)?),
+            ],
+            &[],
+        )?;
         Ok(digest)
     }
 
     pub fn pending_object_transaction_len(&self) -> Result<usize> {
-        Ok(self.state_read().store.load::<Vec<Vec<u8>>>(INDEX_KEY)?.unwrap_or_default().len())
+        Ok(self
+            .state_read()
+            .store
+            .load::<Vec<Vec<u8>>>(INDEX_KEY)?
+            .unwrap_or_default()
+            .len())
     }
 
     pub fn pending_object_transactions(&self) -> Result<Vec<SignedObjectTransaction>> {
@@ -128,7 +220,11 @@ impl BlockchainEngine {
     }
 
     pub fn is_object_transaction_executed(&self, digest: &[u8]) -> Result<bool> {
-        Ok(self.state_read().store.load::<bool>(&executed_key(digest))?.unwrap_or(false))
+        Ok(self
+            .state_read()
+            .store
+            .load::<bool>(&executed_key(digest))?
+            .unwrap_or(false))
     }
 
     pub fn release_object_transaction(&self, digest: &[u8]) -> Result<Option<SignedObjectTransaction>> {
@@ -139,11 +235,17 @@ impl BlockchainEngine {
         self.finish_object_transaction(digest, true)
     }
 
-    fn finish_object_transaction(&self, digest: &[u8], executed: bool) -> Result<Option<SignedObjectTransaction>> {
+    fn finish_object_transaction(
+        &self,
+        digest: &[u8],
+        executed: bool,
+    ) -> Result<Option<SignedObjectTransaction>> {
         let state = self.state_write();
         let store = state.store.clone();
         let key = pending_key(digest);
-        let Some(tx) = store.load::<SignedObjectTransaction>(&key)? else { return Ok(None); };
+        let Some(tx) = store.load::<SignedObjectTransaction>(&key)? else {
+            return Ok(None);
+        };
         let mut index = store.load::<Vec<Vec<u8>>>(INDEX_KEY)?.unwrap_or_default();
         index.retain(|entry| entry.as_slice() != digest);
         let mut locks: LockMap = store.load(LOCKS_KEY)?.unwrap_or_default();
@@ -160,7 +262,8 @@ impl BlockchainEngine {
     }
 
     pub fn validate_object_reference(&self, reference: &ObjectRef) -> Result<()> {
-        self.state_read().validate_object_ref_exact(reference)?;
+        let state = self.state_read();
+        validate_object_ref_exact(&state, reference)?;
         Ok(())
     }
 }
