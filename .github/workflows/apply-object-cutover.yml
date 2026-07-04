@@ -37,6 +37,12 @@ jobs:
           set -o pipefail
           cargo fmt --all 2>&1 | tee object-cutover.log
 
+      - name: Build framework bytecode
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build -p kanari-framework-builder 2>&1 | tee -a object-cutover.log
+
       - name: Check protocol crates
         shell: bash
         run: |
