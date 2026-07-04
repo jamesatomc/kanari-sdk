@@ -9,12 +9,13 @@
 use crate::engine::BlockchainEngine;
 use anyhow::{Context, Result, ensure};
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
-use kanari_types::object::Owner;
+use kanari_types::object::{Owner, ObjectRef, compute_object_digest};
 use kanari_types::object_effects::{
     GasCostSummary, ObjectDelete, ObjectDeleteKind, ObjectTransactionEffectsV1, ObjectWrite,
     ObjectWriteKind, next_lamport_version,
 };
 use kanari_types::signed_object_transaction::SignedObjectTransaction;
+use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::{StructTag, TypeTag};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -69,6 +70,41 @@ fn digest_array(transaction: &SignedObjectTransaction) -> Result<[u8; 32]> {
         .map_err(|_| anyhow::anyhow!("Object transaction digest must contain 32 bytes"))
 }
 
+fn validate_address_owned_ref(
+    state: &kanari_move_runtime_v1::state::StateManager,
+    expected: &ObjectRef,
+    owner: AccountAddress,
+) -> Result<kanari_move_runtime_v1::changeset::CreatedObject> {
+    let object = state
+        .get_object(&expected.object_id.to_hex_literal())?
+        .ok_or_else(|| anyhow::anyhow!("Gas object {} does not exist", expected.object_id))?;
+    ensure!(
+        object.owner == owner,
+        "Gas owner {} does not own gas object {}",
+        owner.to_hex_literal(),
+        expected.object_id
+    );
+    let digest = compute_object_digest(
+        expected.object_id,
+        object.version,
+        &Owner::AddressOwner(owner),
+        &object.type_,
+        &object.data,
+        None,
+    )?;
+    let actual = ObjectRef::new(expected.object_id, object.version, digest);
+    ensure!(
+        actual == *expected,
+        "Gas object reference mismatch for {}: expected version {} digest {}, found version {} digest {}",
+        expected.object_id,
+        expected.version,
+        expected.digest,
+        actual.version,
+        actual.digest
+    );
+    Ok(object)
+}
+
 impl BlockchainEngine {
     /// Build deterministic gas effects without mutating state.
     ///
@@ -111,7 +147,7 @@ impl BlockchainEngine {
         let mut gas_objects = Vec::with_capacity(transaction.data.gas_data.payment.len());
         let mut total_balance = 0u64;
         for reference in &transaction.data.gas_data.payment {
-            let object = state.validate_address_owned_object_ref(reference, gas_owner)?;
+            let object = validate_address_owned_ref(&state, reference, gas_owner)?;
             total_balance = total_balance
                 .checked_add(parse_native_coin(&object.type_, &object.data)?)
                 .ok_or_else(|| anyhow::anyhow!("Combined gas balance overflow"))?;
@@ -179,6 +215,9 @@ mod tests {
     fn writes_native_coin_balance_in_place() {
         let mut data = vec![0u8; UID_SIZE + U64_SIZE];
         write_native_coin_balance(&mut data, 123).unwrap();
-        assert_eq!(parse_native_coin("0x2::coin::Coin<0x2::kanari::KANARI>", &data).unwrap(), 123);
+        assert_eq!(
+            parse_native_coin("0x2::coin::Coin<0x2::kanari::KANARI>", &data).unwrap(),
+            123
+        );
     }
 }
