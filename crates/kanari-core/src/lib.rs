@@ -5,6 +5,7 @@ pub mod blockchain;
 pub mod consensus;
 pub mod engine;
 pub mod object_mempool;
+pub mod object_transaction_engine;
 
 pub use consensus::{Checkpoint, DagVertex};
 pub use engine::{BlockchainEngine, CheckpointProductionInfo, CheckpointSyncData};
