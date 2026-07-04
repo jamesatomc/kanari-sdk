@@ -11,9 +11,7 @@
 use crate::changeset::CreatedObject;
 use crate::state::StateManager;
 use anyhow::{Result, ensure};
-use kanari_types::object::{
-    ObjectID, ObjectMetadata, ObjectRef, Owner, compute_object_digest,
-};
+use kanari_types::object::{ObjectID, ObjectMetadata, ObjectRef, Owner, compute_object_digest};
 use move_core_types::account_address::AccountAddress;
 
 fn metadata_key(object_id: ObjectID) -> Vec<u8> {
@@ -35,10 +33,6 @@ impl StateManager {
         metadata: &ObjectMetadata,
     ) -> Result<()> {
         self.save_internal(&metadata_key(metadata.id), metadata)
-    }
-
-    pub fn delete_object_protocol_metadata(&mut self, object_id: ObjectID) {
-        self.overlay.insert(metadata_key(object_id), None);
     }
 
     pub fn get_object_owner(&self, object_id: ObjectID) -> Result<Option<Owner>> {
@@ -145,7 +139,7 @@ mod tests {
             uid: Some(UIDRecord::new(id_address)),
             id: Some(IDRecord::new(id_address)),
             type_: "0x2::coin::Coin<0x2::kanari::KANARI>".to_string(),
-            data: vec![5; 40],
+            data: vec![0; 40],
             version,
         };
         let mut changes = crate::changeset::ChangeSet::new();
