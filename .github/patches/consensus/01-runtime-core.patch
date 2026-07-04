@@ -1,0 +1,142 @@
+--- /tmp/kanari-orig/move-execution/v1/kanari-move-runtime-v1/src/lib.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/move-execution/v1/kanari-move-runtime-v1/src/lib.rs	2026-07-04 16:49:38.652479721 +0000
+@@ -15,7 +15,9 @@
+ mod state_object_apply_helpers;
+ mod state_object_balance;
+ mod state_object_bootstrap;
++mod state_object_commit;
+ mod state_object_refs;
++mod state_object_root;
+ pub mod storage;
+ 
+ pub use changeset::ChangeSet;
+--- /tmp/kanari-orig/crates/kanari-core/src/engine/bootstrap.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-core/src/engine/bootstrap.rs	2026-07-04 16:54:18.240546176 +0000
+@@ -179,7 +179,7 @@
+         let dag_transaction_count: usize = dag_state
+             .checkpoints
+             .iter()
+-            .map(|checkpoint| checkpoint.transactions.len())
++            .map(|checkpoint| checkpoint.transactions.len() + checkpoint.object_transactions.len())
+             .sum();
+ 
+         let (current_height, current_transaction_count) = {
+--- /tmp/kanari-orig/crates/kanari-rpc-api/src/lib.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-rpc-api/src/lib.rs	2026-07-04 16:53:31.541594863 +0000
+@@ -5,6 +5,7 @@
+ //!
+ //! Defines request/response types and RPC methods for Kanari blockchain
+ use kanari_types::event::Event;
++use kanari_types::signed_object_transaction::SignedObjectTransaction;
+ use kanari_types::transaction::SignedTransaction;
+ use serde::{Deserialize, Serialize};
+ 
+@@ -169,7 +170,10 @@
+     pub state_root: String,
+     pub tx_count: usize,
+     pub events: Vec<Event>,
++    #[serde(default)]
+     pub transactions: Vec<SignedTransaction>,
++    #[serde(default)]
++    pub object_transactions: Vec<SignedObjectTransaction>,
+     pub vertices: Vec<String>,
+ }
+ 
+--- /dev/null	2026-07-04 14:58:27.355347198 +0000
++++ /tmp/kanari-cutover/move-execution/v1/kanari-move-runtime-v1/src/state_object_commit.rs	2026-07-04 16:49:37.550366744 +0000
+@@ -0,0 +1,30 @@
++// Copyright (c) KanariNetwork, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Atomic persistence for object state plus non-consensus bookkeeping.
++
++use crate::state::StateManager;
++use anyhow::Result;
++
++impl StateManager {
++    pub fn commit_object_transition(
++        &mut self,
++        mut auxiliary_updates: Vec<(Vec<u8>, Vec<u8>)>,
++        mut auxiliary_deletes: Vec<Vec<u8>>,
++    ) -> Result<()> {
++        for (key, value) in &self.overlay {
++            match value {
++                Some(value) => auxiliary_updates.push((key.clone(), value.clone())),
++                None => auxiliary_deletes.push(key.clone()),
++            }
++        }
++        auxiliary_updates.sort_by(|left, right| left.0.cmp(&right.0));
++        auxiliary_updates.dedup_by(|left, right| left.0 == right.0);
++        auxiliary_deletes.sort();
++        auxiliary_deletes.dedup();
++        self.store
++            .apply_raw_changes(&auxiliary_updates, &auxiliary_deletes)?;
++        self.overlay.clear();
++        Ok(())
++    }
++}
+--- /tmp/kanari-orig/crates/kanari-core/src/engine.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-core/src/engine.rs	2026-07-04 16:51:05.426938765 +0000
+@@ -205,14 +205,11 @@
+     }
+ 
+     fn checkpoint_without_transactions(checkpoint: &Checkpoint) -> Checkpoint {
+-        Checkpoint::new(
+-            checkpoint.sequence,
+-            checkpoint.vertices.clone(),
+-            Vec::new(),
+-            checkpoint.state_root.clone(),
+-            checkpoint.timestamp,
+-            checkpoint.prev_checkpoint_hash.clone(),
+-        )
++        let mut slim = checkpoint.clone();
++        // Legacy account payloads are externalized only for historical database
++        // compatibility. Object payloads remain canonical checkpoint contents.
++        slim.transactions = Vec::new().into();
++        slim
+     }
+ 
+     fn vertex_without_transactions(vertex: &DagVertex) -> DagVertex {
+@@ -1209,7 +1206,7 @@
+ 
+     pub fn produce_checkpoint(&self) -> Result<CheckpointProductionInfo> {
+         let dag_engine = self.dag_engine_instance()?;
+-        let has_pending_transactions = self.pending_transaction_len() > 0;
++        let has_pending_transactions = self.pending_object_transaction_len()? > 0;
+ 
+         if !has_pending_transactions {
+             anyhow::bail!("No new transactions to checkpoint");
+--- /tmp/kanari-orig/crates/kanari-core/src/object_command_effects.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-core/src/object_command_effects.rs	2026-07-04 16:49:04.232936982 +0000
+@@ -44,6 +44,31 @@
+ }
+ 
+ impl BlockchainEngine {
++    pub fn object_command_gas_units(
++        &self,
++        transaction: &SignedObjectTransaction,
++    ) -> Result<u64> {
++        let units = match &transaction.data.kind {
++            ObjectTransactionKind::Pay { coins, .. } => 100u64
++                .checked_add((coins.len() as u64).saturating_mul(10))
++                .ok_or_else(|| anyhow::anyhow!("Pay gas overflow"))?,
++            ObjectTransactionKind::TransferObjects { objects, .. } => 50u64
++                .checked_add((objects.len() as u64).saturating_mul(5))
++                .ok_or_else(|| anyhow::anyhow!("Transfer gas overflow"))?,
++            ObjectTransactionKind::MoveCall(_) => 500,
++            ObjectTransactionKind::Publish { modules, .. } => 1_000u64
++                .checked_add(modules.iter().map(|module| module.len() as u64).sum::<u64>() / 16)
++                .ok_or_else(|| anyhow::anyhow!("Publish gas overflow"))?,
++        };
++        ensure!(
++            units <= transaction.data.gas_data.budget,
++            "Required gas units {} exceed budget {}",
++            units,
++            transaction.data.gas_data.budget
++        );
++        Ok(units)
++    }
++
+     pub fn build_object_command_effects(
+         &self,
+         transaction: &SignedObjectTransaction,
