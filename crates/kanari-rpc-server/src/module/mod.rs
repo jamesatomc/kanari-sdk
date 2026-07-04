@@ -228,11 +228,29 @@ pub async fn handle_get_owned_objects(state: &RpcServerState, request: &RpcReque
                 continue;
             }
 
-            objects.push(build_object_info(uid, obj));
+            let object_id = match kanari_types::object::ObjectID::from_hex_literal(&uid) {
+                Ok(object_id) => object_id,
+                Err(error) => {
+                    return internal_error_response(request.id, error.to_string());
+                }
+            };
+            let reference = match state_guard.get_object_ref_exact(object_id) {
+                Ok(Some(reference)) => reference,
+                Ok(None) => continue,
+                Err(error) => {
+                    return internal_error_response(request.id, error.to_string());
+                }
+            };
+            objects.push(serde_json::json!({
+                "id": uid,
+                "owner": format!("{:#x}", obj.owner),
+                "type_": obj.type_,
+                "data": obj.data,
+                "version": obj.version,
+                "digest": reference.digest.to_hex(),
+            }));
         }
     }
-
-    let objects = aggregate_owned_objects(objects);
 
     // Return the filtered list of objects
     RpcResponse {

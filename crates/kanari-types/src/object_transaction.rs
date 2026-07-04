@@ -239,10 +239,22 @@ impl ObjectTransactionData {
             );
         }
         for gas in &self.gas_data.payment {
+            if ids.insert(gas.object_id) {
+                continue;
+            }
+            let shared_pay_coin = matches!(
+                &self.kind,
+                ObjectTransactionKind::Pay { coins, .. }
+                    if coins.iter().any(|coin| coin == gas)
+            );
             ensure!(
-                ids.insert(gas.object_id),
+                shared_pay_coin,
                 "Gas object {} is also used as a regular input",
                 gas.object_id
+            );
+            ensure!(
+                self.gas_data.owner == self.sender,
+                "A sponsored gas object cannot also be a payment coin"
             );
         }
 
@@ -322,19 +334,42 @@ mod tests {
     }
 
     #[test]
-    fn rejects_gas_object_reused_as_pay_coin() {
+    fn allows_sender_owned_pay_coin_to_fund_gas() {
         let sender = AccountAddress::from_hex_literal("0x1").unwrap();
-        let duplicate = object_ref("0x20", 3);
+        let shared = object_ref("0x20", 3);
         let transaction = ObjectTransactionData::new(
             sender,
             ObjectTransactionKind::Pay {
-                coins: vec![duplicate],
+                coins: vec![shared],
                 recipient: AccountAddress::from_hex_literal("0x2").unwrap(),
                 amount: 10,
             },
             GasData {
-                payment: vec![duplicate],
+                payment: vec![shared],
                 owner: sender,
+                price: 1,
+                budget: 100,
+            },
+            TransactionExpiration::None,
+        );
+        assert!(transaction.is_ok());
+    }
+
+    #[test]
+    fn rejects_sponsored_gas_reused_as_sender_pay_coin() {
+        let sender = AccountAddress::from_hex_literal("0x1").unwrap();
+        let sponsor = AccountAddress::from_hex_literal("0x3").unwrap();
+        let shared = object_ref("0x20", 3);
+        let transaction = ObjectTransactionData::new(
+            sender,
+            ObjectTransactionKind::Pay {
+                coins: vec![shared],
+                recipient: AccountAddress::from_hex_literal("0x2").unwrap(),
+                amount: 10,
+            },
+            GasData {
+                payment: vec![shared],
+                owner: sponsor,
                 price: 1,
                 budget: 100,
             },

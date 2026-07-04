@@ -15,7 +15,7 @@ use axum::{
 };
 use kanari_core::BlockchainEngine;
 use kanari_rpc_api::*;
-use kanari_types::transaction::SignedTransaction;
+use kanari_types::signed_object_transaction::SignedObjectTransaction;
 
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
@@ -41,7 +41,7 @@ pub mod nft;
 pub mod object_transaction;
 pub mod transaction;
 
-type TransactionBroadcaster = Arc<dyn Fn(SignedTransaction) -> Result<()> + Send + Sync>;
+type TransactionBroadcaster = Arc<dyn Fn(SignedObjectTransaction) -> Result<()> + Send + Sync>;
 
 /// RPC server state
 #[derive(Clone)]
@@ -60,7 +60,7 @@ impl RpcServerState {
 
     pub fn with_transaction_broadcaster(
         engine: Arc<BlockchainEngine>,
-        broadcaster: impl Fn(SignedTransaction) -> Result<()> + Send + Sync + 'static,
+        broadcaster: impl Fn(SignedObjectTransaction) -> Result<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
             engine,
@@ -68,7 +68,7 @@ impl RpcServerState {
         }
     }
 
-    pub fn broadcast_submitted_transaction(&self, signed_tx: SignedTransaction) {
+    pub fn broadcast_submitted_transaction(&self, signed_tx: SignedObjectTransaction) {
         if let Some(broadcaster) = &self.transaction_broadcaster
             && let Err(e) = broadcaster(signed_tx)
         {
@@ -168,9 +168,6 @@ async fn handle_rpc(
         object_transaction::SUBMIT_OBJECT_TRANSACTION => {
             object_transaction::submit(&state, &request).await
         }
-        object_transaction::EXECUTE_OBJECT_TRANSACTION => {
-            object_transaction::execute(&state, &request).await
-        }
         object_transaction::GET_PENDING_OBJECT_TRANSACTIONS => {
             object_transaction::pending(&state, &request).await
         }
@@ -254,7 +251,7 @@ pub async fn start_server(engine: Arc<BlockchainEngine>, addr: &str) -> Result<(
 pub async fn start_server_with_transaction_broadcaster(
     engine: Arc<BlockchainEngine>,
     addr: &str,
-    broadcaster: impl Fn(SignedTransaction) -> Result<()> + Send + Sync + 'static,
+    broadcaster: impl Fn(SignedObjectTransaction) -> Result<()> + Send + Sync + 'static,
 ) -> Result<()> {
     let state = RpcServerState::with_transaction_broadcaster(engine, broadcaster);
     let app = create_router(state);

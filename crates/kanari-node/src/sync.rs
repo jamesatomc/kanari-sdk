@@ -7,7 +7,7 @@ use crate::p2p::{
 };
 use kanari_core::{BlockchainEngine, CheckpointSyncData, DagVertex};
 use kanari_types::error::KanariError;
-use kanari_types::transaction::SignedTransaction;
+use kanari_types::signed_object_transaction::SignedObjectTransaction;
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -769,19 +769,18 @@ impl SyncManager {
     }
 
     async fn handle_new_transaction(&self, tx_data: String) {
-        if let Some(signed_tx) = Self::parse_message::<SignedTransaction>(&tx_data, "transaction") {
-            match self
-                .engine
-                .submit_transactions_batch(vec![signed_tx.clone()])
-            {
-                Ok(tx_hashes) => {
+        if let Some(signed_tx) =
+            Self::parse_message::<SignedObjectTransaction>(&tx_data, "object transaction")
+        {
+            match self.engine.submit_protocol_transaction(signed_tx) {
+                Ok(tx_hash) => {
                     info!(
-                        "Received transaction from network: 0x{}",
-                        hex::encode(&tx_hashes[0])
+                        "Received object transaction from network: 0x{}",
+                        hex::encode(tx_hash)
                     );
                 }
                 Err(e) => {
-                    warn!("Failed to submit transaction from network: {}", e);
+                    warn!("Failed to submit object transaction from network: {}", e);
                 }
             }
         }

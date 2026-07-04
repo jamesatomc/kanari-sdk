@@ -8,8 +8,20 @@
 use anyhow::{Context, Result};
 use kanari_rpc_api::*;
 use kanari_types::error::KanariUnwrapExt;
+use kanari_types::signed_object_transaction::SignedObjectTransaction;
 use reqwest::Client;
+use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ObjectRefInfo {
+    pub id: String,
+    pub owner: String,
+    pub type_: String,
+    pub data: Vec<u8>,
+    pub version: u64,
+    pub digest: String,
+}
 
 /// RPC client
 pub struct RpcClient {
@@ -108,6 +120,53 @@ impl RpcClient {
 
         let result = response.result.context("No result in response")?;
         serde_json::from_value(result).context("Failed to parse stats")
+    }
+
+    /// Get exact, unaggregated object references owned by an address.
+    pub async fn get_owned_object_refs(
+        &self,
+        owner: &str,
+        object_type: Option<String>,
+    ) -> Result<Vec<ObjectRefInfo>> {
+        let response = self
+            .request(
+                "kanari_getOwnedObjects",
+                serde_json::json!({ "owner": owner, "object_type": object_type }),
+            )
+            .await?;
+        let result = response.result.context("No result in response")?;
+        serde_json::from_value(
+            result
+                .get("objects")
+                .cloned()
+                .context("Owned object response is missing objects")?,
+        )
+        .context("Failed to parse exact owned object references")
+    }
+
+    pub async fn submit_object_transaction(
+        &self,
+        transaction: SignedObjectTransaction,
+    ) -> Result<TransactionStatus> {
+        let response = self
+            .request(
+                "kanari_submitObjectTransaction",
+                serde_json::to_value(transaction)?,
+            )
+            .await?;
+        let result = response.result.context("No result in response")?;
+        Ok(TransactionStatus {
+            hash: result["digest"]
+                .as_str()
+                .require("missing object transaction digest")?
+                .to_string(),
+            status: result["status"]
+                .as_str()
+                .unwrap_or("pending_consensus")
+                .to_string(),
+            block_height: None,
+            gas_used: None,
+        })
     }
 
     /// Submit signed transaction

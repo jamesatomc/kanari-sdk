@@ -80,21 +80,27 @@ fn validate_inputs(state: &StateManager, tx: &SignedObjectTransaction) -> Result
         state.validate_address_owned_object_ref(&reference, tx.data.sender)?;
     }
 
-    if let ObjectTransactionKind::Pay { coins, amount, .. } = &tx.data.kind {
-        let mut available = 0u64;
+    let mut pay_available = 0u64;
+    let mut pay_refs = BTreeMap::new();
+    let pay_amount = if let ObjectTransactionKind::Pay { coins, amount, .. } = &tx.data.kind {
         for reference in coins {
             let object = state.validate_address_owned_object_ref(reference, tx.data.sender)?;
-            available = available
-                .checked_add(native_coin_balance(&object.type_, &object.data)?)
+            let coin_balance = native_coin_balance(&object.type_, &object.data)?;
+            pay_available = pay_available
+                .checked_add(coin_balance)
                 .ok_or_else(|| anyhow::anyhow!("Pay coin balance overflow"))?;
+            pay_refs.insert(reference.object_id, (*reference, coin_balance));
         }
         ensure!(
-            available >= *amount,
+            pay_available >= *amount,
             "Insufficient payment coin balance: need {}, found {}",
             amount,
-            available
+            pay_available
         );
-    }
+        Some(*amount)
+    } else {
+        None
+    };
 
     let required = tx
         .data
@@ -102,17 +108,47 @@ fn validate_inputs(state: &StateManager, tx: &SignedObjectTransaction) -> Result
         .budget
         .checked_mul(tx.data.gas_data.price)
         .ok_or_else(|| anyhow::anyhow!("Gas fee overflow"))?;
-    let mut available = 0u64;
+    let mut gas_available = 0u64;
+    let mut shared_balance = 0u64;
     for payment in &tx.data.gas_data.payment {
         let object = state.validate_address_owned_object_ref(payment, tx.data.gas_data.owner)?;
-        available = available
-            .checked_add(native_coin_balance(&object.type_, &object.data)?)
+        let coin_balance = native_coin_balance(&object.type_, &object.data)?;
+        gas_available = gas_available
+            .checked_add(coin_balance)
             .ok_or_else(|| anyhow::anyhow!("Gas balance overflow"))?;
+        if let Some((pay_ref, balance)) = pay_refs.get(&payment.object_id) {
+            ensure!(
+                pay_ref == payment,
+                "Pay and gas references disagree for the same object"
+            );
+            shared_balance = shared_balance
+                .checked_add(*balance)
+                .ok_or_else(|| anyhow::anyhow!("Shared coin balance overflow"))?;
+        }
     }
     ensure!(
-        available >= required,
-        "Insufficient gas coin balance: need {required}, found {available}"
+        gas_available >= required,
+        "Insufficient gas coin balance: need {required}, found {gas_available}"
     );
+    if let Some(amount) = pay_amount
+        && shared_balance > 0
+    {
+        ensure!(
+            tx.data.gas_data.owner == tx.data.sender,
+            "Sponsored gas cannot overlap payment coins"
+        );
+        let union_available = pay_available
+            .checked_add(gas_available)
+            .and_then(|value| value.checked_sub(shared_balance))
+            .ok_or_else(|| anyhow::anyhow!("Combined payment and gas balance overflow"))?;
+        let required_total = amount
+            .checked_add(required)
+            .ok_or_else(|| anyhow::anyhow!("Combined payment and gas requirement overflow"))?;
+        ensure!(
+            union_available >= required_total,
+            "Insufficient shared payment/gas balance: need {required_total}, found {union_available}"
+        );
+    }
     Ok(())
 }
 
