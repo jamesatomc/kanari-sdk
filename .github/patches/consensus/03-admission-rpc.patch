@@ -1,0 +1,127 @@
+--- /tmp/kanari-orig/crates/kanari-core/src/object_command_executor.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-core/src/object_command_executor.rs	2026-07-04 16:51:28.872749324 +0000
+@@ -2,11 +2,12 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ use crate::engine::BlockchainEngine;
+-use anyhow::{Context, Result};
+-use kanari_types::object_transaction::ObjectTransactionKind;
++use anyhow::Result;
+ use kanari_types::signed_object_transaction::SignedObjectTransaction;
+ 
+ impl BlockchainEngine {
++    /// Canonical object transaction admission. Execution is performed only by
++    /// the Mysticeti checkpoint path after deterministic ordering.
+     pub fn submit_protocol_transaction(
+         &self,
+         transaction: SignedObjectTransaction,
+@@ -26,45 +27,4 @@
+         }
+         self.submit_object_transaction(transaction)
+     }
+-
+-    pub fn execute_submitted_object_command(
+-        &self,
+-        digest: &[u8],
+-        gas_used: u64,
+-    ) -> Result<kanari_types::object_effects::ObjectTransactionEffectsV1> {
+-        let transaction = self
+-            .pending_object_transactions()?
+-            .into_iter()
+-            .find(|transaction| transaction.digest().ok().as_deref() == Some(digest))
+-            .ok_or_else(|| anyhow::anyhow!("Pending object transaction was not found"))?;
+-
+-        match &transaction.data.kind {
+-            ObjectTransactionKind::Pay { .. } | ObjectTransactionKind::TransferObjects { .. } => {}
+-            _ => anyhow::bail!("Submitted transaction is not a direct object command"),
+-        }
+-
+-        let effects = match self.build_object_command_effects(&transaction, gas_used) {
+-            Ok(effects) => effects,
+-            Err(error) => {
+-                self.release_object_transaction(digest)?;
+-                return Err(error);
+-            }
+-        };
+-        if let Err(error) = self.state_write().apply_object_effects(&effects) {
+-            self.release_object_transaction(digest)?;
+-            return Err(error).context("Failed to apply object command effects");
+-        }
+-        self.finalize_object_transaction(digest)?
+-            .ok_or_else(|| anyhow::anyhow!("Object transaction disappeared before finalization"))?;
+-        Ok(effects)
+-    }
+-
+-    pub fn execute_object_command_now(
+-        &self,
+-        transaction: SignedObjectTransaction,
+-        gas_used: u64,
+-    ) -> Result<kanari_types::object_effects::ObjectTransactionEffectsV1> {
+-        let digest = self.submit_protocol_transaction(transaction)?;
+-        self.execute_submitted_object_command(&digest, gas_used)
+-    }
+ }
+--- /tmp/kanari-orig/crates/kanari-rpc-server/src/object_transaction.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-rpc-server/src/object_transaction.rs	2026-07-04 16:51:38.447675446 +0000
+@@ -4,26 +4,19 @@
+ use super::{RpcRequest, RpcResponse, RpcServerState};
+ use crate::{internal_error_response, invalid_params_response, respond_with_serialize};
+ use kanari_types::signed_object_transaction::SignedObjectTransaction;
+-use serde::{Deserialize, Serialize};
++use serde::Serialize;
+ 
+ pub const SUBMIT_OBJECT_TRANSACTION: &str = "kanari_submitObjectTransaction";
+-pub const EXECUTE_OBJECT_TRANSACTION: &str = "kanari_executeObjectTransaction";
+ pub const GET_PENDING_OBJECT_TRANSACTIONS: &str = "kanari_getPendingObjectTransactions";
+ 
+-#[derive(Debug, Deserialize)]
+-struct ExecuteRequest {
+-    digest: String,
+-    gas_used: u64,
+-}
+-
+ #[derive(Debug, Serialize)]
+ struct SubmitResponse {
+     digest: String,
++    status: &'static str,
+ }
+ 
+ pub async fn submit(state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
+-    let transaction: SignedObjectTransaction = match serde_json::from_value(request.params.clone())
+-    {
++    let transaction: SignedObjectTransaction = match serde_json::from_value(request.params.clone()) {
+         Ok(transaction) => transaction,
+         Err(error) => return invalid_params_response(request.id, error.to_string()),
+     };
+@@ -32,30 +25,13 @@
+             request.id,
+             SubmitResponse {
+                 digest: format!("0x{}", hex::encode(digest)),
++                status: "pending_consensus",
+             },
+         ),
+         Err(error) => invalid_params_response(request.id, error.to_string()),
+     }
+ }
+ 
+-pub async fn execute(state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
+-    let input: ExecuteRequest = match serde_json::from_value(request.params.clone()) {
+-        Ok(input) => input,
+-        Err(error) => return invalid_params_response(request.id, error.to_string()),
+-    };
+-    let digest = match hex::decode(input.digest.trim_start_matches("0x")) {
+-        Ok(digest) => digest,
+-        Err(error) => return invalid_params_response(request.id, error.to_string()),
+-    };
+-    match state
+-        .engine
+-        .execute_submitted_object_command(&digest, input.gas_used)
+-    {
+-        Ok(effects) => respond_with_serialize(request.id, effects),
+-        Err(error) => internal_error_response(request.id, error.to_string()),
+-    }
+-}
+-
+ pub async fn pending(state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
+     match state.engine.pending_object_transactions() {
+         Ok(transactions) => respond_with_serialize(request.id, transactions),
