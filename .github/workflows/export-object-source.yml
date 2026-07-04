@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - object-centric
+  pull_request:
+    branches:
+      - kanari-sdk
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: export-object-source
+  group: export-object-source-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
