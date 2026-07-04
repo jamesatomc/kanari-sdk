@@ -1,0 +1,148 @@
+--- /tmp/kanari-orig/crates/kanari-node/src/sync.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-node/src/sync.rs	2026-07-04 16:52:44.897838310 +0000
+@@ -7,7 +7,7 @@
+ };
+ use kanari_core::{BlockchainEngine, CheckpointSyncData, DagVertex};
+ use kanari_types::error::KanariError;
+-use kanari_types::transaction::SignedTransaction;
++use kanari_types::signed_object_transaction::SignedObjectTransaction;
+ use serde::de::DeserializeOwned;
+ use std::collections::{BTreeMap, VecDeque};
+ use std::sync::{Arc, Mutex};
+@@ -769,19 +769,16 @@
+     }
+ 
+     async fn handle_new_transaction(&self, tx_data: String) {
+-        if let Some(signed_tx) = Self::parse_message::<SignedTransaction>(&tx_data, "transaction") {
+-            match self
+-                .engine
+-                .submit_transactions_batch(vec![signed_tx.clone()])
+-            {
+-                Ok(tx_hashes) => {
++        if let Some(signed_tx) = Self::parse_message::<SignedObjectTransaction>(&tx_data, "object transaction") {
++            match self.engine.submit_protocol_transaction(signed_tx) {
++                Ok(tx_hash) => {
+                     info!(
+-                        "Received transaction from network: 0x{}",
+-                        hex::encode(&tx_hashes[0])
++                        "Received object transaction from network: 0x{}",
++                        hex::encode(tx_hash)
+                     );
+                 }
+                 Err(e) => {
+-                    warn!("Failed to submit transaction from network: {}", e);
++                    warn!("Failed to submit object transaction from network: {}", e);
+                 }
+             }
+         }
+--- /dev/null	2026-07-04 14:58:27.355347198 +0000
++++ /tmp/kanari-cutover/move-execution/v1/kanari-move-runtime-v1/src/state_object_root.rs	2026-07-04 16:48:52.452097644 +0000
+@@ -0,0 +1,51 @@
++// Copyright (c) KanariNetwork, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++//! Canonical account-free root for object protocol checkpoints.
++
++use crate::state::StateManager;
++use anyhow::{Context, Result};
++use std::collections::BTreeMap;
++
++fn included(key: &[u8]) -> bool {
++    key.starts_with(b"object:")
++        || key.starts_with(b"owned_objects:")
++        || key.starts_with(b"df:")
++        || key.starts_with(b"system:")
++        || key.starts_with(b"supply:")
++        || key.starts_with(b"treasury:")
++        || key.starts_with(b"nft:")
++        || key.starts_with(b"collection_members:")
++        || key.starts_with(b"metadata_")
++        || key == b"total_supply"
++        || key == b"global_token_supplies"
++        || key == b"treasury_index"
++        || key == b"nft_collection_index"
++        || key == b"object_locked_coin_records"
++}
++
++impl StateManager {
++    pub fn compute_object_state_root(&self) -> Result<Vec<u8>> {
++        let mut entries: BTreeMap<Vec<u8>, Vec<u8>> = self
++            .store
++            .logical_entries()
++            .context("Failed to read object state entries")?
++            .into_iter()
++            .filter(|(key, _)| included(key))
++            .collect();
++        for (key, value) in &self.overlay {
++            if !included(key) {
++                continue;
++            }
++            match value {
++                Some(value) => {
++                    entries.insert(key.clone(), value.clone());
++                }
++                None => {
++                    entries.remove(key);
++                }
++            }
++        }
++        Ok(smt::compute_sparse_root(&entries.into_iter().collect::<Vec<_>>()).to_vec())
++    }
++}
+--- /tmp/kanari-orig/crates/kanari-rpc-server/src/lib.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-rpc-server/src/lib.rs	2026-07-04 16:52:28.292214871 +0000
+@@ -15,7 +15,7 @@
+ };
+ use kanari_core::BlockchainEngine;
+ use kanari_rpc_api::*;
+-use kanari_types::transaction::SignedTransaction;
++use kanari_types::signed_object_transaction::SignedObjectTransaction;
+ 
+ use std::sync::Arc;
+ use tower_http::cors::{Any, CorsLayer};
+@@ -41,7 +41,7 @@
+ pub mod object_transaction;
+ pub mod transaction;
+ 
+-type TransactionBroadcaster = Arc<dyn Fn(SignedTransaction) -> Result<()> + Send + Sync>;
++type TransactionBroadcaster = Arc<dyn Fn(SignedObjectTransaction) -> Result<()> + Send + Sync>;
+ 
+ /// RPC server state
+ #[derive(Clone)]
+@@ -60,7 +60,7 @@
+ 
+     pub fn with_transaction_broadcaster(
+         engine: Arc<BlockchainEngine>,
+-        broadcaster: impl Fn(SignedTransaction) -> Result<()> + Send + Sync + 'static,
++        broadcaster: impl Fn(SignedObjectTransaction) -> Result<()> + Send + Sync + 'static,
+     ) -> Self {
+         Self {
+             engine,
+@@ -68,7 +68,7 @@
+         }
+     }
+ 
+-    pub fn broadcast_submitted_transaction(&self, signed_tx: SignedTransaction) {
++    pub fn broadcast_submitted_transaction(&self, signed_tx: SignedObjectTransaction) {
+         if let Some(broadcaster) = &self.transaction_broadcaster
+             && let Err(e) = broadcaster(signed_tx)
+         {
+@@ -168,9 +168,6 @@
+         object_transaction::SUBMIT_OBJECT_TRANSACTION => {
+             object_transaction::submit(&state, &request).await
+         }
+-        object_transaction::EXECUTE_OBJECT_TRANSACTION => {
+-            object_transaction::execute(&state, &request).await
+-        }
+         object_transaction::GET_PENDING_OBJECT_TRANSACTIONS => {
+             object_transaction::pending(&state, &request).await
+         }
+@@ -254,7 +251,7 @@
+ pub async fn start_server_with_transaction_broadcaster(
+     engine: Arc<BlockchainEngine>,
+     addr: &str,
+-    broadcaster: impl Fn(SignedTransaction) -> Result<()> + Send + Sync + 'static,
++    broadcaster: impl Fn(SignedObjectTransaction) -> Result<()> + Send + Sync + 'static,
+ ) -> Result<()> {
+     let state = RpcServerState::with_transaction_broadcaster(engine, broadcaster);
+     let app = create_router(state);
