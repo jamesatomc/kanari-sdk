@@ -4,18 +4,25 @@
 //! Object-reference and protocol-metadata support for `StateManager`.
 //!
 //! Legacy object rows are interpreted as address-owned objects. New
-//! object-centric writes persist an `ObjectMetadata` sidecar under the
-//! canonical `system:` prefix, so owner variants, digest and previous
-//! transaction survive restart and participate in the state root.
+//! object-centric writes persist metadata under the canonical `system:` prefix,
+//! so owner variants, digests, previous transactions and tombstones survive
+//! restart and participate in the state root.
 
 use crate::changeset::CreatedObject;
 use crate::state::StateManager;
 use anyhow::{Result, ensure};
 use kanari_types::object::{ObjectID, ObjectMetadata, ObjectRef, Owner, compute_object_digest};
+use kanari_types::object_effects::ObjectTombstone;
 use move_core_types::account_address::AccountAddress;
 
 fn metadata_key(object_id: ObjectID) -> Vec<u8> {
     let mut key = b"system:object_metadata:".to_vec();
+    key.extend_from_slice(object_id.to_hex_literal().as_bytes());
+    key
+}
+
+fn tombstone_key(object_id: ObjectID) -> Vec<u8> {
+    let mut key = b"system:object_tombstone:".to_vec();
     key.extend_from_slice(object_id.to_hex_literal().as_bytes());
     key
 }
@@ -33,6 +40,23 @@ impl StateManager {
         metadata: &ObjectMetadata,
     ) -> Result<()> {
         self.save_internal(&metadata_key(metadata.id), metadata)
+    }
+
+    pub fn get_object_tombstone(
+        &self,
+        object_id: ObjectID,
+    ) -> Result<Option<ObjectTombstone>> {
+        self.load_internal(&tombstone_key(object_id))
+    }
+
+    pub fn save_object_tombstone(&mut self, tombstone: &ObjectTombstone) -> Result<()> {
+        self.save_internal(&tombstone_key(tombstone.object_ref.object_id), tombstone)
+    }
+
+    pub fn object_id_has_history(&self, object_id: ObjectID) -> Result<bool> {
+        Ok(self.get_object_protocol_metadata(object_id)?.is_some()
+            || self.get_object_tombstone(object_id)?.is_some()
+            || self.get_object(&object_id.to_hex_literal())?.is_some())
     }
 
     pub fn get_object_owner(&self, object_id: ObjectID) -> Result<Option<Owner>> {
@@ -127,6 +151,7 @@ mod tests {
     use super::*;
     use crate::changeset::CreatedObject;
     use kanari_types::object::{IDRecord, UIDRecord};
+    use kanari_types::object_effects::{ObjectDeleteKind, ObjectTombstone};
 
     fn insert_test_object(
         state: &mut StateManager,
@@ -207,5 +232,19 @@ mod tests {
             state.get_object_ref_exact(id).unwrap().unwrap(),
             metadata.object_ref()
         );
+    }
+
+    #[test]
+    fn tombstone_reserves_consumed_object_id() {
+        let id = ObjectID::from_hex_literal("0x1234").unwrap();
+        let mut state = StateManager::new_in_memory();
+        let tombstone = ObjectTombstone {
+            object_ref: ObjectRef::new(id, 1, kanari_types::object::ObjectDigest([4; 32])),
+            deletion_transaction: [5; 32],
+            kind: ObjectDeleteKind::Deleted,
+        };
+        state.save_object_tombstone(&tombstone).unwrap();
+        state.commit().unwrap();
+        assert!(state.object_id_has_history(id).unwrap());
     }
 }
