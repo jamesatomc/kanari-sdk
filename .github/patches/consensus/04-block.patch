@@ -1,0 +1,96 @@
+--- /tmp/kanari-orig/crates/kanari-types/src/block.rs	2026-07-04 16:39:16.000000000 +0000
++++ /tmp/kanari-cutover/crates/kanari-types/src/block.rs	2026-07-04 16:53:56.429547905 +0000
+@@ -9,7 +9,10 @@
+ // use fully-qualified paths for time APIs to avoid unused-import warnings
+ use tracing::error;
+ 
+-use crate::{event::Event, transaction::SignedTransaction};
++use crate::{
++    event::Event, signed_object_transaction::SignedObjectTransaction,
++    transaction::SignedTransaction,
++};
+ 
+ /// Block header containing metadata
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+@@ -57,7 +60,10 @@
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct Block {
+     pub header: BlockHeader,
++    #[serde(default)]
+     pub transactions: Vec<SignedTransaction>,
++    #[serde(default)]
++    pub object_transactions: Vec<SignedObjectTransaction>,
+     pub events: Vec<Event>,
+ }
+ 
+@@ -88,6 +94,35 @@
+         Self {
+             header,
+             transactions,
++            object_transactions: Vec::new(),
++            events,
++        }
++    }
++
++    pub fn new_object(
++        height: u64,
++        prev_hash: Vec<u8>,
++        state_root: Vec<u8>,
++        object_transactions: Vec<SignedObjectTransaction>,
++        events: Vec<Event>,
++        timestamp: u64,
++    ) -> Self {
++        let tx_hashes = object_transactions
++            .iter()
++            .map(|transaction| transaction.digest().unwrap_or_default())
++            .collect::<Vec<_>>();
++        let header = BlockHeader::new(
++            height,
++            prev_hash,
++            state_root,
++            compute_transaction_merkle_root(&tx_hashes),
++            object_transactions.len(),
++            timestamp,
++        );
++        Self {
++            header,
++            transactions: Vec::new(),
++            object_transactions,
+             events,
+         }
+     }
+@@ -142,7 +177,7 @@
+         }
+ 
+         // Verify transaction count matches header
+-        if self.transactions.len() != self.header.tx_count {
++        if self.transactions.len() + self.object_transactions.len() != self.header.tx_count {
+             anyhow::bail!(
+                 "Transaction count mismatch: header says {}, actual {}",
+                 self.header.tx_count,
+@@ -151,7 +186,12 @@
+         }
+ 
+         // Verify merkle root
+-        let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(|tx| tx.hash()).collect();
++        let mut tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(|tx| tx.hash()).collect();
++        tx_hashes.extend(
++            self.object_transactions
++                .iter()
++                .map(|tx| tx.digest().unwrap_or_default()),
++        );
+         let computed_merkle_root = compute_transaction_merkle_root(&tx_hashes);
+         if self.header.merkle_root != computed_merkle_root {
+             anyhow::bail!(
+@@ -177,6 +217,11 @@
+                 anyhow::bail!("Transaction {} has empty hash", i);
+             }
+         }
++        for (i, signed_tx) in self.object_transactions.iter().enumerate() {
++            signed_tx.verify().map_err(|error| {
++                anyhow::anyhow!("Invalid object transaction {}: {}", i, error)
++            })?;
++        }
+ 
+         Ok(())
+     }
