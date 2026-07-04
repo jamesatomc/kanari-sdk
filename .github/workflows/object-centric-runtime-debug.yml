@@ -1,9 +1,6 @@
 name: Object Runtime Reference Debug
 
 on:
-  push:
-    branches:
-      - object-centric
   pull_request:
     branches:
       - kanari-sdk
@@ -33,16 +30,16 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Run object reference tests
+      - name: Run object state tests
         shell: bash
         run: |
           set -o pipefail
-          cargo test -p kanari-move-runtime-v1 --lib object_ref -- --nocapture 2>&1 | tee object-ref-test.log
+          cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture 2>&1 | tee object-state-test.log
 
       - name: Upload test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: object-ref-test-log
-          path: object-ref-test.log
+          name: object-state-test-log
+          path: object-state-test.log
           if-no-files-found: error
