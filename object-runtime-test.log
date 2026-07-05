@@ -1,0 +1,235 @@
+[1m[92m   Compiling[0m libm v0.2.16
+[1m[92m   Compiling[0m foldhash v0.1.5
+[1m[92m   Compiling[0m allocator-api2 v0.2.21
+[1m[92m   Compiling[0m smallvec v1.15.2
+[1m[92m   Compiling[0m sha2 v0.11.0
+[1m[92m   Compiling[0m log v0.4.33
+[1m[92m   Compiling[0m siphasher v1.0.3
+[1m[92m   Compiling[0m dirs-sys-next v0.1.2
+[1m[92m   Compiling[0m phf_shared v0.14.0
+[1m[92m   Compiling[0m filetime v0.2.29
+[1m[92m   Compiling[0m hashbrown v0.15.5
+[1m[92m   Compiling[0m same-file v1.0.6
+[1m[92m   Compiling[0m fixedbitset v0.5.7
+[1m[92m   Compiling[0m phf v0.14.0
+[1m[92m   Compiling[0m walkdir v2.5.0
+[1m[92m   Compiling[0m vfs v0.13.0
+[1m[92m   Compiling[0m dirs-next v2.0.0
+[1m[92m   Compiling[0m difference v2.0.0
+[1m[92m   Compiling[0m scopeguard v1.2.0
+[1m[92m   Compiling[0m lock_api v0.4.14
+[1m[92m   Compiling[0m move-symbol-pool v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-symbol-pool)
+[1m[92m   Compiling[0m petgraph v0.8.3
+[1m[92m   Compiling[0m parking_lot_core v0.9.12
+[1m[92m   Compiling[0m utf8parse v0.2.2
+[1m[92m   Compiling[0m termcolor v1.4.1
+[1m[92m   Compiling[0m num-traits v0.2.19
+[1m[92m   Compiling[0m anstyle-parse v1.0.0
+[1m[92m   Compiling[0m anstyle v1.0.14
+[1m[92m   Compiling[0m colorchoice v1.0.5
+[1m[92m   Compiling[0m is_terminal_polyfill v1.70.2
+[1m[92m   Compiling[0m move-abstract-stack v0.0.1 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-abstract-stack)
+[1m[92m   Compiling[0m move-borrow-graph v0.0.1 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-borrow-graph)
+[1m[92m   Compiling[0m unicode-width v0.2.2
+[1m[92m   Compiling[0m anstyle-query v1.1.5
+[1m[92m   Compiling[0m anstream v1.0.0
+[1m[92m   Compiling[0m codespan-reporting v0.13.1
+[1m[92m   Compiling[0m clap_lex v1.1.0
+[1m[92m   Compiling[0m num-integer v0.1.46
+[1m[92m   Compiling[0m num-complex v0.4.6
+[1m[92m   Compiling[0m strsim v0.11.1
+[1m[92m   Compiling[0m aho-corasick v1.1.4
+[1m[92m   Compiling[0m num-iter v0.1.45
+[1m[92m   Compiling[0m num-bigint v0.4.8
+[1m[92m   Compiling[0m clap_builder v4.6.0
+[1m[92m   Compiling[0m bitflags v2.13.0
+[1m[92m   Compiling[0m aliasable v0.1.3
+[1m[92m   Compiling[0m regex-syntax v0.8.11
+[1m[92m   Compiling[0m linux-raw-sys v0.12.1
+[1m[92m   Compiling[0m ouroboros v0.18.5
+[1m[92m   Compiling[0m psm v0.1.31
+[1m[92m   Compiling[0m sha2 v0.10.9
+[1m[92m   Compiling[0m fastrand v2.4.1
+[1m[92m   Compiling[0m stacker v0.1.24
+[1m[92m   Compiling[0m rustix v1.1.4
+[1m[92m   Compiling[0m codespan v0.13.1
+[1m[92m   Compiling[0m num-rational v0.4.2
+[1m[92m   Compiling[0m winnow v1.0.3
+[1m[92m   Compiling[0m colored v3.1.1
+[1m[92m   Compiling[0m num v0.4.3
+[1m[92m   Compiling[0m move-core-types v0.0.4 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-core-types)
+[1m[92m   Compiling[0m hashbrown v0.14.5
+[1m[92m   Compiling[0m dunce v1.0.5
+[1m[92m   Compiling[0m similar v3.1.1
+[1m[92m   Compiling[0m clap v4.6.1
+[1m[92m   Compiling[0m regex-automata v0.4.14
+[1m[92m   Compiling[0m dashmap v5.5.3
+[1m[92m   Compiling[0m toml_parser v1.1.2+spec-1.1.0
+[1m[92m   Compiling[0m move-binary-format v0.0.3 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-binary-format)
+[1m[92m   Compiling[0m move-command-line-common v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-command-line-common)
+[1m[92m   Compiling[0m tempfile v3.27.0
+[1m[92m   Compiling[0m ahash v0.8.12
+[1m[92m   Compiling[0m move-ir-types v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-ir-types)
+[1m[92m   Compiling[0m toml_datetime v1.1.1+spec-1.1.0
+[1m[92m   Compiling[0m either v1.16.0
+[1m[92m   Compiling[0m move-ir-to-bytecode-syntax v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-ir-to-bytecode-syntax)
+[1m[92m   Compiling[0m toml_writer v1.1.1+spec-1.1.0
+[1m[92m   Compiling[0m internment v0.8.6
+[1m[92m   Compiling[0m itertools v0.15.0
+[1m[92m   Compiling[0m spin v0.9.8
+[1m[92m   Compiling[0m regex v1.12.4
+[1m[92m   Compiling[0m lazy_static v1.5.0
+[1m[92m   Compiling[0m toml v1.1.2+spec-1.1.0
+[1m[92m   Compiling[0m k256 v0.13.4
+[1m[92m   Compiling[0m move-vm-config v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-vm-config)
+[1m[92m   Compiling[0m move-bytecode-source-map v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-bytecode-source-map)
+[1m[92m   Compiling[0m bs58 v0.5.1
+[1m[92m   Compiling[0m move-bytecode-verifier-meter v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-bytecode-verifier-meter)
+[1m[92m   Compiling[0m move-bytecode-verifier v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-bytecode-verifier)
+[1m[92m   Compiling[0m move-ir-to-bytecode v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-ir-to-bytecode)
+[1m[92m   Compiling[0m move-coverage v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-coverage)
+[1m[92m   Compiling[0m parking_lot v0.12.5
+[1m[92m   Compiling[0m bitmaps v2.1.0
+[1m[92m   Compiling[0m chrono v0.4.45
+[1m[92m   Compiling[0m thiserror v1.0.69
+[1m[92m   Compiling[0m move-compiler v0.0.1 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-compiler)
+[1m[92m   Compiling[0m bip32 v0.5.3
+[1m[92m   Compiling[0m sized-chunks v0.6.5
+[1m[92m   Compiling[0m ed25519-dalek v2.2.0
+[1m[92m   Compiling[0m move-vm-profiler v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-vm-profiler)
+[1m[92m   Compiling[0m p256 v0.13.2
+[1m[92m   Compiling[0m typeid v1.0.3
+[1m[92m   Compiling[0m rand_xoshiro v0.6.0
+[1m[92m   Compiling[0m num_threads v0.1.7
+[1m[92m   Compiling[0m powerfmt v0.2.0
+[1m[92m   Compiling[0m time-core v0.1.9
+[1m[92m   Compiling[0m num-conv v0.2.2
+[1m[92m   Compiling[0m deranged v0.5.8
+[1m[92m   Compiling[0m sponge-cursor v0.1.0
+[1m[92m   Compiling[0m sha3 v0.12.0
+[1m[92m   Compiling[0m kanari-crypto v0.1.8 (/home/runner/work/kanari-sdk/kanari-sdk/crates/kanari-crypto)
+[1m[92m   Compiling[0m im v15.1.0
+[1m[92m   Compiling[0m erased-discriminant v1.0.1
+[1m[92m   Compiling[0m better_any v0.2.1
+[1m[92m   Compiling[0m move-vm-types v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-vm-types)
+[1m[92m   Compiling[0m move-read-write-set-types v0.0.3 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-read-write-set-types)
+[1m[92m   Compiling[0m fail v0.5.1
+[1m[92m   Compiling[0m time v0.3.53
+[1m[92m   Compiling[0m move-vm-runtime v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-vm-runtime)
+[1m[92m   Compiling[0m serde-reflection v0.6.0
+[1m[92m   Compiling[0m secp256k1-sys v0.11.0
+[1m[92m   Compiling[0m num-bigint-dig v0.8.6
+[1m[92m   Compiling[0m pkcs1 v0.7.5
+[1m[92m   Compiling[0m unty v0.0.4
+[1m[92m   Compiling[0m kanari-types v0.1.8 (/home/runner/work/kanari-sdk/kanari-sdk/crates/kanari-types)
+[1m[92m   Compiling[0m move-bytecode-utils v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-bytecode-utils)
+[1m[92m   Compiling[0m bincode v2.0.1
+[1m[92m   Compiling[0m simplelog v0.12.2
+[1m[92m   Compiling[0m rsa v0.9.10
+[1m[92m   Compiling[0m secp256k1 v0.31.1
+[1m[92m   Compiling[0m named-lock v0.4.1
+[1m[92m   Compiling[0m toml_edit v0.25.12+spec-1.1.0
+[1m[92m   Compiling[0m blake2b_simd v1.0.4
+[1m[92m   Compiling[0m ripemd v0.2.0
+[1m[92m   Compiling[0m whoami v2.1.2
+[1m[92m   Compiling[0m treeline v0.1.0
+[1m[92m   Compiling[0m kanari-system-natives v0.1.8 (/home/runner/work/kanari-sdk/kanari-sdk/crates/kanari-system-natives)
+[1m[92m   Compiling[0m move-stdlib-natives v0.1.1 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-stdlib-natives)
+[1m[92m   Compiling[0m move-disassembler v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-disassembler)
+[1m[92m   Compiling[0m move-model v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-model)
+[1m[92m   Compiling[0m move-docgen v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-docgen)
+[1m[92m   Compiling[0m move-stackless-bytecode v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-stackless-bytecode)
+[1m[92m   Compiling[0m move-errmapgen v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-errmapgen)
+[1m[92m   Compiling[0m move-package v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-package)
+[1m[92m   Compiling[0m move-prover v0.1.0 (/home/runner/work/kanari-sdk/kanari-sdk/third_party/move/crates/move-prover)
+[1m[92m   Compiling[0m kanari-frameworks v0.1.8 (/home/runner/work/kanari-sdk/kanari-sdk/crates/kanari-frameworks)
+[1m[92m   Compiling[0m kanari-move-runtime-v1 v0.1.8 (/home/runner/work/kanari-sdk/kanari-sdk/move-execution/v1/kanari-move-runtime-v1)
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+   [1m[94m--> [0mmove-execution/v1/kanari-move-runtime-v1/src/move_runtime/mod.rs:948:33
+    [1m[94m|[0m
+[1m[94m948[0m [1m[94m|[0m                     if let Some(mut stored_obj) = self.object_storage.get_object(&object_id) {
+    [1m[94m|[0m                                 [1m[94m----[0m[1m[33m^^^^^^^^^^[0m
+    [1m[94m|[0m                                 [1m[94m|[0m
+    [1m[94m|[0m                                 [1m[94mhelp: remove this `mut`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `struct_tag`[0m
+   [1m[94m--> [0mmove-execution/v1/kanari-move-runtime-v1/src/move_runtime/mod.rs:940:49
+    [1m[94m|[0m
+[1m[94m940[0m [1m[94m|[0m                     && let Some(TypeTag::Struct(struct_tag)) = type_tag_for_param(param_type)
+    [1m[94m|[0m                                                 [1m[33m^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_struct_tag`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: method `get_coins_by_type_and_owner` is never used[0m
+  [1m[94m--> [0mmove-execution/v1/kanari-move-runtime-v1/src/storage/object_storage.rs:56:8
+   [1m[94m|[0m
+[1m[94m48[0m [1m[94m|[0m pub trait ObjectStore: Send + Sync {
+   [1m[94m|[0m           [1m[94m-----------[0m [1m[94mmethod in this trait[0m
+[1m[94m...[0m
+[1m[94m56[0m [1m[94m|[0m     fn get_coins_by_type_and_owner(
+   [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: associated items `matches_coin_type` and `get_coins_by_type_and_owner` are never used[0m
+   [1m[94m--> [0mmove-execution/v1/kanari-move-runtime-v1/src/storage/object_storage.rs:226:8
+    [1m[94m|[0m
+[1m[94m225[0m [1m[94m|[0m impl ObjectStorage {
+    [1m[94m|[0m [1m[94m------------------[0m [1m[94massociated items in this implementation[0m
+[1m[94m226[0m [1m[94m|[0m     fn matches_coin_type(obj: &StoredObject, coin_type: &TypeTag) -> bool {
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^[0m
+[1m[94m...[0m
+[1m[94m239[0m [1m[94m|[0m     fn get_coins_by_type_and_owner(
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m: `kanari-move-runtime-v1` (lib test) generated 4 warnings (run `cargo fix --lib -p kanari-move-runtime-v1 --tests` to apply 2 suggestions)
+[1m[92m    Finished[0m `test` profile [unoptimized] target(s) in 35.45s
+[1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/kanari_move_runtime_v1-81e91d2dc8f82fd0)
+
+running 7 tests
+
+thread 'state_object_apply::tests::accepts_immutable_object_without_account' (26473) panicked at crates/kanari-types/src/error.rs:74:27:
+Operation failed: failed to create in-memory state manager: Genesis initialization failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test state_object_apply::tests::accepts_immutable_object_without_account ... FAILED
+
+thread 'state_object_apply::tests::deletion_tombstone_prevents_object_id_reuse' (26474) panicked at crates/kanari-types/src/error.rs:74:27:
+Operation failed: failed to create in-memory state manager: Genesis initialization failed
+test state_object_apply::tests::deletion_tombstone_prevents_object_id_reuse ... FAILED
+
+thread 'state_object_apply::tests::stages_without_persisting_until_commit' (26475) panicked at crates/kanari-types/src/error.rs:74:27:
+Operation failed: failed to create in-memory state manager: Genesis initialization failed
+
+thread 'state_object_refs::tests::exact_reference_round_trip_uses_full_object_contents' (26476) panicked at crates/kanari-types/src/error.rs:74:27:
+Operation failed: failed to create in-memory state manager: Genesis initialization failed
+test state_object_apply::tests::stages_without_persisting_until_commit ... FAILED
+test state_object_refs::tests::exact_reference_round_trip_uses_full_object_contents ... FAILED
+
+thread 'state_object_refs::tests::protocol_metadata_digest_survives_commit' (26478) panicked at crates/kanari-types/src/error.rs:74:27:
+Operation failed: failed to create in-memory state manager: Genesis initialization failed
+
+thread 'state_object_refs::tests::missing_object_reference_is_rejected' (26477) panicked at crates/kanari-types/src/error.rs:74:27:
+Operation failed: failed to create in-memory state manager: Genesis initialization failed
+test state_object_refs::tests::protocol_metadata_digest_survives_commit ... FAILED
+test state_object_refs::tests::missing_object_reference_is_rejected ... FAILED
+
+thread 'state_object_refs::tests::tombstone_reserves_consumed_object_id' (26480) panicked at crates/kanari-types/src/error.rs:74:27:
+Operation failed: failed to create in-memory state manager: Genesis initialization failed
+test state_object_refs::tests::tombstone_reserves_consumed_object_id ... FAILED
+
+failures:
+
+failures:
+    state_object_apply::tests::accepts_immutable_object_without_account
+    state_object_apply::tests::deletion_tombstone_prevents_object_id_reuse
+    state_object_apply::tests::stages_without_persisting_until_commit
+    state_object_refs::tests::exact_reference_round_trip_uses_full_object_contents
+    state_object_refs::tests::missing_object_reference_is_rejected
+    state_object_refs::tests::protocol_metadata_digest_survives_commit
+    state_object_refs::tests::tombstone_reserves_consumed_object_id
+
+test result: FAILED. 0 passed; 7 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.00s
+
+[1m[91merror[0m: test failed, to rerun pass `-p kanari-move-runtime-v1 --lib`
