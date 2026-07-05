@@ -168,6 +168,33 @@ impl Transfer {
         eprintln!("  Transaction hash: {}", status.hash);
         eprintln!("  Status: {}", status.status);
 
+        // Wait for transaction to complete if it's pending
+        if status.status == "pending" || status.status == "executing" {
+            eprintln!("  Waiting for transaction to complete...");
+            let mut attempts = 0;
+            let max_attempts = 30; // 30 seconds timeout
+            while attempts < max_attempts {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                match client.get_transaction(&status.hash).await {
+                    Ok(tx_details) => {
+                        eprintln!("  Transaction status: {}", tx_details.status);
+                        if tx_details.status == "executed" 
+                            || tx_details.status == "failed" 
+                            || tx_details.status == "committed" {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  Warning: Failed to check transaction status: {}", e);
+                    }
+                }
+                attempts += 1;
+            }
+            if attempts >= max_attempts {
+                eprintln!("  Warning: Transaction completion check timed out");
+            }
+        }
+
         Ok(())
     }
 }
