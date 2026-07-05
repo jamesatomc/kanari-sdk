@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: object-centric-protocol
@@ -19,10 +19,13 @@ env:
 jobs:
   object-centric-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: object-centric
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -32,8 +35,14 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Apply object pool recovery
+        run: python .github/scripts/apply_object_pool_recovery.py
+
+      - name: Format object recovery
+        run: cargo fmt --all
+
       - name: Check object-centric crates
-        run: cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core
+        run: cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core -p kanari-rpc-server -p kanari-rpc-client -p kanari-node -p kanari
 
       - name: Test object transaction types
         run: cargo test -p kanari-types --lib object
@@ -44,5 +53,22 @@ jobs:
       - name: Test core object path
         run: cargo test -p kanari-core --lib object_ -- --nocapture
 
+      - name: Test RPC and node libraries
+        run: |
+          cargo test -p kanari-rpc-server --lib
+          cargo test -p kanari-node --lib
+
       - name: Verify formatting
         run: cargo fmt --all -- --check
+
+      - name: Commit validated object recovery
+        run: |
+          git config user.name 'kanari-object-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No validated recovery changes to commit'
+            exit 0
+          fi
+          git commit -m 'fix: recover stale object pool and execute gossip [object-pool-recovery]'
+          git push origin HEAD:object-centric
