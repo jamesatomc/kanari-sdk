@@ -37,27 +37,6 @@ struct CancelResponse {
     status: &'static str,
 }
 
-fn deterministic_gas_units(transaction: &SignedObjectTransaction) -> Result<u64, String> {
-    use kanari_types::object_transaction::ObjectTransactionKind;
-    let units = match &transaction.data.kind {
-        ObjectTransactionKind::Pay { coins, .. } => 100u64
-            .checked_add((coins.len() as u64).saturating_mul(10))
-            .ok_or_else(|| "Pay gas overflow".to_string())?,
-        ObjectTransactionKind::TransferObjects { objects, .. } => 50u64
-            .checked_add((objects.len() as u64).saturating_mul(5))
-            .ok_or_else(|| "Transfer gas overflow".to_string())?,
-        ObjectTransactionKind::MoveCall(_) => return Err("MoveCall object execution is not enabled yet".to_string()),
-        ObjectTransactionKind::Publish { .. } => return Err("Publish object execution is not enabled yet".to_string()),
-    };
-    if units > transaction.data.gas_data.budget {
-        return Err(format!(
-            "Required gas units {} exceed budget {}",
-            units, transaction.data.gas_data.budget
-        ));
-    }
-    Ok(units)
-}
-
 pub async fn submit(state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
     let transaction: SignedObjectTransaction = match serde_json::from_value(request.params.clone())
     {
@@ -65,25 +44,18 @@ pub async fn submit(state: &RpcServerState, request: &RpcRequest) -> RpcResponse
         Err(error) => return invalid_params_response(request.id, error.to_string()),
     };
     let broadcast = transaction.clone();
-    let gas_units = match deterministic_gas_units(&transaction) {
-        Ok(gas_units) => gas_units,
-        Err(error) => return invalid_params_response(request.id, error),
-    };
-    match state.engine.submit_protocol_transaction(transaction) {
-        Ok(digest) => match state.engine.execute_submitted_object_command(&digest, gas_units) {
-            Ok(effects) => {
-                state.broadcast_submitted_transaction(broadcast);
-                respond_with_serialize(
-                    request.id,
-                    SubmitResponse {
-                        digest: format!("0x{}", hex::encode(digest)),
-                        status: "executed_object_effects",
-                        effects: Some(effects),
-                    },
-                )
-            }
-            Err(error) => internal_error_response(request.id, error.to_string()),
-        },
+    match state.engine.execute_protocol_transaction(transaction) {
+        Ok((digest, effects)) => {
+            state.broadcast_submitted_transaction(broadcast);
+            respond_with_serialize(
+                request.id,
+                SubmitResponse {
+                    digest: format!("0x{}", hex::encode(digest)),
+                    status: "executed_object_effects",
+                    effects: Some(effects),
+                },
+            )
+        }
         Err(error) => invalid_params_response(request.id, error.to_string()),
     }
 }

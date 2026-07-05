@@ -153,6 +153,15 @@ impl PersistentStore {
         }
     }
 
+    /// Load the encoded value without deserializing it. Protocol migrations use
+    /// this to identify and quarantine values written by an older BCS schema.
+    pub fn load_raw(
+        &self,
+        key: &[u8],
+    ) -> std::result::Result<Option<Vec<u8>>, PersistentStoreError> {
+        self.read_raw(key)
+    }
+
     /// Delete a key from the store.
     pub fn delete(&self, key: &[u8]) -> std::result::Result<(), PersistentStoreError> {
         if let Some(db) = &self.db {

@@ -165,6 +165,7 @@ fn release_locks(locks: &mut LockMap, tx: &SignedObjectTransaction, digest: &[u8
 
 impl BlockchainEngine {
     pub fn submit_object_transaction(&self, tx: SignedObjectTransaction) -> Result<Vec<u8>> {
+        self.repair_object_transaction_pool()?;
         tx.verify()?;
         let digest = tx.digest()?;
         let state = self.state_write();
@@ -215,6 +216,107 @@ impl BlockchainEngine {
         Ok(digest)
     }
 
+    /// Rebuild the durable object mempool index and mutable-object locks from
+    /// transactions that can still be decoded and whose digest matches their
+    /// storage key. Entries from an older schema are removed atomically.
+    pub fn repair_object_transaction_pool(&self) -> Result<(usize, usize)> {
+        let state = self.state_write();
+        let store = state.store.clone();
+
+        let raw_index = store.load_raw(INDEX_KEY)?;
+        let mut indexed: Vec<Vec<u8>> = raw_index
+            .as_deref()
+            .and_then(|bytes| bcs::from_bytes(bytes).ok())
+            .unwrap_or_default();
+        indexed.sort();
+        indexed.dedup();
+
+        let mut valid_index = Vec::with_capacity(indexed.len());
+        let mut rebuilt_locks = LockMap::new();
+        let mut deletes = Vec::new();
+        let mut removed = 0usize;
+
+        for digest in indexed {
+            let key = pending_key(&digest);
+            let Some(bytes) = store.load_raw(&key)? else {
+                removed = removed.saturating_add(1);
+                continue;
+            };
+            let transaction = match bcs::from_bytes::<SignedObjectTransaction>(&bytes) {
+                Ok(transaction) => transaction,
+                Err(error) => {
+                    log::warn!(
+                        "Removing stale object transaction 0x{}: incompatible BCS payload: {}",
+                        hex::encode(&digest),
+                        error
+                    );
+                    deletes.push(key);
+                    removed = removed.saturating_add(1);
+                    continue;
+                }
+            };
+            let actual_digest = match transaction.digest() {
+                Ok(actual_digest) => actual_digest,
+                Err(error) => {
+                    log::warn!(
+                        "Removing stale object transaction 0x{}: invalid digest: {}",
+                        hex::encode(&digest),
+                        error
+                    );
+                    deletes.push(key);
+                    removed = removed.saturating_add(1);
+                    continue;
+                }
+            };
+            if actual_digest != digest || transaction.verify().is_err() {
+                log::warn!(
+                    "Removing stale object transaction 0x{}: digest or signature mismatch",
+                    hex::encode(&digest)
+                );
+                deletes.push(key);
+                removed = removed.saturating_add(1);
+                continue;
+            }
+
+            let mutable_ids = transaction.data.mutable_input_ids();
+            if mutable_ids
+                .iter()
+                .any(|object_id| rebuilt_locks.contains_key(object_id))
+            {
+                log::warn!(
+                    "Removing conflicting recovered object transaction 0x{}",
+                    hex::encode(&digest)
+                );
+                deletes.push(key);
+                removed = removed.saturating_add(1);
+                continue;
+            }
+            for object_id in mutable_ids {
+                rebuilt_locks.insert(object_id, digest.clone());
+            }
+            valid_index.push(digest);
+        }
+
+        store.apply_raw_changes(
+            &[
+                (INDEX_KEY.to_vec(), bcs::to_bytes(&valid_index)?),
+                (LOCKS_KEY.to_vec(), bcs::to_bytes(&rebuilt_locks)?),
+            ],
+            &deletes,
+        )?;
+        Ok((valid_index.len(), removed))
+    }
+
+    pub fn pending_object_transaction(
+        &self,
+        digest: &[u8],
+    ) -> Result<Option<SignedObjectTransaction>> {
+        self.state_read()
+            .store
+            .load::<SignedObjectTransaction>(&pending_key(digest))
+            .map_err(Into::into)
+    }
+
     pub fn pending_object_transaction_len(&self) -> Result<usize> {
         Ok(self
             .state_read()
@@ -225,6 +327,7 @@ impl BlockchainEngine {
     }
 
     pub fn pending_object_transactions(&self) -> Result<Vec<SignedObjectTransaction>> {
+        self.repair_object_transaction_pool()?;
         let state = self.state_read();
         let index = state
             .store

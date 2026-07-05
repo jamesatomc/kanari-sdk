@@ -772,15 +772,36 @@ impl SyncManager {
         if let Some(signed_tx) =
             Self::parse_message::<SignedObjectTransaction>(&tx_data, "object transaction")
         {
-            match self.engine.submit_protocol_transaction(signed_tx) {
-                Ok(tx_hash) => {
+            let digest = match signed_tx.digest() {
+                Ok(digest) => digest,
+                Err(error) => {
+                    warn!("Rejected object transaction with invalid digest: {}", error);
+                    return;
+                }
+            };
+            match self.engine.is_object_transaction_executed(&digest) {
+                Ok(true) => {
                     info!(
-                        "Received object transaction from network: 0x{}",
+                        "Ignoring already executed object transaction: 0x{}",
+                        hex::encode(digest)
+                    );
+                    return;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    warn!("Failed to check object transaction replay state: {}", error);
+                    return;
+                }
+            }
+            match self.engine.execute_protocol_transaction(signed_tx) {
+                Ok((tx_hash, _effects)) => {
+                    info!(
+                        "Executed object transaction from network: 0x{}",
                         hex::encode(tx_hash)
                     );
                 }
                 Err(e) => {
-                    warn!("Failed to submit object transaction from network: {}", e);
+                    warn!("Failed to execute object transaction from network: {}", e);
                 }
             }
         }

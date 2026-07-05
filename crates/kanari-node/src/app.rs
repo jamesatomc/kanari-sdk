@@ -77,13 +77,22 @@ pub fn create_engine(
     network: &NetworkMode,
 ) -> Result<BlockchainEngine> {
     configure_engine_environment(data_dir.as_deref(), network)?;
-    if let Some(dir) = data_dir {
+    let engine = if let Some(dir) = data_dir {
         tracing::info!("Using data directory: {}", dir.display());
         let dir_str = path_to_env_value(dir)?;
-        Ok(BlockchainEngine::new_dir(dir_str)?)
+        BlockchainEngine::new_dir(dir_str)?
     } else {
-        Ok(BlockchainEngine::new()?)
+        BlockchainEngine::new()?
+    };
+    let (executed, removed) = engine.recover_pending_object_transactions()?;
+    if executed > 0 || removed > 0 {
+        tracing::info!(
+            executed,
+            removed,
+            "Recovered durable object transaction pool"
+        );
     }
+    Ok(engine)
 }
 
 fn normalize_authority_id(authority_id: String) -> String {
@@ -451,7 +460,23 @@ pub async fn run_node(
             idle_delay = Duration::from_millis(10);
         }
 
-        let should_produce_pending = stats.pending_transactions > 0 && pending_gossip_ready;
+        let object_pending = engine.pending_object_transaction_len().unwrap_or_else(|error| {
+            tracing::warn!("Failed to read object pending count: {}", error);
+            0
+        });
+        if object_pending > 0 {
+            match engine.recover_pending_object_transactions() {
+                Ok((executed, removed)) => {
+                    if executed > 0 || removed > 0 {
+                        did_work = true;
+                        tracing::info!(executed, removed, "Processed pending object transactions");
+                    }
+                }
+                Err(error) => tracing::error!("Object transaction recovery failed: {}", error),
+            }
+        }
+        let legacy_pending = engine.pending_transaction_len();
+        let should_produce_pending = legacy_pending > 0 && pending_gossip_ready;
 
         if should_produce_pending {
             match engine.produce_checkpoint() {
