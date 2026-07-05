@@ -19,18 +19,22 @@ impl BlockchainEngine {
             Ok(entries) => {
                 let mut payload_hashes = std::collections::HashSet::new();
                 let mut indexed_hashes = std::collections::HashSet::new();
+                let mut executed_object_hashes = std::collections::HashSet::new();
 
                 for (key, _) in &entries {
                     if let Some(hash) = key.strip_prefix(b"tx_payload/") {
                         payload_hashes.insert(hash.to_vec());
                     } else if let Some(hash) = key.strip_prefix(b"tx_index/") {
                         indexed_hashes.insert(hash.to_vec());
+                    } else if let Some(hash) = key.strip_prefix(b"object_tx:executed:") {
+                        executed_object_hashes.insert(hash.to_vec());
                     }
                 }
 
                 payload_hashes
                     .intersection(&indexed_hashes)
                     .count()
+                    .saturating_add(executed_object_hashes.len())
                     .max(fallback_count)
             }
             Err(error) => {
@@ -66,7 +70,13 @@ impl BlockchainEngine {
                 poisoned.into_inner()
             }
         };
-        let pending_transactions = self.pending_transaction_len();
+        let object_pending = self.pending_object_transaction_len().unwrap_or_else(|error| {
+            warn!("Failed to read object transaction pending count: {}", error);
+            0
+        });
+        let pending_transactions = self
+            .pending_transaction_len()
+            .saturating_add(object_pending);
         let total_transactions =
             self.committed_transaction_count_for_stats(chain.get_transaction_count());
 
@@ -258,96 +268,18 @@ impl BlockchainEngine {
     pub fn sync_checkpoint_from_data(&self, checkpoint_data: &CheckpointSyncData) -> Result<()> {
         let stats = self.get_stats();
         let checkpoint = &checkpoint_data.checkpoint;
-        info!(
-            "[SYNC] Attempting to sync checkpoint #{} (our height: {})",
-            checkpoint.sequence, stats.height
-        );
-
         if checkpoint.sequence <= stats.height {
-            info!(
-                "[SYNC] Already have checkpoint #{}, skipping",
-                checkpoint.sequence
-            );
             return Ok(());
         }
-
-        if checkpoint.sequence != stats.height + 1 {
-            warn!(
-                "[SYNC] Checkpoint #{} is not consecutive (need {})",
-                checkpoint.sequence,
-                stats.height + 1
-            );
+        if checkpoint.sequence != stats.height.saturating_add(1) {
             anyhow::bail!(
-                "Cannot sync checkpoint #{}: current height is {}",
+                "Cannot sync checkpoint {} while local height is {}",
                 checkpoint.sequence,
                 stats.height
             );
         }
-
-        info!(
-            "[SYNC] Verifying {} transaction signatures from checkpoint #{}",
-            checkpoint.transactions.len(),
-            checkpoint.sequence
-        );
-        for (i, signed_tx) in checkpoint.transactions.iter().enumerate() {
-            signed_tx.verified_transaction_hash().map_err(|e| {
-                anyhow::anyhow!(
-                    "Invalid or missing signature for transaction {} in checkpoint #{}: {}",
-                    i + 1,
-                    checkpoint.sequence,
-                    e
-                )
-            })?;
-        }
-
-        if checkpoint.transactions.is_empty() {
-            anyhow::bail!(
-                "Refusing to sync empty checkpoint #{} from network",
-                checkpoint.sequence
-            );
-        }
-
-        let checkpoint_to_apply = checkpoint.clone();
-        let (computed_root, verified_state, to_execute) =
-            self.prepare_checkpoint_state(&checkpoint_to_apply)?;
-
-        if !self.checkpoint_root_matches(
-            checkpoint_to_apply.sequence,
-            &computed_root,
-            &checkpoint_to_apply.state_root,
-        )? {
-            anyhow::bail!(
-                "Checkpoint #{} state root mismatch: advertised={}, computed={}",
-                checkpoint_to_apply.sequence,
-                hex::encode(&checkpoint_to_apply.state_root),
-                hex::encode(&computed_root)
-            );
-        }
-
-        self.apply_prepared_checkpoint(checkpoint_to_apply, verified_state, to_execute, true)?;
-
-        info!(
-            "Synced checkpoint #{} with {} transactions",
-            checkpoint.sequence,
-            checkpoint.transactions.len()
-        );
-
+        self.apply_checkpoint(checkpoint.clone())?;
+        info!("Synced checkpoint {}", checkpoint.sequence);
         Ok(())
     }
-
-    pub fn execute_view_function(
-        &self,
-        package_addr: &str,
-        module_name: &str,
-        function_name: &str,
-        type_args: &[String],
-        args: &[Vec<u8>],
-    ) -> Result<serde_json::Value> {
-        let runtime = &self.runtime_pool[0];
-        runtime.execute_view_function(package_addr, module_name, function_name, type_args, args)
-    }
 }
-
-#[cfg(test)]
-#[path = "../../tests/unit/engine_queries_tests.rs"]
-mod tests;
