@@ -1,4 +1,4 @@
-name: Apply Object Cutover
+name: Object Source Check
 
 on:
   push:
@@ -9,14 +9,14 @@ on:
       - kanari-sdk
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: apply-object-cutover
+  group: object-source-check-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply:
+  check:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -30,15 +30,6 @@ jobs:
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
-
-      - name: Apply cutover
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          python .github/scripts/apply_object_cutover.py
-          python .github/scripts/apply_object_transfer_cli.py
-          python .github/scripts/apply_shared_pay_gas.py
-          python .github/scripts/apply_shared_pay_gas_tests.py
-          python .github/scripts/apply_object_operational_visibility.py
 
       - name: Format
         shell: bash
@@ -83,16 +74,3 @@ jobs:
           name: object-cutover-log
           path: object-cutover.log
           retention-days: 1
-
-      - name: Commit validated cutover
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          if git diff --quiet; then
-            echo 'No cutover changes required'
-            exit 0
-          fi
-          git config user.name 'kanari-object-bot'
-          git config user.email 'actions@users.noreply.github.com'
-          git add -A
-          git commit -m 'fix: expose object pending locks and cancellation [object-cutover]'
-          git push origin HEAD:object-centric
