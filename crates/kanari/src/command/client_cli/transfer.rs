@@ -140,7 +140,7 @@ impl Transfer {
             gas_limit,
             gas_price,
             signature: None,
-            execute_immediate: Some(true),
+            execute_immediate: Some(false),
         };
         let final_call_req = sign_call_function_request(call_req, &wallet)?;
 

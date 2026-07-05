@@ -289,6 +289,9 @@ pub struct CallFunctionRequest {
     pub gas_price: u64,
     pub signature: Option<Vec<u8>>,
     pub execute_immediate: Option<bool>,
+    /// Object versions for Sui-style replay/version validation (object_id -> version)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_versions: Option<Vec<(String, u64)>>,
 }
 
 /// View function request (read-only, no transaction submission)
