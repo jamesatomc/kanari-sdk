@@ -9,6 +9,7 @@ mod object_command_executor;
 pub mod object_gas;
 pub mod object_mempool;
 mod object_transaction_engine_v2;
+mod view_compat;
 
 pub use consensus::{Checkpoint, DagVertex};
 pub use engine::{BlockchainEngine, CheckpointProductionInfo, CheckpointSyncData};
