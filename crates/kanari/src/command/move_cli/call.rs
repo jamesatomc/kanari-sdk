@@ -171,6 +171,7 @@ impl Call {
             gas_price,
             signature: Some(signed_tx.signature.clone()),
             execute_immediate: Some(true),
+            object_versions: None,
         };
 
         let rpc_request = RpcRequest {
