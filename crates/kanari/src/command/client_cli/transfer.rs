@@ -139,7 +139,6 @@ impl Transfer {
             ],
             gas_limit,
             gas_price,
-            sequence_number: account.sequence_number,
             signature: None,
             execute_immediate: Some(true),
         };

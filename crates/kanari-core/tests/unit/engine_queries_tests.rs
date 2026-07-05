@@ -4,14 +4,13 @@ use kanari_crypto::keys::{CurveType, generate_keypair};
 use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 
-fn signed_transfer(sequence_number: u64) -> SignedTransaction {
+fn signed_transfer(_sequence_number: u64) -> SignedTransaction {
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let recipient = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = Transaction::new_transfer(
         sender.tagged_address(),
         recipient.address,
         1,
-        sequence_number,
     );
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx

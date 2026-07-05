@@ -20,7 +20,6 @@ fn create_dummy_tx(sender: &str, module: &str, object: Option<&str>) -> SignedTr
         args,
         gas_limit: 1000,
         gas_price: 1,
-        sequence_number: 0,
     };
     SignedTransaction::new(tx)
 }

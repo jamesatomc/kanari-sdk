@@ -133,7 +133,6 @@ fn build_publish_signed_tx(module_data: PublishModuleRequest) -> SignedTransacti
         module_name: module_data.module_name,
         gas_limit: module_data.gas_limit,
         gas_price: module_data.gas_price,
-        sequence_number: module_data.sequence_number,
     });
     maybe_attach_signature(&mut signed_tx, module_data.signature);
     signed_tx
@@ -148,7 +147,6 @@ fn build_call_signed_tx(call_data: CallFunctionRequest) -> SignedTransaction {
         args: call_data.args,
         gas_limit: call_data.gas_limit,
         gas_price: call_data.gas_price,
-        sequence_number: call_data.sequence_number,
     });
     maybe_attach_signature(&mut signed_tx, call_data.signature);
     signed_tx
@@ -161,7 +159,6 @@ fn base_transaction_details(
     tx_type: &str,
     sender: String,
     sender_address: String,
-    sequence_number: u64,
     gas_limit: u64,
     gas_price: u64,
 ) -> TransactionDetails {
@@ -173,7 +170,7 @@ fn base_transaction_details(
         tx_type: tx_type.to_string(),
         sender,
         sender_address: Some(sender_address),
-        sequence_number,
+        sequence_number: 0,
         gas_limit,
         gas_price,
         module: None,
@@ -204,7 +201,6 @@ fn map_transaction_to_details(
             sender,
             module_bytes,
             module_name,
-            sequence_number,
             gas_limit,
             gas_price,
             ..
@@ -225,7 +221,6 @@ fn map_transaction_to_details(
                 "publish_module",
                 sender.clone(),
                 sender_address.clone(),
-                *sequence_number,
                 *gas_limit,
                 *gas_price,
             );
@@ -237,7 +232,6 @@ fn map_transaction_to_details(
             sender,
             module,
             function,
-            sequence_number,
             gas_limit,
             gas_price,
             ..
@@ -249,7 +243,6 @@ fn map_transaction_to_details(
                 tx.tx_type_label(),
                 sender.clone(),
                 sender_address.clone(),
-                *sequence_number,
                 *gas_limit,
                 *gas_price,
             );
@@ -501,7 +494,6 @@ pub async fn handle_submit_transaction(
                 tx_data.sender.clone(),
                 recipient.to_hex_literal(),
                 amount,
-                tx_data.sequence_number,
                 tx_data.gas_limit,
                 tx_data.gas_price,
             )
@@ -521,7 +513,6 @@ pub async fn handle_submit_transaction(
             Transaction::new_burn_with_gas(
                 tx_data.sender.clone(),
                 amount,
-                tx_data.sequence_number,
                 tx_data.gas_limit,
                 tx_data.gas_price,
             )

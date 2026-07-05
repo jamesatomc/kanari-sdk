@@ -101,7 +101,6 @@ pub fn sign_call_function_request(
         args: request.args.clone(),
         gas_limit: request.gas_limit,
         gas_price: request.gas_price,
-        sequence_number: request.sequence_number,
     };
 
     let mut signed_tx = SignedTransaction::new(transaction);
@@ -137,7 +136,6 @@ pub async fn sign_and_submit_transaction(
         amount: amount_mist,
         gas_limit: signed_tx.transaction.gas_limit(),
         gas_price: signed_tx.transaction.gas_price(),
-        sequence_number: signed_tx.transaction.sequence_number(),
         signature: Some(signed_tx.signature.clone()),
         execute_immediate: Some(true),
     };
@@ -163,42 +161,6 @@ pub async fn sign_and_submit_transaction(
     Ok(status)
 }
 
-/// Query account sequence number from RPC for a sender address (normalized)
-pub fn get_account_sequence(
-    client: &Client,
-    rpc_endpoint: &str,
-    sender_normalized: &str,
-) -> Result<u64> {
-    use kanari_rpc_api::{RpcRequest, RpcResponse, methods};
-
-    let acct_req = RpcRequest {
-        jsonrpc: "2.0".to_string(),
-        method: methods::GET_ACCOUNT.to_string(),
-        params: serde_json::to_value(sender_normalized)
-            .context("Failed to serialize sender for RPC")?,
-        id: 1,
-    };
-
-    let resp = client
-        .post(rpc_endpoint)
-        .json(&acct_req)
-        .send()
-        .context("Failed to query account sequence number from RPC")?;
-
-    let rpc_resp: RpcResponse = resp
-        .json()
-        .context("Failed to parse account RPC response")?;
-
-    if let Some(result) = rpc_resp.result {
-        if let Some(sn) = result.get("sequence_number").and_then(|v| v.as_u64()) {
-            Ok(sn)
-        } else {
-            bail!("Account RPC result missing 'sequence_number'");
-        }
-    } else {
-        bail!("RPC did not return account info for sender");
-    }
-}
 
 /// Determine the sender address string for a transaction.
 /// For all wallets, this returns the tagged address (Curve:PublicKey)

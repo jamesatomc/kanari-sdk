@@ -95,9 +95,6 @@ impl Account {
         self.get_token_balance(KANARI_TOKEN_TYPE)
     }
 
-    pub fn increment_sequence(&mut self) {
-        self.sequence_number += 1;
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,6 +137,12 @@ pub struct StateManager {
     // SMT for state root calculation (Optional: requires DB backend)
     pub smt: Option<Arc<smt::SparseMerkleTree>>,
     pub events: Vec<Event>,
+    /// Replay protection keyed by transaction digest.
+    pub replay_cache: BTreeSet<Vec<u8>>,
+    /// Object version tracking for Sui-style execution ordering.
+    pub object_versions: BTreeMap<String, u64>,
+    /// Sender execution stamps keyed by address for extra replay protection.
+    pub sender_stamps: BTreeMap<AccountAddress, Vec<u8>>,
 }
 
 impl StateManager {
@@ -325,6 +328,9 @@ impl StateManager {
             global_token_supplies,
             smt,
             events: Vec::new(),
+            replay_cache: BTreeSet::new(),
+            object_versions: BTreeMap::new(),
+            sender_stamps: BTreeMap::new(),
         };
 
         state
@@ -617,6 +623,54 @@ impl StateManager {
         self.load_internal(&Self::account_key(address))
     }
 
+    pub fn validate_replay_and_versions(
+        &self,
+        tx_digest: &[u8],
+        object_versions: &[(String, u64)],
+        sender: AccountAddress,
+    ) -> Result<()> {
+        if self.replay_cache.contains(tx_digest) {
+            anyhow::bail!("Transaction replay detected");
+        }
+
+        for (object_id, expected_version) in object_versions {
+            let current_version = self.object_versions.get(object_id).copied().unwrap_or(0);
+            if current_version != *expected_version {
+                anyhow::bail!(
+                    "Object version mismatch for {}: expected {}, got {}",
+                    object_id,
+                    expected_version,
+                    current_version
+                );
+            }
+        }
+
+        if let Some(stamp) = self.sender_stamps.get(&sender) {
+            let stamp_prefix = &stamp[..stamp.len().min(tx_digest.len())];
+            if tx_digest.starts_with(stamp_prefix) {
+                anyhow::bail!("Sender stamp conflict");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn mark_replay_and_versions_applied(
+        &mut self,
+        tx_digest: &[u8],
+        object_versions: &[(String, u64)],
+        sender: AccountAddress,
+    ) -> Result<()> {
+        self.replay_cache.insert(tx_digest.to_vec());
+
+        for (object_id, version) in object_versions {
+            self.object_versions.insert(object_id.clone(), *version);
+        }
+
+        self.sender_stamps.insert(sender, tx_digest.to_vec());
+        Ok(())
+    }
+
     pub fn save_account(&mut self, account: &Account) -> Result<()> {
         self.save_account_record(account)?;
         self.add_to_index_list(ACCOUNT_INDEX_KEY, account.address.to_hex_literal())
@@ -626,20 +680,8 @@ impl StateManager {
     where
         I: IntoIterator<Item = (AccountAddress, u64)>,
     {
-        let mut account_index_additions = Vec::new();
-
-        for (address, increment) in sequence_increments {
-            if increment == 0 {
-                continue;
-            }
-
-            let mut account = self.load_account_or_default(address)?;
-            account.sequence_number = account.sequence_number.saturating_add(increment);
-            self.save_account_record(&account)?;
-            account_index_additions.push(account.address.to_hex_literal());
-        }
-
-        self.add_many_to_index_list(ACCOUNT_INDEX_KEY, account_index_additions)
+        let _ = sequence_increments;
+        Ok(())
     }
 
     fn save_account_record(&mut self, account: &Account) -> Result<()> {
@@ -772,20 +814,13 @@ impl StateManager {
         smt::compute_sparse_root(&entries.into_iter().collect::<Vec<_>>()).to_vec()
     }
 
-    /// Validate sequence number for an account
+    /// Validate sequence number for an account.
+    ///
+    /// The runtime uses Sui-style execution semantics, where transaction ordering is
+    /// enforced by object versions and replay protection rather than account sequence numbers.
     pub fn validate_sequence(&self, addr: &AccountAddress, expected_seq: u64) -> Result<()> {
-        let account_key = Self::account_key(addr);
-        if let Some(account) = self.load_internal::<Account>(&account_key)? {
-            if account.sequence_number != expected_seq {
-                anyhow::bail!("Invalid sequence number");
-            }
-            Ok(())
-        } else {
-            if expected_seq != 0 {
-                anyhow::bail!("Account does not exist, sequence number must be 0");
-            }
-            Ok(())
-        }
+        let _ = (addr, expected_seq);
+        Ok(())
     }
 
     /// Get the total number of accounts

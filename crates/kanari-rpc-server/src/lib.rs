@@ -627,7 +627,7 @@ mod tests {
         let recipient_address = recipient.address.clone();
 
         let mut transaction =
-            Transaction::new_transfer(sender_tagged.clone(), recipient_address.clone(), 1, 0);
+            Transaction::new_transfer(sender_tagged.clone(), recipient_address.clone(), 1);
         if let Transaction::ExecuteFunction {
             gas_limit,
             gas_price,
@@ -708,7 +708,6 @@ mod tests {
             sender_tagged.clone(),
             recipient_address.clone(),
             1,
-            0,
             1_000_000,
             1,
         );

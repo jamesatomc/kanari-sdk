@@ -499,11 +499,6 @@ impl DagEngine {
             a.transaction
                 .sender_address()
                 .cmp(b.transaction.sender_address())
-                .then_with(|| {
-                    a.transaction
-                        .sequence_number()
-                        .cmp(&b.transaction.sequence_number())
-                })
                 .then_with(|| a.transaction_hash().cmp(b.transaction_hash()))
         });
         let tx_count = transactions.len();

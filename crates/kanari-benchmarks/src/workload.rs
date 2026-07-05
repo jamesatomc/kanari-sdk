@@ -38,12 +38,10 @@ pub fn build_signed_workload(
     let signed_txs = (0..config.tx_count)
         .map(|tx_index| {
             let sender_index = tx_index % sender_count;
-            let sequence_number = tx_index / sender_count;
             let sender = &senders[sender_index];
             let tx = Transaction::new_burn_with_gas(
                 sender.tagged_address(),
                 0,
-                sequence_number as u64,
                 100_000,
                 0,
             );

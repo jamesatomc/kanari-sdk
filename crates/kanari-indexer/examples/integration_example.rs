@@ -37,7 +37,6 @@ fn main() -> Result<()> {
         "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
         "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
         1000,
-        0,
     ));
     println!("Created sample transfer transaction");
 

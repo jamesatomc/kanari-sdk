@@ -3,7 +3,7 @@
 
 use crate::command::common::resolve_transaction_gas;
 use crate::command::common::{
-    build_blocking_client, get_account_sequence, get_rpc_endpoint, get_sender_for_tx,
+    build_blocking_client, get_rpc_endpoint, get_sender_for_tx,
     load_wallet_for, normalize_addr, resolve_sender,
 };
 use anyhow::{Context, Result};
@@ -136,10 +136,6 @@ impl Call {
         // Create transaction
         eprintln!("Creating transaction...");
 
-        // Query account sequence number so signature and RPC include it (fail-fast)
-        let client = build_blocking_client(30)?;
-        let seq_num: u64 = get_account_sequence(&client, &rpc, &sender_for_tx)?;
-
         // Sign transaction using the loaded wallet via SignedTransaction
         let signed_tx = {
             // Format module as "address::module_name" for runtime compatibility
@@ -154,7 +150,6 @@ impl Call {
                 args: parsed_args.clone(),
                 gas_limit,
                 gas_price,
-                sequence_number: seq_num,
             };
 
             // Wrap and sign using SignedTransaction helper
@@ -174,7 +169,6 @@ impl Call {
             args: parsed_args.clone(),
             gas_limit,
             gas_price,
-            sequence_number: seq_num,
             signature: Some(signed_tx.signature.clone()),
             execute_immediate: Some(true),
         };

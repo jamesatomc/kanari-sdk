@@ -12,6 +12,38 @@ fn set_native_supply_for_test(state: &mut StateManager, total_supply: u64) -> Re
 }
 
 #[test]
+fn applying_changeset_does_not_mutate_account_sequence_numbers() -> Result<()> {
+    let mut state = StateManager::new_in_memory();
+    let sender = AccountAddress::from_hex_literal("0x1111")?;
+    let receiver = AccountAddress::from_hex_literal("0x2222")?;
+    state.save_account(&Account::with_native_balance(sender, 1_000))?;
+    state.save_account(&Account::with_native_balance(receiver, 0))?;
+    state.total_supply = 11_000_000_000_000_000;
+    state.global_token_supplies.insert(
+        KANARI_TOKEN_TYPE.to_string(),
+        11_000_000_000_000_000,
+    );
+    state
+        .store
+        .save(&StateManager::supply_key(KANARI_TOKEN_TYPE), &TreasuryCap { total_supply: 11_000_000_000_000_000 })?;
+
+    let mut cs = ChangeSet::new();
+    cs.transfer(sender, receiver, 100);
+    state.apply_changeset_without_supply_validation(&cs)?;
+
+    let sender_account = state
+        .get_account(&sender)
+        .ok_or_else(|| anyhow::anyhow!("sender account should exist"))?;
+    let receiver_account = state
+        .get_account(&receiver)
+        .ok_or_else(|| anyhow::anyhow!("receiver account should exist"))?;
+    assert_eq!(sender_account.sequence_number, 0);
+    assert_eq!(receiver_account.sequence_number, 0);
+
+    Ok(())
+}
+
+#[test]
 fn treasury_update_syncs_native_total_supply() -> Result<()> {
     let mut state = StateManager::new_in_memory();
     let owner = AccountAddress::from_hex_literal("0x1")?;

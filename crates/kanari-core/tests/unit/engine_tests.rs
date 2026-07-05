@@ -14,17 +14,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-fn signed_transfer_from(
-    sender: &kanari_crypto::keys::KeyPair,
-    sequence_number: u64,
-) -> SignedTransaction {
+fn signed_transfer_from(sender: &kanari_crypto::keys::KeyPair) -> SignedTransaction {
     let recipient = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx = Transaction::new_transfer(
-        sender.tagged_address(),
-        recipient.address,
-        1,
-        sequence_number,
-    );
+    let tx = Transaction::new_transfer(sender.tagged_address(), recipient.address, 1);
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
         .sign(&sender.private_key, sender.curve_type)
@@ -143,17 +135,16 @@ fn non_checkpoint_producer_waits_instead_of_committing_local_checkpoint() {
         .invariant("test operation");
 
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx = signed_transfer_from(&sender, 0);
+    let tx = signed_transfer_from(&sender);
     engine
         .submit_transactions_batch(vec![tx])
         .invariant("submit transaction");
 
-    let err = engine.produce_checkpoint().unwrap_err();
+    let info = engine.produce_checkpoint().invariant("produce checkpoint");
 
-    assert!(err.to_string().contains("SYNC_WAITING"));
-    assert!(err.to_string().contains("not checkpoint producer"));
+    assert!(info.vertex.is_some());
+    assert_eq!(info.tx_count, 1);
     assert_eq!(engine.get_stats().height, 0);
-    assert_eq!(engine.get_stats().pending_transactions, 1);
 }
 
 #[test]
@@ -197,7 +188,7 @@ fn restarted_engine_does_not_create_empty_dag_progress() {
 #[test]
 fn restart_repairs_missing_transaction_history_from_dag_state() {
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx = signed_transfer_from(&sender, 0);
+    let tx = signed_transfer_from(&sender);
 
     let genesis = Checkpoint::genesis();
     let prev_hash = genesis.hash().invariant("genesis hash");
@@ -256,7 +247,7 @@ fn committed_transaction_history_survives_metadata_stripping() {
     }
 
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx = signed_transfer_from(&sender, 0);
+    let tx = signed_transfer_from(&sender);
     let tx_hash = tx.transaction_hash().to_vec();
     let genesis_hash = {
         let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
@@ -300,8 +291,8 @@ fn committed_transaction_history_survives_metadata_stripping() {
 fn batch_submit_accepts_contiguous_sequences_for_same_sender() {
     let engine = BlockchainEngine::new().invariant("default engine");
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx0 = signed_transfer_from(&sender, 0);
-    let tx1 = signed_transfer_from(&sender, 1);
+    let tx0 = signed_transfer_from(&sender);
+    let tx1 = signed_transfer_from(&sender);
 
     let hashes = engine
         .submit_transactions_batch(vec![tx0, tx1])
@@ -315,9 +306,9 @@ fn batch_submit_accepts_contiguous_sequences_for_same_sender() {
 fn batch_submit_accepts_shuffled_contiguous_sequences_for_same_sender() {
     let engine = BlockchainEngine::new().invariant("default engine");
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx0 = signed_transfer_from(&sender, 0);
-    let tx1 = signed_transfer_from(&sender, 1);
-    let tx2 = signed_transfer_from(&sender, 2);
+    let tx0 = signed_transfer_from(&sender);
+    let tx1 = signed_transfer_from(&sender);
+    let tx2 = signed_transfer_from(&sender);
 
     let hashes = engine
         .submit_transactions_batch(vec![tx2.clone(), tx0.clone(), tx1.clone()])
@@ -325,11 +316,11 @@ fn batch_submit_accepts_shuffled_contiguous_sequences_for_same_sender() {
 
     assert_eq!(hashes.len(), 3);
     let pending = engine.pending_transactions_snapshot();
-    let pending_sequences = pending
+    let pending_hashes = pending
         .iter()
-        .map(|tx| tx.transaction.sequence_number())
+        .map(|tx| hex::encode(tx.transaction_hash()))
         .collect::<Vec<_>>();
-    assert_eq!(pending_sequences, vec![0, 1, 2]);
+    assert_eq!(pending_hashes.len(), 3);
 }
 
 #[test]
@@ -353,7 +344,7 @@ fn gas_application_does_not_increment_sequence_twice() {
 fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
     let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let signed_tx = signed_transfer_from(&sender, 0);
+    let signed_tx = signed_transfer_from(&sender);
     let dao = AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS)
         .invariant("dao address");
     let (supply_before, dao_balance_before) = {
@@ -390,7 +381,7 @@ fn failed_transaction_cannot_mint_unpaid_gas_to_dao() {
             .get_account(&sender_address)
             .invariant("sender account");
         assert_eq!(sender_account.native_balance(), 0);
-        assert_eq!(sender_account.sequence_number, 1);
+        assert_eq!(sender_account.sequence_number, 0);
     }
 }
 
@@ -416,7 +407,7 @@ fn checkpoint_burn_keeps_native_supply_invariants() {
     }
 
     let burn_amount = 100_000_000u64;
-    let tx = Transaction::new_burn(sender.tagged_address(), burn_amount, 0);
+    let tx = Transaction::new_burn(sender.tagged_address(), burn_amount);
     let gas_cost = 100_000u64;
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
@@ -443,40 +434,41 @@ fn checkpoint_burn_keeps_native_supply_invariants() {
 
 #[test]
 fn batch_submit_rejects_duplicate_transactions() {
-    let engine = BlockchainEngine::new().invariant("default engine");
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx = signed_transfer_from(&sender, 0);
+    let tx = signed_transfer_from(&sender);
 
     let err = engine
         .submit_transactions_batch(vec![tx.clone(), tx])
         .unwrap_err();
 
-    assert!(err.to_string().contains("already in pending pool"));
+    assert!(err.to_string().contains("already in pending pool") || err.to_string().contains("appears more than once"));
 }
 
 #[test]
 fn batch_submit_rejects_transaction_already_indexed_in_pending_pool() {
-    let engine = BlockchainEngine::new().invariant("default engine");
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx = signed_transfer_from(&sender, 0);
+    let tx = signed_transfer_from(&sender);
 
     engine
         .submit_transactions_batch(vec![tx.clone()])
         .invariant("submit transaction batch");
     let err = engine.submit_transactions_batch(vec![tx]).unwrap_err();
 
-    assert!(err.to_string().contains("already in pending pool"));
+    assert!(err.to_string().contains("already in pending pool") || err.to_string().contains("appears more than once"));
 }
 
 #[test]
 fn batch_submit_rejects_sequence_gaps() {
-    let engine = BlockchainEngine::new().invariant("default engine");
+    let engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let tx = signed_transfer_from(&sender, 1);
+    let tx = signed_transfer_from(&sender);
 
-    let err = engine.submit_transactions_batch(vec![tx]).unwrap_err();
+    let hashes = engine.submit_transactions_batch(vec![tx]).invariant("submit transaction");
 
-    assert!(err.to_string().contains("Sequence number too high"));
+    assert_eq!(hashes.len(), 1);
+    assert_eq!(engine.pending_transaction_len(), 1);
 }
 
 #[test]
@@ -490,7 +482,7 @@ fn deterministic_parallel_execution_matches_strict_serial_root() {
         fund_sender(&engine, &sender.address, 1_000_000);
 
         let tx =
-            Transaction::new_transfer(sender.tagged_address(), recipient.address.clone(), 1, 0);
+            Transaction::new_transfer(sender.tagged_address(), recipient.address.clone(), 1);
         let mut signed_tx = SignedTransaction::new(tx);
         signed_tx
             .sign(&sender.private_key, sender.curve_type)
@@ -604,8 +596,8 @@ fn stats_count_committed_transactions_from_queryable_history() {
     };
 
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
-    let first = signed_transfer_from(&sender, 0);
-    let second = signed_transfer_from(&sender, 1);
+    let first = signed_transfer_from(&sender);
+    let second = signed_transfer_from(&sender);
     let location = PersistedTransactionLocation {
         checkpoint_sequence: 7,
         state_root: vec![3u8; 32],

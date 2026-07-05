@@ -5,7 +5,7 @@ use crate::command::common::{
     check_node_connection, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, resolve_sender,
     sign_and_submit_transaction,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{ Result, ensure};
 use clap::Parser;
 use kanari_rpc_client::RpcClient;
 use kanari_types::transaction::Transaction;
@@ -50,16 +50,10 @@ impl Burn {
         let client = RpcClient::new(&rpc);
         check_node_connection(&client, &rpc).await?;
 
-        // Get account to get sequence number
-        let account = client
-            .get_account(&from_addr)
-            .await
-            .context("Failed to get sender account")?;
-
         let sender_for_tx = get_sender_for_tx(&wallet, &from_addr)?;
 
         // Create burn transaction
-        let tx = Transaction::new_burn(sender_for_tx.clone(), amount_mist, account.sequence_number);
+        let tx = Transaction::new_burn(sender_for_tx.clone(), amount_mist);
 
         sign_and_submit_transaction(&client, tx, &wallet, sender_for_tx, None, Some(amount_mist))
             .await?;

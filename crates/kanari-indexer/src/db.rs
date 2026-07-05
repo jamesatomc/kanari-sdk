@@ -157,7 +157,7 @@ impl IndexerDB {
                     block_height as i64,
                     sender,
                     tx_type,
-                    signed_tx.transaction.sequence_number() as i64,
+                    0,
                     signed_tx.transaction.gas_limit() as i64,
                     signed_tx.transaction.gas_price() as i64,
                     "success",

@@ -52,8 +52,7 @@ impl super::MoveRuntime {
 
         if let Some(saddr) = sender {
             let sender_change = cs.get_or_create_change(saddr);
-            sender_change.increment_sequence();
-            sender_change.debit(total_cost);
+                sender_change.debit(total_cost);
         }
 
         let dao_addr = AccountAddress::from_hex_literal(KanariAddress::DAO_ADDRESS)?;

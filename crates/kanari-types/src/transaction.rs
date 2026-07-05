@@ -192,7 +192,6 @@ pub enum Transaction {
         module_name: String,
         gas_limit: u64,
         gas_price: u64,
-        sequence_number: u64,
     },
     /// Execute a Move function
     ExecuteFunction {
@@ -203,7 +202,6 @@ pub enum Transaction {
         args: Vec<Vec<u8>>,
         gas_limit: u64,
         gas_price: u64,
-        sequence_number: u64,
     },
 }
 
@@ -232,17 +230,6 @@ impl Transaction {
 
     pub fn sender_address(&self) -> &str {
         self.sender()
-    }
-
-    pub fn sequence_number(&self) -> u64 {
-        match self {
-            Transaction::PublishModule {
-                sequence_number, ..
-            } => *sequence_number,
-            Transaction::ExecuteFunction {
-                sequence_number, ..
-            } => *sequence_number,
-        }
     }
 
     pub fn gas_limit(&self) -> u64 {
@@ -359,15 +346,14 @@ impl Transaction {
     }
 
     /// Create a transfer transaction with default gas settings
-    pub fn new_transfer(from: String, to: String, amount: u64, sequence_number: u64) -> Self {
-        Self::new_transfer_with_gas(from, to, amount, sequence_number, 100_000, 1000)
+    pub fn new_transfer(from: String, to: String, amount: u64) -> Self {
+        Self::new_transfer_with_gas(from, to, amount, 100_000, 1000)
     }
 
     pub fn new_transfer_with_gas(
         from: String,
         to: String,
         amount: u64,
-        sequence_number: u64,
         gas_limit: u64,
         gas_price: u64,
     ) -> Self {
@@ -382,22 +368,15 @@ impl Transaction {
             ],
             gas_limit,
             gas_price,
-            sequence_number,
         }
     }
 
     /// Create a burn transaction with default gas settings
-    pub fn new_burn(from: String, amount: u64, sequence_number: u64) -> Self {
-        Self::new_burn_with_gas(from, amount, sequence_number, 100_000, 1000)
+    pub fn new_burn(from: String, amount: u64) -> Self {
+        Self::new_burn_with_gas(from, amount, 100_000, 1000)
     }
 
-    pub fn new_burn_with_gas(
-        from: String,
-        amount: u64,
-        sequence_number: u64,
-        gas_limit: u64,
-        gas_price: u64,
-    ) -> Self {
+    pub fn new_burn_with_gas(from: String, amount: u64, gas_limit: u64, gas_price: u64) -> Self {
         Self::ExecuteFunction {
             sender: from,
             module: Self::KANARI_MODULE.to_string(),
@@ -406,7 +385,6 @@ impl Transaction {
             args: vec![bcs::to_bytes(&amount).unwrap_or_default()],
             gas_limit,
             gas_price,
-            sequence_number,
         }
     }
 }
@@ -416,19 +394,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transfer_helper_builds_native_execute_function() {
-        let tx = Transaction::new_transfer("0x1".to_string(), "0x2".to_string(), 42, 7);
+    fn transfer_helper_builds_native_execute_function_without_sequence_argument() {
+        let tx = Transaction::new_transfer("0x1".to_string(), "0x2".to_string(), 42);
 
         match &tx {
             Transaction::ExecuteFunction {
-                module,
-                function,
-                sequence_number,
-                ..
+                module, function, ..
             } => {
                 assert_eq!(module, Transaction::KANARI_MODULE);
                 assert_eq!(function, Transaction::TRANSFER_AMOUNT_FUNCTION);
-                assert_eq!(*sequence_number, 7);
+            }
+            Transaction::PublishModule { .. } => panic!("transfer helper must build a call"),
+        }
+
+        assert_eq!(
+            tx.native_call(),
+            Some(NativeCall::TransferAmount {
+                recipient: "0x2".to_string(),
+                amount: 42,
+            })
+        );
+        assert_eq!(tx.tx_type_label(), "transfer");
+    }
+
+    #[test]
+    fn transfer_helper_builds_native_execute_function() {
+        let tx = Transaction::new_transfer("0x1".to_string(), "0x2".to_string(), 42);
+
+        match &tx {
+            Transaction::ExecuteFunction {
+                module, function, ..
+            } => {
+                assert_eq!(module, Transaction::KANARI_MODULE);
+                assert_eq!(function, Transaction::TRANSFER_AMOUNT_FUNCTION);
             }
             Transaction::PublishModule { .. } => panic!("transfer helper must build a call"),
         }
@@ -445,7 +443,7 @@ mod tests {
 
     #[test]
     fn burn_helper_builds_native_execute_function() {
-        let tx = Transaction::new_burn("0x1".to_string(), 9, 3);
+        let tx = Transaction::new_burn("0x1".to_string(), 9);
 
         assert_eq!(tx.native_call(), Some(NativeCall::BurnAmount { amount: 9 }));
         assert_eq!(tx.tx_type_label(), "burn");
@@ -457,7 +455,6 @@ mod tests {
         let mut signed_tx = SignedTransaction::new(Transaction::new_burn_with_gas(
             keypair.tagged_address(),
             0,
-            0,
             100_000,
             0,
         ));
@@ -468,9 +465,7 @@ mod tests {
         assert!(signed_tx.verify_signature().unwrap());
 
         match &mut signed_tx.transaction {
-            Transaction::ExecuteFunction {
-                sequence_number, ..
-            } => *sequence_number += 1,
+            Transaction::ExecuteFunction { gas_limit, .. } => *gas_limit += 1,
             Transaction::PublishModule { .. } => unreachable!(),
         }
 
@@ -485,7 +480,6 @@ mod tests {
             0,
             0,
             100_000,
-            0,
         ));
         signed_tx
             .sign(&keypair.private_key, keypair.curve_type)
@@ -505,7 +499,6 @@ mod tests {
             0,
             0,
             100_000,
-            0,
         ));
         signed_tx
             .sign(&keypair.private_key, keypair.curve_type)
@@ -515,9 +508,7 @@ mod tests {
         assert_eq!(verified.hash(), signed_tx.transaction_hash());
 
         match &mut signed_tx.transaction {
-            Transaction::ExecuteFunction {
-                sequence_number, ..
-            } => *sequence_number += 1,
+            Transaction::ExecuteFunction { gas_limit, .. } => *gas_limit += 1,
             Transaction::PublishModule { .. } => unreachable!(),
         }
 

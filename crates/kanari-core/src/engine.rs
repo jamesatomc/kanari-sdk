@@ -719,7 +719,7 @@ impl BlockchainEngine {
             return Ok(Some((0, 0)));
         }
 
-        let mut sequence_increments: AHashMap<AccountAddress, u64> = AHashMap::default();
+        let mut replay_batch: Vec<(AccountAddress, Vec<u8>)> = Vec::new();
         let zero_amount = 0u64.to_le_bytes();
 
         for signed_tx in transactions {
@@ -749,13 +749,16 @@ impl BlockchainEngine {
             }
 
             let sender_addr = KanariAddress::parse_to_account_address(sender)?;
-            *sequence_increments.entry(sender_addr).or_insert(0) += 1;
+            let tx_digest = signed_tx.hash().to_vec();
+            replay_batch.push((sender_addr, tx_digest));
         }
 
         let mut state_write = state_arc.write().unwrap_or_else(|e| e.into_inner());
-        state_write
-            .apply_zero_effect_sequence_batch(sequence_increments)
-            .require("Failed to apply zero-effect native batch")?;
+        for (sender_addr, tx_digest) in replay_batch {
+            state_write
+                .mark_replay_and_versions_applied(&tx_digest, &[], sender_addr)
+                .require("Failed to apply zero-effect native batch")?;
+        }
 
         Ok(Some((transactions.len(), 0)))
     }
@@ -954,9 +957,6 @@ impl BlockchainEngine {
         gas_used: u64,
     ) -> Result<()> {
         let sender_change = changeset.get_or_create_change(sender);
-        if sender_change.sequence_increment == 0 {
-            sender_change.increment_sequence();
-        }
         sender_change.debit(gas_cost);
 
         let dao_addr = AccountAddress::from_hex_literal(KanariAddress::DAO_ADDRESS)?;
@@ -1032,9 +1032,15 @@ impl BlockchainEngine {
                 }
             };
             if validate_sequence {
+                let tx_digest = tx.hash();
+                let object_versions = vec![];
                 state
-                    .validate_sequence(&sender_addr, tx.sequence_number())
-                    .context("Sequence number validation failed")?;
+                    .validate_replay_and_versions(
+                        &tx_digest,
+                        &object_versions,
+                        sender_addr,
+                    )
+                    .context("Sui-style replay/version validation failed")?;
             }
             if total_required > 0 {
                 let balance = state
@@ -1067,9 +1073,6 @@ impl BlockchainEngine {
 
         if gas_cost > i64::MAX as u64 {
             changeset.mark_failed("Gas cost exceeds the supported range".to_string());
-            changeset
-                .get_or_create_change(sender_addr)
-                .increment_sequence();
             changeset.set_gas_used(gas_meter.gas_used);
             return Ok(changeset);
         }
@@ -1086,6 +1089,9 @@ impl BlockchainEngine {
             )?;
             return Ok(changeset);
         }
+
+        let tx_digest = tx.hash();
+        let object_versions = vec![];
 
         match tx {
             Transaction::PublishModule {
@@ -1174,6 +1180,15 @@ impl BlockchainEngine {
         }
 
         Self::apply_gas_and_sequence(&mut changeset, sender_addr, gas_cost, gas_meter.gas_used)?;
+        if changeset.success {
+            if let Ok(mut state_write) = state_arc.write() {
+                let _ = state_write.mark_replay_and_versions_applied(
+                    &tx_digest,
+                    &object_versions,
+                    sender_addr,
+                );
+            }
+        }
         Ok(changeset)
     }
 

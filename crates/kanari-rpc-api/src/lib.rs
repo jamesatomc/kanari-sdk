@@ -258,7 +258,6 @@ pub struct SignedTransactionData {
     pub amount: Option<u64>,
     pub gas_limit: u64,
     pub gas_price: u64,
-    pub sequence_number: u64,
     pub signature: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execute_immediate: Option<bool>,
@@ -272,7 +271,6 @@ pub struct PublishModuleRequest {
     pub module_name: String,
     pub gas_limit: u64,
     pub gas_price: u64,
-    pub sequence_number: u64,
     pub signature: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execute_immediate: Option<bool>,
@@ -289,7 +287,6 @@ pub struct CallFunctionRequest {
     pub args: Vec<Vec<u8>>,
     pub gas_limit: u64,
     pub gas_price: u64,
-    pub sequence_number: u64,
     pub signature: Option<Vec<u8>>,
     pub execute_immediate: Option<bool>,
 }

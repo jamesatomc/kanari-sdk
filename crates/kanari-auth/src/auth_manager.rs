@@ -343,7 +343,7 @@ impl AuthManager {
     ) -> AuthResult<SignedTransaction> {
         let from = session.wallet_address.clone();
 
-        let mut transaction = Transaction::new_transfer(from, to.to_string(), amount, 0);
+        let mut transaction = Transaction::new_transfer(from, to.to_string(), amount);
         if let Transaction::ExecuteFunction {
             gas_limit: tx_gas_limit,
             gas_price: tx_gas_price,

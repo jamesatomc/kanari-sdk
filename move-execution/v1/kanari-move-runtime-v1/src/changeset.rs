@@ -127,7 +127,6 @@ impl ChangeSet {
     pub fn transfer(&mut self, from: AccountAddress, to: AccountAddress, amount: u64) {
         let sender = self.get_or_create_change(from);
         sender.debit(amount);
-        sender.increment_sequence();
 
         let receiver = self.get_or_create_change(to);
         receiver.credit(amount);

@@ -131,12 +131,7 @@ pub async fn request_from_dev(
             .context("Failed to derive public key from wallet")?;
     let sender_for_tx = keypair.tagged_address();
 
-    let tx = Transaction::new_transfer(
-        sender_for_tx.clone(),
-        recipient.clone(),
-        amount_mist,
-        account.sequence_number,
-    );
+    let tx = Transaction::new_transfer(sender_for_tx.clone(), recipient.clone(), amount_mist);
 
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
@@ -149,7 +144,6 @@ pub async fn request_from_dev(
         amount: Some(amount_mist),
         gas_limit: signed_tx.transaction.gas_limit(),
         gas_price: signed_tx.transaction.gas_price(),
-        sequence_number: account.sequence_number,
         signature: Some(signed_tx.signature.clone()),
         execute_immediate: Some(false),
     };

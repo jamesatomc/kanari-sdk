@@ -70,10 +70,7 @@ fn main() -> Result<()> {
     println!("   Amount: {} Mist", amount_mist);
     println!("   Gas Limit: {}", signed_tx.transaction.gas_limit());
     println!("   Gas Price: {} Mist", signed_tx.transaction.gas_price());
-    println!(
-        "   Sequence Number: {}",
-        signed_tx.transaction.sequence_number()
-    );
+
     println!("   Signature Length: {} bytes", signed_tx.signature.len());
     println!("   ✓ Transaction signed successfully\n");
 

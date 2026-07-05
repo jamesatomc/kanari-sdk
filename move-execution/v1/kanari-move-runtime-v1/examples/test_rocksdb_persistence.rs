@@ -27,8 +27,7 @@ fn main() -> Result<()> {
 
     // Create an account
     println!("2. Creating account {:?} with balance 1000", addr);
-    let mut account = Account::with_native_balance(acc_addr, 1000);
-    account.increment_sequence();
+    let account = Account::with_native_balance(acc_addr, 1000);
     state1.save_account(&account)?;
 
     // Commit changes

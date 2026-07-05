@@ -200,7 +200,6 @@ impl TokenTransfer {
             ],
             gas_limit,
             gas_price,
-            sequence_number: account.sequence_number,
             signature: None, // Will be set after signing
             execute_immediate: Some(true),
         };

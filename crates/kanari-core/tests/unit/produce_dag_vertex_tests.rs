@@ -7,14 +7,13 @@ fn authority_key(seed: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
 }
 
-fn signed_transfer(sequence_number: u64) -> SignedTransaction {
+fn signed_transfer() -> SignedTransaction {
     let sender = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let recipient = generate_keypair(CurveType::Ed25519).invariant("ed25519 keypair");
     let tx = Transaction::new_transfer(
         sender.tagged_address(),
         recipient.address,
         1,
-        sequence_number,
     );
     let mut signed_tx = SignedTransaction::new(tx);
     signed_tx
@@ -29,7 +28,7 @@ fn signed_network_vertex(
     round: u64,
     parents: Vec<VertexId>,
 ) -> DagVertex {
-    let tx = signed_transfer(0);
+    let tx = signed_transfer();
     let mut vertex = DagVertex::new(
         round,
         author.to_string(),
@@ -298,7 +297,7 @@ fn test_non_assigned_authority_proposes_dag_vertex_without_checkpoint_commit() {
         Some("auth1".to_string())
     );
     engine
-        .submit_transactions_batch(vec![signed_transfer(0)])
+        .submit_transactions_batch(vec![signed_transfer()])
         .invariant("submit tx");
 
     let produced = dag_engine.produce_vertex().invariant("produce DAG vertex");

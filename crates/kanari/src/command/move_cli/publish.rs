@@ -4,8 +4,8 @@
 use super::reroot_path;
 use crate::command::common::resolve_transaction_gas;
 use crate::command::common::{
-    build_blocking_client, get_account_sequence, get_rpc_endpoint, get_sender_for_tx,
-    load_wallet_for, normalize_addr, resolve_sender,
+    build_blocking_client, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, normalize_addr,
+    resolve_sender,
 };
 use anyhow::{Result, bail};
 use clap::*;
@@ -117,12 +117,6 @@ impl Publish {
         let mut published_count = 0;
         let mut skipped_count = 0;
 
-        // === Fetch base sequence number once to avoid race conditions ===
-        let base_seq: u64 = get_account_sequence(&client, &rpc, &sender_for_tx)?;
-
-        // Next sequence to use for publishing modules (increment only when a module is actually published)
-        let mut next_seq = base_seq;
-
         for module_unit in &modules {
             let module = &module_unit.unit.module;
             let module_name = module.self_id().name().to_string();
@@ -164,9 +158,6 @@ impl Publish {
             // Create PublishModuleRequest and submit to RPC endpoint
             use kanari_rpc_api::{PublishModuleRequest, RpcRequest, RpcResponse, methods};
 
-            // Use a monotonic sequence number reserved from base_seq for this publish
-            let seq_num = next_seq;
-
             // Wrap and sign transaction using SignedTransaction (fatal on failure)
             let signed_tx = {
                 let transaction = Transaction::PublishModule {
@@ -175,7 +166,6 @@ impl Publish {
                     module_name: module_name.clone(),
                     gas_limit,
                     gas_price,
-                    sequence_number: seq_num,
                 };
 
                 let mut stx = SignedTransaction::new(transaction);
@@ -190,7 +180,6 @@ impl Publish {
                 module_name: module_name.clone(),
                 gas_limit,
                 gas_price,
-                sequence_number: seq_num,
                 signature: Some(signed_tx.signature.clone()),
                 execute_immediate: Some(true),
             };
@@ -237,9 +226,8 @@ impl Publish {
                                 eprintln!("     RPC response has no result and no error");
                             }
 
-                            // RPC accepted request: advance sequence and published count
+                            // RPC accepted request: update published count
                             published_count += 1;
-                            next_seq = next_seq.wrapping_add(1);
                         }
                     }
                     Err(e) => error!("     Failed to parse RPC response: {}", e),
