@@ -48,7 +48,22 @@ jobs:
         run: cargo test -p kanari-types --lib object
 
       - name: Test runtime object state
-        run: cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture
+        id: runtime_tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p kanari-move-runtime-v1 --lib state_object -- --nocapture 2>&1 | tee object-runtime-test.log
+
+      - name: Commit runtime test diagnostics
+        if: steps.runtime_tests.outcome == 'failure'
+        run: |
+          git config user.name 'kanari-object-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add object-runtime-test.log
+          git commit -m 'ci: capture object runtime test failure [runtime-test-diagnostic]'
+          git push origin HEAD:object-centric
+          exit 1
 
       - name: Test core object path
         run: cargo test -p kanari-core --lib object_ -- --nocapture
@@ -65,7 +80,7 @@ jobs:
         run: |
           git config user.name 'kanari-object-bot'
           git config user.email 'actions@users.noreply.github.com'
-          rm -f object-pool-fmt.log
+          rm -f object-pool-fmt.log object-runtime-test.log
           git add -A
           if git diff --cached --quiet; then
             echo 'No validated recovery changes to commit'
