@@ -3,6 +3,7 @@
 
 use super::reroot_path;
 use clap::*;
+use kanari_types::error::KanariUnwrapExt;
 use move_docgen::DocgenOptions;
 use move_package::{BuildConfig, ModelConfig};
 use std::{fs, path::PathBuf};
@@ -61,7 +62,7 @@ impl Docgen {
     /// Calling the Docgen
     pub fn execute(self, path: Option<PathBuf>, config: BuildConfig) -> anyhow::Result<()> {
         let model = config.move_model_for_package(
-            &reroot_path(path).unwrap(),
+            &reroot_path(path)?,
             ModelConfig {
                 all_files_as_targets: false,
                 target_filter: None,
@@ -111,7 +112,10 @@ impl Docgen {
 
         for (file, content) in generator.r#gen() {
             let path = PathBuf::from(&file);
-            fs::create_dir_all(path.parent().unwrap())?;
+            fs::create_dir_all(
+                path.parent()
+                    .require("Generated doc path must have a parent directory")?,
+            )?;
             fs::write(path.as_path(), content)?;
             eprintln!("Generated {:?}", path);
         }

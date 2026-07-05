@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::storage::shared_db::get_or_open_db;
 use rocksdb::{DB, IteratorMode, WriteBatch};
 
 /// Custom error type for PersistentStore operations
@@ -80,7 +79,7 @@ impl PersistentStore {
 
     /// Open store using an explicit path (None -> default).
     pub fn open_with_path(path_opt: Option<PathBuf>) -> Result<Self> {
-        let db = get_or_open_db(path_opt)?;
+        let db = kanari_db_common::open_or_get_db(path_opt)?;
         Ok(PersistentStore {
             db: Some(db),
             memory_store: None,
@@ -154,13 +153,6 @@ impl PersistentStore {
         }
     }
 
-    /// Flush all pending writes to the backing store synchronously.
-    pub fn flush(&self) -> std::result::Result<(), PersistentStoreError> {
-        // RocksDB writes are synchronous in this implementation
-        // In-memory writes are immediate
-        Ok(())
-    }
-
     /// Delete a key from the store.
     pub fn delete(&self, key: &[u8]) -> std::result::Result<(), PersistentStoreError> {
         if let Some(db) = &self.db {
@@ -225,19 +217,6 @@ impl PersistentStore {
     /// Expose underlying RocksDB instance for other components (e.g. SMT)
     pub fn get_db(&self) -> Option<Arc<DB>> {
         self.db.clone()
-    }
-
-    /// Apply a write batch atomically.
-    pub fn apply_batch(
-        &self,
-        batch: rocksdb::WriteBatch,
-    ) -> std::result::Result<(), PersistentStoreError> {
-        if let Some(db) = &self.db {
-            db.write(batch)?;
-        }
-        // Note: In-memory batch application is not supported directly via RocksDB batch type
-        // For in-memory, callers should use save_raw individually or implement a custom batch
-        Ok(())
     }
 
     fn is_internal_smt_key(key: &[u8]) -> bool {

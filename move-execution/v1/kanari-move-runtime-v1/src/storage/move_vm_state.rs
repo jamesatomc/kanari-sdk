@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::identifier::Identifier;
 use move_core_types::language_storage::ModuleId;
@@ -12,7 +13,8 @@ use crate::storage::persistent_store::PersistentStore;
 
 /// Persistent storage wrapper for Move modules, resources, and framework metadata.
 #[derive(Clone)]
-pub struct MoveVMState {
+#[allow(clippy::upper_case_acronyms)]
+pub(crate) struct MoveVMState {
     store: Arc<PersistentStore>,
 }
 
@@ -20,18 +22,18 @@ impl MoveVMState {
     const MODULE_INDEX_KEY: &'static [u8] = b"module_index";
 
     /// Use an already-open persistent store shared with the chain state.
-    pub fn new(store: Arc<PersistentStore>) -> Self {
+    pub(crate) fn new(store: Arc<PersistentStore>) -> Self {
         MoveVMState { store }
     }
 
     /// Return the shared backing store so callers can create isolated runtime caches
     /// over the same canonical module/resource database.
-    pub fn store(&self) -> Arc<PersistentStore> {
+    pub(crate) fn store(&self) -> Arc<PersistentStore> {
         self.store.clone()
     }
 
     /// Create an in-memory MoveVMState for testing or Miri (no filesystem ops).
-    pub fn new_in_memory() -> Result<Self> {
+    pub(crate) fn new_in_memory() -> Result<Self> {
         let store = PersistentStore::open_in_memory()?;
         Ok(MoveVMState {
             store: Arc::new(store),
@@ -39,7 +41,7 @@ impl MoveVMState {
     }
 
     /// Open default store for Move VM state.
-    pub fn open_default() -> Result<Self> {
+    pub(crate) fn open_default() -> Result<Self> {
         // Honor legacy env var for Move VM DB path
         let db_path = std::env::var("KANARI_MOVE_VM_DB").ok().map(PathBuf::from);
         let store = PersistentStore::open_with_path(db_path)?;
@@ -88,6 +90,7 @@ impl MoveVMState {
         Ok(())
     }
 
+    #[cfg(feature = "framework-pruning")]
     fn remove_from_string_index(&self, key: &[u8], value: &str) -> Result<()> {
         let mut index = self.load_string_index(key)?;
         let old_len = index.len();
@@ -109,7 +112,7 @@ impl MoveVMState {
     }
 
     /// Save a module blob keyed by module id.
-    pub fn save_module(&self, module_id: &ModuleId, blob: &[u8]) -> Result<()> {
+    pub(crate) fn save_module(&self, module_id: &ModuleId, blob: &[u8]) -> Result<()> {
         let key = Self::module_key(module_id);
         self.store.save(key.as_bytes(), blob)?;
         self.add_to_string_index(Self::MODULE_INDEX_KEY, key)?;
@@ -117,7 +120,8 @@ impl MoveVMState {
     }
 
     /// Delete a module blob keyed by module id and remove it from the persistent index.
-    pub fn delete_module(&self, module_id: &ModuleId) -> Result<()> {
+    #[cfg(feature = "framework-pruning")]
+    pub(crate) fn delete_module(&self, module_id: &ModuleId) -> Result<()> {
         let key = Self::module_key(module_id);
         self.store.delete(key.as_bytes())?;
         self.remove_from_string_index(Self::MODULE_INDEX_KEY, &key)?;
@@ -125,7 +129,7 @@ impl MoveVMState {
     }
 
     /// Persist framework manifest + hash for operational safety / debugging.
-    pub fn save_framework_manifest(
+    pub(crate) fn save_framework_manifest(
         &self,
         name: &str,
         manifest: &Vec<(String, String)>,
@@ -140,7 +144,7 @@ impl MoveVMState {
     }
 
     /// Load a previously persisted framework hash (if any).
-    pub fn get_framework_hash(&self, name: &str) -> Option<String> {
+    pub(crate) fn get_framework_hash(&self, name: &str) -> Option<String> {
         let hash_key = Self::framework_hash_key(name);
         self.store
             .load::<String>(hash_key.as_bytes())
@@ -149,7 +153,7 @@ impl MoveVMState {
     }
 
     /// Get all module IDs from the persistent index.
-    pub fn get_all_module_ids(&self) -> Result<Vec<ModuleId>> {
+    pub(crate) fn get_all_module_ids(&self) -> Result<Vec<ModuleId>> {
         let mut modules = Vec::new();
         for module_key in self.load_string_index(Self::MODULE_INDEX_KEY)? {
             if let Some(module_id) = Self::parse_module_key(&module_key) {
@@ -160,14 +164,14 @@ impl MoveVMState {
     }
 
     /// Get module bytecode from persistent storage
-    pub fn get_module(&self, module_id: &ModuleId) -> Option<Vec<u8>> {
+    pub(crate) fn get_module(&self, module_id: &ModuleId) -> Option<Vec<u8>> {
         let key = Self::module_key(module_id);
         self.store.load::<Vec<u8>>(key.as_bytes()).ok().flatten()
     }
 
     /// Save a resource blob keyed by address and struct tag.
     /// Coin resources also update the mirrored object payload stored under the same address.
-    pub fn save_resource(
+    pub(crate) fn save_resource(
         &self,
         address: &AccountAddress,
         tag: &move_core_types::language_storage::StructTag,
@@ -178,7 +182,7 @@ impl MoveVMState {
         // Persist the resource blob in Move VM storage.
         self.store
             .save(key.as_bytes(), blob)
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .require("Failed to persist Move VM resource")?;
 
         // Keep coin objects in sync with the latest resource bytes.
         if tag.module.as_str() == "coin" && tag.name.as_str() == "Coin" {
@@ -188,8 +192,9 @@ impl MoveVMState {
                 && let Ok(mut created_obj) =
                     bcs::from_bytes::<crate::changeset::CreatedObject>(&obj_bytes)
             {
+                // Keep the mirrored payload current for VM resource reads, but leave
+                // object versioning to StateManager so authorities stay deterministic.
                 created_obj.data = blob.to_vec();
-                created_obj.version += 1;
 
                 let updated_bytes = bcs::to_bytes(&created_obj)?;
                 self.store.save(obj_key.as_bytes(), &updated_bytes)?;
@@ -200,7 +205,7 @@ impl MoveVMState {
     }
 
     /// Get resource blob from persistent storage
-    pub fn get_resource(
+    pub(crate) fn get_resource(
         &self,
         address: &AccountAddress,
         tag: &move_core_types::language_storage::StructTag,
@@ -210,7 +215,7 @@ impl MoveVMState {
     }
 
     /// Load object payload bytes from the stored `CreatedObject` wrapper.
-    pub fn get_object(&self, object_id: &AccountAddress) -> Option<Vec<u8>> {
+    pub(crate) fn get_object(&self, object_id: &AccountAddress) -> Option<Vec<u8>> {
         let obj_key = Self::object_key(object_id);
         if let Ok(Some(obj_bytes)) = self.store.load::<Vec<u8>>(obj_key.as_bytes())
             && let Ok(created_obj) = bcs::from_bytes::<crate::changeset::CreatedObject>(&obj_bytes)
@@ -221,7 +226,7 @@ impl MoveVMState {
     }
 
     /// Delete a resource blob keyed by address and struct tag.
-    pub fn delete_resource(
+    pub(crate) fn delete_resource(
         &self,
         address: &AccountAddress,
         tag: &move_core_types::language_storage::StructTag,
@@ -229,30 +234,10 @@ impl MoveVMState {
         let key = Self::resource_key(address, tag);
         self.store
             .delete(key.as_bytes())
-            .map_err(|e| anyhow::anyhow!(e))
+            .require("Failed to delete Move VM resource")
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::MoveVMState;
-    use anyhow::Result;
-    use move_core_types::account_address::AccountAddress;
-    use move_core_types::language_storage::StructTag;
-    use std::str::FromStr;
-
-    #[test]
-    fn delete_resource_removes_saved_value() -> Result<()> {
-        let state = MoveVMState::new_in_memory()?;
-        let owner = AccountAddress::from_hex_literal("0x1234")?;
-        let tag = StructTag::from_str("0x2::coin::Coin<0x2::kanari::KANARI>")?;
-        let bytes = vec![1u8, 2, 3, 4];
-
-        state.save_resource(&owner, &tag, &bytes)?;
-        assert_eq!(state.get_resource(&owner, &tag), Some(bytes));
-
-        state.delete_resource(&owner, &tag)?;
-        assert_eq!(state.get_resource(&owner, &tag), None);
-        Ok(())
-    }
-}
+#[path = "../../tests/unit/move_vm_state_tests.rs"]
+mod tests;

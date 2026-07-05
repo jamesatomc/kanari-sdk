@@ -5,6 +5,7 @@ use crate::{get_kanari_config_path, get_kanari_dir};
 use serde_yaml::{Mapping, Value};
 use std::fs::{self, File};
 use std::io::{self, Write};
+use std::path::Path;
 
 /// Load configuration from kanari.yaml file
 pub fn load_kanari_config() -> io::Result<Value> {
@@ -74,11 +75,12 @@ pub fn load_kanari_config() -> io::Result<Value> {
     Ok(config)
 }
 
-/// Save configuration to kanari.yaml file
+/// Save configuration to kanari.yaml file.
 pub fn save_kanari_config(config: &Value) -> io::Result<()> {
-    let config_path = get_kanari_config_path();
+    save_kanari_config_to_path(config, &get_kanari_config_path())
+}
 
-    // Serialize and save with error handling
+fn save_kanari_config_to_path(config: &Value, config_path: &Path) -> io::Result<()> {
     let yaml_str = serde_yaml::to_string(config).map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -86,16 +88,38 @@ pub fn save_kanari_config(config: &Value) -> io::Result<()> {
         )
     })?;
 
-    // Atomic write using a temporary file
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     let tmp_path = config_path.with_extension("tmp");
     {
         let mut file = File::create(&tmp_path)?;
         file.write_all(yaml_str.as_bytes())?;
         file.sync_all()?;
     }
-    fs::rename(tmp_path, config_path)?;
 
-    Ok(())
+    match fs::rename(&tmp_path, config_path) {
+        Ok(()) => Ok(()),
+        Err(rename_error) if config_path.exists() => {
+            // Windows does not replace an existing destination with rename.
+            fs::copy(&tmp_path, config_path).map_err(|copy_error| {
+                io::Error::new(
+                    copy_error.kind(),
+                    format!(
+                        "Failed to replace config after rename error ({}): {}",
+                        rename_error, copy_error
+                    ),
+                )
+            })?;
+            fs::remove_file(tmp_path)?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(tmp_path);
+            Err(error)
+        }
+    }
 }
 
 /// Create default configuration matching user expectations
@@ -150,4 +174,30 @@ pub fn create_default_envs() -> Value {
     }
 
     Value::Sequence(envs)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_config_replaces_existing_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("kanari.yaml");
+        let mut first = Mapping::new();
+        first.insert(
+            Value::String("active_env".into()),
+            Value::String("local".into()),
+        );
+        let mut second = Mapping::new();
+        second.insert(
+            Value::String("active_env".into()),
+            Value::String("dev".into()),
+        );
+
+        save_kanari_config_to_path(&Value::Mapping(first), &config_path).unwrap();
+        save_kanari_config_to_path(&Value::Mapping(second), &config_path).unwrap();
+
+        let saved: Value = serde_yaml::from_str(&fs::read_to_string(config_path).unwrap()).unwrap();
+        assert_eq!(saved.get("active_env").and_then(Value::as_str), Some("dev"));
+    }
 }

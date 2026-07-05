@@ -3,12 +3,13 @@
 
 use crate::command::common::{
     check_node_connection, get_rpc_endpoint, get_sender_for_tx, load_wallet_for, normalize_addr,
-    resolve_sender,
+    resolve_sender, resolve_transaction_gas, sign_call_function_request,
 };
 use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_rpc_api::CallFunctionRequest;
 use kanari_rpc_client::RpcClient;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::language_storage::TypeTag;
 use std::str::FromStr;
 
@@ -81,6 +82,7 @@ impl TokenTransfer {
         let from_addr = resolve_sender(self.from.clone())?;
         let to_addr = normalize_addr(&self.to)?;
         let wallet = load_wallet_for(&from_addr, Some(self.password.clone()))?;
+        let (gas_limit, gas_price) = resolve_transaction_gas(None, None);
 
         eprintln!(
             "Transferring {} units of {} token...",
@@ -156,7 +158,7 @@ impl TokenTransfer {
             );
         }
 
-        let coin_object_id = selected_coin_id.as_ref().expect("selected coin checked");
+        let coin_object_id = selected_coin_id.as_ref().invariant("selected coin checked");
         eprintln!("  Using coin object: {}", coin_object_id);
         eprintln!(
             "  Selected Coin Balance: {} (base units)",
@@ -196,33 +198,13 @@ impl TokenTransfer {
                 )
                 .context("Failed to serialize recipient address")?,
             ],
-            gas_limit: 100_000,
-            gas_price: 0,
+            gas_limit,
+            gas_price,
             sequence_number: account.sequence_number,
             signature: None, // Will be set after signing
             execute_immediate: Some(true),
         };
-
-        // Create a dummy transaction to sign - use the tagged sender address
-        let dummy_tx = kanari_types::transaction::Transaction::ExecuteFunction {
-            sender: sender_tagged.clone(), // Use tagged address for signing
-            module: format!("{}::{}", call_req.package, call_req.module),
-            function: call_req.function.clone(),
-            type_args: call_req.type_args.clone(),
-            args: call_req.args.clone(),
-            gas_limit: call_req.gas_limit,
-            gas_price: call_req.gas_price,
-            sequence_number: call_req.sequence_number,
-        };
-
-        let mut signed_tx = kanari_types::transaction::SignedTransaction::new(dummy_tx);
-        signed_tx
-            .sign(&wallet.private_key, wallet.curve_type)
-            .context("Failed to sign transaction")?;
-
-        // Update the call request with the signature
-        let mut final_call_req = call_req;
-        final_call_req.signature = Some(signed_tx.signature.clone());
+        let final_call_req = sign_call_function_request(call_req, &wallet)?;
 
         eprintln!("  Gas Limit: {}", final_call_req.gas_limit);
         eprintln!("  Gas Price: {} Mist/gas", final_call_req.gas_price);

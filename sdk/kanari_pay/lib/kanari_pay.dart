@@ -13,3 +13,5 @@ export 'src/models/stats.dart';
 export 'src/models/transaction.dart';
 export 'src/models/module.dart';
 export 'src/models/auth_models.dart';
+
+export 'src/modules/transactions/constants.dart';

@@ -4,11 +4,10 @@
 class TransactionConstants {
   const TransactionConstants._();
 
-  // BCS Transaction types
-  static const String txPublishModule = 'PublishModule';
-  static const String txExecuteFunction = 'ExecuteFunction';
-  static const String txTransfer = 'Transfer';
-  static const String txBurn = 'Burn';
+  // Backend-native KANARI balance calls mirrored by Transaction::native_call.
+  // These are not Move entry functions; RPC rebuilds and verifies the same signed Transaction.
+  static const String nativeKanariModule = '0x2::kanari';
+  static const String nativeBurnAmountFunction = 'burn_amount';
 
   // RPC methods
   static const String rpcPublishModule = 'kanari_publishModule';

@@ -70,7 +70,7 @@ impl GasParameters {
     }
 }
 
-fn uid_address_bytes(uid_val: &move_vm_types::values::Value) -> Option<Vec<u8>> {
+pub(crate) fn uid_address_bytes(uid_val: &move_vm_types::values::Value) -> Option<Vec<u8>> {
     use move_core_types::runtime_value::{MoveStructLayout, MoveTypeLayout};
 
     // Support both:
@@ -515,9 +515,9 @@ mod tests {
     #[test]
     fn test_address_bytes_validation() {
         // Test that address must be exactly 32 bytes
-        let short_addr = vec![0x1Au8; 31];
-        let long_addr = vec![0x1Au8; 33];
-        let valid_addr = vec![0x1Au8; 32];
+        let short_addr = [0x1Au8; 31];
+        let long_addr = [0x1Au8; 33];
+        let valid_addr = [0x1Au8; 32];
 
         assert_eq!(short_addr.len(), 31);
         assert_eq!(long_addr.len(), 33);

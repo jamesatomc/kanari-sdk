@@ -112,7 +112,7 @@ p256 = { version = "0.13.2", features = ["ecdsa", "std", "sha2"] }              
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }                    # Ed25519 signatures
 curve25519-dalek = { version = "4.1.3", features = ["rand_core"] }                 # X25519 key exchange
 secp256k1 = { version = "0.31.1", features = ["recovery"] }                        # secp256k1 with recovery
-rsa = { version = "0.9.10", default-features = false, features = ["std"] }          # RSA signature verification
+rsa = { version = "0.9.10", default-features = false, features = ["std"] }         # RSA signature verification
 
 ## Symmetric Encryption & MAC
 aes-gcm = "0.10.3"                                                                 # Authenticated encryption
@@ -162,7 +162,7 @@ siphasher = "1.0.2"                                                             
 # ============================================================================
 # Error Handling & Result Types
 # ============================================================================
-anyhow = "1.0.101"
+anyhow = "1.0.103"
 thiserror = { version = "2.0.18", default-features = true }
 better_any = { version = "0.2.1", features = ["derive"] }
 
@@ -208,7 +208,7 @@ data-encoding = "2.11.0"                                                        
 # Time & Date Handling
 # ============================================================================
 chrono = { version = "0.4.44", features = ["serde"] }
-uuid = { version = "1.18", features = ["v4", "serde"] }
+uuid = { version = "1.23.4", features = ["v4", "serde"] }
 
 # ============================================================================
 # Mathematics & Numerics

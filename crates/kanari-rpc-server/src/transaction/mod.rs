@@ -13,6 +13,7 @@ use kanari_types::address::Address;
 use kanari_types::transaction::{NativeCall, SignedTransaction, Transaction};
 use move_binary_format::CompiledModule;
 use std::collections::HashSet;
+use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info};
 
 // Extract function names from module bytecode (returns None on error)
@@ -361,7 +362,39 @@ fn submit_pending_response(
     }
 }
 
-fn execute_or_submit_response(
+async fn submit_after_immediate_execution(
+    state: &RpcServerState,
+    signed_tx: SignedTransaction,
+) -> anyhow::Result<()> {
+    const MAX_RETRIES: usize = 5;
+    const RETRY_DELAY_MS: u64 = 50;
+
+    let mut last_error = None;
+
+    for attempt in 0..MAX_RETRIES {
+        match state
+            .engine
+            .submit_transactions_batch(vec![signed_tx.clone()])
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                let error_text = e.to_string();
+                let retryable = error_text.contains("Sequence number too high");
+                last_error = Some(e);
+
+                if !retryable || attempt + 1 == MAX_RETRIES {
+                    break;
+                }
+
+                sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+            }
+        }
+    }
+
+    Err(last_error.expect("retry loop should capture a submission error"))
+}
+
+async fn execute_or_submit_response(
     state: &RpcServerState,
     request_id: u64,
     signed_tx: SignedTransaction,
@@ -396,7 +429,7 @@ fn execute_or_submit_response(
             }
 
             let tx_for_broadcast = signed_tx.clone();
-            if let Err(e) = state.engine.submit_transactions_batch(vec![signed_tx]) {
+            if let Err(e) = submit_after_immediate_execution(state, signed_tx).await {
                 error!("Failed to submit executed transaction: {}", e);
                 return RpcResponse {
                     jsonrpc: "2.0".into(),
@@ -466,7 +499,7 @@ pub async fn handle_submit_transaction(
 
             Transaction::new_transfer_with_gas(
                 tx_data.sender.clone(),
-                recipient.to_string(),
+                recipient.to_hex_literal(),
                 amount,
                 tx_data.sequence_number,
                 tx_data.gas_limit,
@@ -510,6 +543,7 @@ pub async fn handle_submit_transaction(
         "submit",
         "Submission failed",
     )
+    .await
 }
 
 /// Handle get transaction by hash request
@@ -708,6 +742,7 @@ pub async fn handle_publish_module(state: &RpcServerState, request: &RpcRequest)
         "publish",
         "Module publication failed",
     )
+    .await
 }
 
 /// Handle call function request
@@ -736,6 +771,7 @@ pub async fn handle_call_function(state: &RpcServerState, request: &RpcRequest) 
         "call",
         "Call submission failed",
     )
+    .await
 }
 
 /// Handle view function request (read-only, no transaction submission)

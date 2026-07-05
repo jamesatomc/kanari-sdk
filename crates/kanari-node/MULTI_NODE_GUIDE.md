@@ -21,10 +21,10 @@ DAG consensus no longer falls back to deterministic demo keys. Every validator m
 - one unique private consensus signing key
 - one shared `consensus-public-keys.json` file containing the public keys for the whole authority set
 
-Generate local keys for a 3-node test cluster:
+Generate local keys for a 4-node test cluster:
 
 ```powershell
-cargo run --bin kanari-node -- consensus-keygen --node-count 3 --output-dir .\consensus-keys --force
+cargo run --bin kanari-node -- consensus-keygen --node-count 4 --output-dir .\consensus-keys --force
 ```
 
 This creates:
@@ -35,6 +35,7 @@ consensus-keys/
   node1-consensus-private-key.hex
   node2-consensus-private-key.hex
   node3-consensus-private-key.hex
+  node4-consensus-private-key.hex
 ```
 
 Keep private key files out of git and do not reuse one private key across validators.
@@ -56,18 +57,22 @@ By default it stores keys under:
 Start nodes in separate terminals:
 
 ```powershell
-.\start-node.ps1 -NodeId 1 -Network devnet -Authorities "0x1,0x2,0x3"
+.\start-node.ps1 -NodeId 1 -Network devnet -Authorities "0x1,0x2,0x3,0x4"
 ```
 
 ```powershell
-.\start-node.ps1 -NodeId 2 -Network devnet -Authorities "0x1,0x2,0x3" -Bootstrap "/ip4/<node1-ip>/tcp/19000"
+.\start-node.ps1 -NodeId 2 -Network devnet -Authorities "0x1,0x2,0x3,0x4" -Bootstrap "/ip4/127.0.0.1/tcp/19000"
 ```
 
 ```powershell
-.\start-node.ps1 -NodeId 3 -Network devnet -Authorities "0x1,0x2,0x3" -Bootstrap "/ip4/<node1-ip>/tcp/19000"
+.\start-node.ps1 -NodeId 3 -Network devnet -Authorities "0x1,0x2,0x3,0x4" -Bootstrap "/ip4/127.0.0.1/tcp/19000"
 ```
 
-`start-node.ps1` reads the matching `node<N>-consensus-private-key.hex` file and the shared `consensus-public-keys.json` from the consensus key directory.
+```powershell
+.\start-node.ps1 -NodeId 4 -Network devnet -Authorities "0x1,0x2,0x3,0x4" -Bootstrap "/ip4/127.0.0.1/tcp/19000"
+```
+
+`start-node.ps1` reads the matching `node<N>-consensus-private-key.hex` file and the shared `consensus-public-keys.json` from the consensus key directory. RPC binds to `0.0.0.0` by default so explorer and wallet clients on the LAN can reach the node. Use firewall rules or pass a narrower `-RpcHost` value when running outside a trusted dev network.
 
 ## Manual Start
 
@@ -84,7 +89,7 @@ cargo run --bin kanari-node -- start `
   --rpc-port 19001 `
   --data-dir data/node1 `
   --authority-id 0x1 `
-  --authorities 0x1,0x2,0x3 `
+  --authorities 0x1,0x2,0x3,0x4 `
   --consensus-private-key-hex $node1Key `
   --consensus-public-keys .\consensus-keys\consensus-public-keys.json
 ```
@@ -100,7 +105,7 @@ cargo run --bin kanari-node -- start `
   --rpc-port 19011 `
   --data-dir data/node2 `
   --authority-id 0x2 `
-  --authorities 0x1,0x2,0x3 `
+  --authorities 0x1,0x2,0x3,0x4 `
   --consensus-private-key-hex $node2Key `
   --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
   --bootstrap "/ip4/<node1-ip>/tcp/19000"
@@ -117,8 +122,25 @@ cargo run --bin kanari-node -- start `
   --rpc-port 19021 `
   --data-dir data/node3 `
   --authority-id 0x3 `
-  --authorities 0x1,0x2,0x3 `
+  --authorities 0x1,0x2,0x3,0x4 `
   --consensus-private-key-hex $node3Key `
+  --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
+  --bootstrap "/ip4/<node1-ip>/tcp/19000"
+```
+
+### Node 4
+
+```powershell
+$node4Key = (Get-Content .\consensus-keys\node4-consensus-private-key.hex -Raw).Trim()
+
+cargo run --bin kanari-node -- start `
+  --network devnet `
+  --p2p-port 19030 `
+  --rpc-port 19031 `
+  --data-dir data/node4 `
+  --authority-id 0x4 `
+  --authorities 0x1,0x2,0x3,0x4 `
+  --consensus-private-key-hex $node4Key `
   --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
   --bootstrap "/ip4/<node1-ip>/tcp/19000"
 ```
@@ -127,7 +149,7 @@ cargo run --bin kanari-node -- start `
 
 - `--network <NETWORK>`: selects `devnet`, `testnet`, or `mainnet`
 - `--authority-id <ID>`: validator authority ID, for example `0x1`
-- `--authorities <IDS>`: comma-separated committee, for example `0x1,0x2,0x3`
+- `--authorities <IDS>`: comma-separated committee, for example `0x1,0x2,0x3,0x4`
 - `--consensus-private-key-hex <HEX>`: 32-byte Ed25519 seed hex for this validator
 - `--consensus-public-keys <PATH>`: JSON map of authority ID to public key hex
 - `--p2p-port <PORT>`: P2P networking port
@@ -149,7 +171,7 @@ kanari-node start `
   --p2p-port 19000 `
   --rpc-port 19001 `
   --authority-id 0x1 `
-  --authorities 0x1,0x2,0x3 `
+  --authorities 0x1,0x2,0x3,0x4 `
   --consensus-private-key-hex $node1Key `
   --consensus-public-keys .\consensus-keys\consensus-public-keys.json `
   --relay-server
@@ -165,6 +187,7 @@ Windows:
 --data-dir C:\Users\<Username>\.kanari\kanari-db\node1
 --data-dir C:\Users\<Username>\.kanari\kanari-db\node2
 --data-dir C:\Users\<Username>\.kanari\kanari-db\node3
+--data-dir C:\Users\<Username>\.kanari\kanari-db\node4
 ```
 
 Linux/macOS:
@@ -173,6 +196,7 @@ Linux/macOS:
 --data-dir ~/.kanari/kanari-db/node1
 --data-dir ~/.kanari/kanari-db/node2
 --data-dir ~/.kanari/kanari-db/node3
+--data-dir ~/.kanari/kanari-db/node4
 ```
 
 ## RPC Endpoints
@@ -182,6 +206,7 @@ Local endpoints:
 - Node 1: `http://127.0.0.1:19001`
 - Node 2: `http://127.0.0.1:19011`
 - Node 3: `http://127.0.0.1:19021`
+- Node 4: `http://127.0.0.1:19031`
 
 To expose RPC to the LAN, bind with `--rpc-host 0.0.0.0` or a specific machine IP. Only do this on a trusted network or behind firewall rules.
 

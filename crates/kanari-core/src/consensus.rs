@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use kanari_crypto::hash_data_blake3;
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::SignedTransaction;
 use mysticeti_consensus::protocol::Protocol as MysticetiProtocol;
 use serde::{Deserialize, Serialize};
@@ -34,10 +35,6 @@ pub struct DagVertex {
     pub timestamp: u64,
     pub signature: Vec<u8>,
     pub metadata: VertexMetadata,
-    #[serde(skip)]
-    pub cached_serialized_data: Option<Vec<u8>>,
-    #[serde(skip)]
-    pub cached_hash: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +68,7 @@ impl DagVertex {
             state_root,
             timestamp,
         )
-        .expect("DagVertex::new failed")
+        .invariant("DagVertex::new failed")
     }
 
     pub fn try_new<T>(
@@ -104,19 +101,13 @@ impl DagVertex {
             timestamp,
             signature: Vec::new(),
             metadata,
-            cached_serialized_data: None,
-            cached_hash: None,
         };
         let hash = vertex.compute_hash()?;
-        vertex.cached_hash = Some(hash.to_vec());
         vertex.id = hash;
         Ok(vertex)
     }
 
     pub fn compute_hash(&self) -> Result<VertexId> {
-        if let Some(hash) = &self.cached_hash {
-            return Ok(vertex_id_from_hash_bytes(hash));
-        }
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
         let bytes = bcs::to_bytes(&(
             &self.chain_id,
@@ -126,6 +117,27 @@ impl DagVertex {
             tx_hashes,
             self.timestamp,
             &self.metadata.state_root,
+        ))?;
+        Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
+    }
+
+    /// Bind the externally assigned Mysticeti block id to the full Kanari vertex payload.
+    pub fn signing_digest(&self) -> Result<VertexId> {
+        let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
+        let bytes = bcs::to_bytes(&(
+            b"kanari:dag-vertex-signature:v1".as_slice(),
+            &self.id,
+            &self.chain_id,
+            self.round,
+            &self.author,
+            &self.parents,
+            tx_hashes,
+            self.timestamp,
+            self.metadata.tx_count,
+            self.metadata.total_gas_used,
+            &self.metadata.state_root,
+            self.metadata.is_checkpoint,
+            self.metadata.checkpoint_seq,
         ))?;
         Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
     }

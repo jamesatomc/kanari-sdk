@@ -3,6 +3,7 @@
 
 use super::*;
 use ahash::AHashSet;
+use kanari_types::error::KanariUnwrapExt;
 
 impl BlockchainEngine {
     pub fn submit_transactions_batch(
@@ -46,7 +47,7 @@ impl BlockchainEngine {
                     let sender = verified.transaction().sender_address();
                     let normalized_sender = sender_cache
                         .get(sender)
-                        .expect("sender cache must contain every batch sender")
+                        .invariant("sender cache must contain every batch sender")
                         .clone();
                     let sequence_number = verified.transaction().sequence_number();
                     Ok((

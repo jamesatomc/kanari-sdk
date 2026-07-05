@@ -1,7 +1,8 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+use kanari_types::error::KanariError;
 use libp2p::{
     PeerId, Swarm, Transport,
     core::upgrade,
@@ -28,6 +29,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 
 const LARGE_MESSAGE_COMPRESSION_THRESHOLD: usize = 100_000;
+const MAX_DECOMPRESSED_PAYLOAD_SIZE: usize = 8 * 1024 * 1024;
 
 /// P2P message types
 #[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
@@ -185,13 +187,19 @@ impl P2PNetwork {
             // Add flood publishing for critical messages (checkpoints, vertices)
             .flood_publish(true)
             .build()
-            .map_err(|e| anyhow::anyhow!("Gossipsub config error: {}", e))?;
+            .map_err(|e| KanariError::OperationFailed {
+                context: "Gossipsub config error",
+                details: e.to_string(),
+            })?;
 
         let mut gossipsub = gossipsub::Behaviour::new(
             MessageAuthenticity::Signed(keypair.clone()),
             gossipsub_config,
         )
-        .map_err(|e| anyhow::anyhow!("Failed to create gossipsub: {}", e))?;
+        .map_err(|e| KanariError::OperationFailed {
+            context: "Failed to create gossipsub",
+            details: e.to_string(),
+        })?;
 
         let checkpoints_topic = IdentTopic::new("kanari/checkpoints");
         let tx_topic = IdentTopic::new("kanari/transactions");
@@ -414,8 +422,12 @@ impl P2PNetwork {
         let final_msg = Self::compress_large_message(msg)?;
 
         let config = bincode::config::standard();
-        let data = bincode::encode_to_vec(&final_msg, config)
-            .map_err(|e| anyhow::anyhow!("Failed to encode message: {}", e))?;
+        let data = bincode::encode_to_vec(&final_msg, config).map_err(|e| {
+            KanariError::OperationFailed {
+                context: "Failed to encode message",
+                details: e.to_string(),
+            }
+        })?;
 
         // Publish and handle duplicate gracefully
         match self
@@ -441,12 +453,19 @@ impl P2PNetwork {
     }
 }
 
-/// Decompress a compressed UTF-8 P2P payload.
-pub fn decompress_payload(compressed_data: Vec<u8>) -> Result<String> {
-    let mut decoder = GzDecoder::new(&compressed_data[..]);
-    let mut decompressed = String::new();
-    decoder.read_to_string(&mut decompressed)?;
-    Ok(decompressed)
+/// Decompress a compressed UTF-8 P2P payload with a hard expansion limit.
+pub fn decompress_payload(compressed_data: &[u8]) -> Result<String> {
+    let decoder = GzDecoder::new(compressed_data);
+    let mut limited = decoder.take((MAX_DECOMPRESSED_PAYLOAD_SIZE + 1) as u64);
+    let mut decompressed = Vec::new();
+    limited.read_to_end(&mut decompressed)?;
+    if decompressed.len() > MAX_DECOMPRESSED_PAYLOAD_SIZE {
+        bail!(
+            "Decompressed P2P payload exceeds {} bytes",
+            MAX_DECOMPRESSED_PAYLOAD_SIZE
+        );
+    }
+    Ok(String::from_utf8(decompressed)?)
 }
 
 pub struct P2PEventHandler {
@@ -532,12 +551,11 @@ impl P2PEventHandler {
     fn forward_decompressed_message(
         &mut self,
         compressed_data: &[u8],
-        decompress: fn(Vec<u8>) -> Result<String>,
         make_message: fn(String) -> P2PMessage,
         failure_context: &str,
         send_context: &str,
     ) -> bool {
-        match decompress(compressed_data.to_vec()) {
+        match decompress_payload(compressed_data) {
             Ok(data) => self.forward_message(make_message(data), send_context),
             Err(e) => {
                 warn!("{}: {}", failure_context, e);
@@ -551,7 +569,7 @@ impl P2PEventHandler {
         resp: &CompressedCheckpointResponseMsg,
         send_context: &str,
     ) -> bool {
-        match decompress_payload(resp.compressed_checkpoint_data.clone()) {
+        match decompress_payload(&resp.compressed_checkpoint_data) {
             Ok(checkpoint_data) => self.forward_message(
                 P2PMessage::TargetedCheckpointResponse(CheckpointResponseMsg {
                     sequence: resp.sequence,
@@ -712,7 +730,6 @@ impl P2PEventHandler {
                             P2PMessage::CompressedCheckpoint(compressed_data) => {
                                 self.forward_decompressed_message(
                                     compressed_data,
-                                    decompress_payload,
                                     P2PMessage::NewCheckpoint,
                                     "[P2P] Failed to decompress checkpoint",
                                     "[P2P] Failed to forward decompressed checkpoint",
@@ -722,7 +739,6 @@ impl P2PEventHandler {
                             P2PMessage::CompressedDagVertex(compressed_data) => {
                                 self.forward_decompressed_message(
                                     compressed_data,
-                                    decompress_payload,
                                     P2PMessage::NewDagVertex,
                                     "[P2P] Failed to decompress DAG vertex",
                                     "[P2P] Failed to forward decompressed vertex",
@@ -732,7 +748,6 @@ impl P2PEventHandler {
                             P2PMessage::CompressedCheckpointResponse(compressed_data) => {
                                 self.forward_decompressed_message(
                                     compressed_data,
-                                    decompress_payload,
                                     P2PMessage::CheckpointResponse,
                                     "[P2P] Failed to decompress checkpoint response",
                                     "[P2P] Failed to forward decompressed checkpoint response",
@@ -910,5 +925,31 @@ impl P2PEventHandler {
             }
             _ => {}
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use kanari_types::error::KanariUnwrapExt;
+
+    use super::*;
+
+    #[test]
+    fn compressed_payload_round_trip() {
+        let payload = "kanari".repeat(20_000);
+        let compressed = gzip_string(&payload).invariant("failed to compress test payload");
+
+        assert_eq!(
+            decompress_payload(&compressed).invariant("failed to decompress test payload"),
+            payload
+        );
+    }
+
+    #[test]
+    fn compressed_payload_rejects_excessive_expansion() {
+        let payload = "x".repeat(MAX_DECOMPRESSED_PAYLOAD_SIZE + 1);
+        let compressed = gzip_string(&payload).invariant("failed to compress test payload");
+
+        let error = decompress_payload(&compressed).unwrap_err();
+        assert!(error.to_string().contains("exceeds"));
     }
 }

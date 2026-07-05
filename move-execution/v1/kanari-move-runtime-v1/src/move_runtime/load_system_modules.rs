@@ -12,6 +12,7 @@ use move_bytecode_verifier::dependencies;
 use move_bytecode_verifier::verifier::verify_module_unmetered;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::ModuleId;
+use move_package::BuildConfig;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -44,8 +45,77 @@ fn mv_filename(name: &str) -> String {
     }
 }
 
+fn is_test_module_artifact(file_name: &str, module_name: &str) -> bool {
+    let lower_file = file_name.to_ascii_lowercase();
+    let lower_module = module_name.to_ascii_lowercase();
+    lower_file.ends_with("_tests.mv")
+        || lower_file.ends_with("_test.mv")
+        || lower_module.ends_with("_tests")
+        || lower_module.ends_with("_test")
+}
+
+fn build_info_path(modules_dir: &Path) -> Option<PathBuf> {
+    Some(modules_dir.parent()?.join("BuildInfo.yaml"))
+}
+
+fn package_root_from_modules_dir(modules_dir: &Path) -> Option<PathBuf> {
+    Some(modules_dir.parent()?.parent()?.parent()?.to_path_buf())
+}
+
+fn ensure_production_build_artifacts(modules_dir: &Path) -> Result<()> {
+    let Some(build_info) = build_info_path(modules_dir) else {
+        return Ok(());
+    };
+    let Ok(contents) = std::fs::read_to_string(&build_info) else {
+        return Ok(());
+    };
+
+    if !contents.contains("test_mode: true") {
+        return Ok(());
+    }
+
+    let package_root = package_root_from_modules_dir(modules_dir).ok_or_else(|| {
+        anyhow!(
+            "Could not infer package root from contaminated build dir: {}",
+            modules_dir.display()
+        )
+    })?;
+
+    tracing::warn!(
+        "Detected test-mode Move build artifacts at {}; rebuilding package in production mode",
+        modules_dir.display()
+    );
+
+    let mut sink = std::io::sink();
+    BuildConfig::default()
+        .compile_package(&package_root, &mut sink)
+        .map_err(|e| {
+            anyhow!(
+                "Failed to rebuild production Move package at {}: {}",
+                package_root.display(),
+                e
+            )
+        })?;
+
+    let refreshed = std::fs::read_to_string(&build_info).map_err(|e| {
+        anyhow!(
+            "Failed to re-read BuildInfo after rebuilding {}: {}",
+            build_info.display(),
+            e
+        )
+    })?;
+    if refreshed.contains("test_mode: true") {
+        return Err(anyhow!(
+            "Move package at {} still reports test_mode: true after rebuild",
+            package_root.display()
+        ));
+    }
+
+    Ok(())
+}
+
 #[derive(Clone)]
-pub struct DiscoveredModule {
+pub(crate) struct DiscoveredModule {
     pub module_id: ModuleId,
     pub module_name: String,
     pub file_name: String,
@@ -91,6 +161,12 @@ fn discover_modules_in_dir(
         };
 
         let module_id = compiled.self_id();
+        let module_name = module_id.name().to_string();
+
+        if is_test_module_artifact(&file_name, &module_name) {
+            continue;
+        }
+
         if *module_id.address() != expected_addr {
             continue;
         }
@@ -101,7 +177,6 @@ fn discover_modules_in_dir(
         }
 
         let deps = compiled.immediate_dependencies();
-        let module_name = module_id.name().to_string();
         modules.push(DiscoveredModule {
             module_id,
             module_name,
@@ -321,7 +396,7 @@ fn save_framework_modules(
     Ok(count)
 }
 
-pub(crate) fn find_modules_dir(env_var: &str, segments: &[&str]) -> PathBuf {
+fn find_modules_dir(env_var: &str, segments: &[&str]) -> PathBuf {
     if let Ok(path_str) = std::env::var(env_var) {
         return PathBuf::from(path_str);
     }
@@ -344,7 +419,7 @@ pub(crate) fn find_modules_dir(env_var: &str, segments: &[&str]) -> PathBuf {
     p
 }
 
-pub(crate) fn find_move_stdlib_modules_dir() -> PathBuf {
+fn find_move_stdlib_modules_dir() -> PathBuf {
     find_modules_dir("MOVE_STDLIB_PATH", MOVE_STDLIB_BYTECODE_SEGMENTS)
 }
 
@@ -361,8 +436,9 @@ fn verbose_startup_enabled() -> bool {
 /// Load move-stdlib and kanari-system modules as methods on `MoveRuntime`
 impl super::MoveRuntime {
     /// Load move-stdlib modules (0x1::*)
-    pub fn load_move_stdlib(&self) -> Result<()> {
+    pub(crate) fn load_move_stdlib(&self) -> Result<()> {
         let modules_dir = find_move_stdlib_modules_dir();
+        ensure_production_build_artifacts(&modules_dir)?;
 
         if verbose_startup_enabled() {
             tracing::info!("Looking for Move stdlib modules at {:?}", modules_dir);
@@ -414,8 +490,9 @@ impl super::MoveRuntime {
     }
 
     /// Load Kanari system modules (0x2::*)
-    pub fn load_kanari_system(&self) -> Result<()> {
+    pub(crate) fn load_kanari_system(&self) -> Result<()> {
         let modules_dir = find_kanari_system_modules_dir();
+        ensure_production_build_artifacts(&modules_dir)?;
 
         if verbose_startup_enabled() {
             tracing::info!("Looking for Kanari system modules at {:?}", modules_dir);
@@ -480,7 +557,7 @@ impl super::MoveRuntime {
 }
 
 /// Public API: Load and sort system modules from a directory
-pub fn load_system_modules_from_dir(modules_dir: &Path) -> Result<Vec<DiscoveredModule>> {
+pub(crate) fn load_system_modules_from_dir(modules_dir: &Path) -> Result<Vec<DiscoveredModule>> {
     let system_addr = KanariAddress::kanari_system_account_address();
     let move_system_addr = AccountAddress::from_hex_literal(system_addr.to_hex_literal().as_str())?;
 

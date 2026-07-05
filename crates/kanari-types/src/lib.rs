@@ -17,11 +17,12 @@ pub use stdlib::*;
 pub mod clock;
 pub mod collection;
 pub mod deny_list;
+pub mod error;
 pub mod object;
 
 pub mod block;
 pub mod event;
 pub mod transaction;
 
-pub mod gas_v2;
-pub use gas_v2::{GasConfig, GasError, GasEstimate, GasMeter, GasOperation, TransactionGas};
+pub mod gas;
+pub use gas::{GasConfig, GasError, GasEstimate, GasMeter, GasOperation, TransactionGas};

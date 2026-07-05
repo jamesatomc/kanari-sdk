@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use kanari_indexer::Indexer;
+use kanari_types::error::KanariError;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::info;
@@ -44,9 +45,13 @@ impl NodeIndexer {
     }
 
     fn lock_indexer(&self) -> Result<std::sync::MutexGuard<'_, Indexer>> {
-        self.indexer
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire indexer lock: {}", e))
+        self.indexer.lock().map_err(|e| {
+            KanariError::OperationFailed {
+                context: "Failed to acquire indexer lock",
+                details: e.to_string(),
+            }
+            .into()
+        })
     }
 
     /// Get reference to the underlying indexer

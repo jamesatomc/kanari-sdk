@@ -6,6 +6,7 @@
 use anyhow::Result;
 use kanari_move_runtime_v1::changeset::{ChangeSet, CreatedObject};
 use kanari_move_runtime_v1::state::StateManager;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::account_address::AccountAddress;
 
 #[test]
@@ -15,7 +16,7 @@ fn test_multiple_mints_consolidate_into_single_balance() -> Result<()> {
 
     let mut state = StateManager::new_in_memory();
     let alice = AccountAddress::from_hex_literal("0x1111")?;
-    let token_type = "0x2::kanari::KANARI";
+    let token_type = "0x2::james::JAMES";
 
     // First mint: 100 tokens
     println!("=== First Mint (100 tokens) ===");
@@ -53,7 +54,7 @@ fn test_multiple_mints_consolidate_into_single_balance() -> Result<()> {
     // Verify final balance
     let alice_account = state
         .get_account(&alice)
-        .expect("Alice account should exist");
+        .invariant("Alice account should exist");
     let final_balance = alice_account.get_token_balance(token_type);
 
     println!("Final balance for Alice: {}", final_balance);
@@ -71,7 +72,7 @@ fn test_changeset_merge_consolidates_token_balances() -> Result<()> {
     // rather than duplicated.
 
     let alice = AccountAddress::from_hex_literal("0x1111")?;
-    let token_type = "0x2::kanari::KANARI";
+    let token_type = "0x2::james::JAMES";
 
     // Create first ChangeSet with 100 tokens
     let mut cs1 = ChangeSet::new();
@@ -114,7 +115,7 @@ fn test_changeset_consolidation_with_treasury() -> Result<()> {
 
     let alice = AccountAddress::from_hex_literal("0x1111")?;
     let bob = AccountAddress::from_hex_literal("0x2222")?;
-    let token_type = "0x2::kanari::KANARI";
+    let token_type = "0x2::james::JAMES";
 
     let mut state = StateManager::new_in_memory();
 
@@ -137,7 +138,9 @@ fn test_changeset_consolidation_with_treasury() -> Result<()> {
     state.apply_changeset(&cs_mint2)?;
 
     // Verify Bob's balance
-    let bob_account = state.get_account(&bob).expect("Bob account should exist");
+    let bob_account = state
+        .get_account(&bob)
+        .invariant("Bob account should exist");
     let bob_balance = bob_account.get_token_balance(token_type);
 
     println!("Bob's final balance: {}", bob_balance);
@@ -152,7 +155,7 @@ fn test_multiple_owners_and_token_types() -> Result<()> {
 
     let alice = AccountAddress::from_hex_literal("0x1111")?;
     let bob = AccountAddress::from_hex_literal("0x2222")?;
-    let token_kanari = "0x2::kanari::KANARI";
+    let token_kanari = "0x2::james::JAMES";
     let token_thb = "0x2::thb::THB";
 
     let mut state = StateManager::new_in_memory();
@@ -180,10 +183,10 @@ fn test_multiple_owners_and_token_types() -> Result<()> {
     state.apply_changeset(&cs4)?;
 
     // Verify all balances
-    let alice_account = state.get_account(&alice).expect("Alice should exist");
+    let alice_account = state.get_account(&alice).invariant("Alice should exist");
     let alice_kanari = alice_account.get_token_balance(token_kanari);
 
-    let bob_account = state.get_account(&bob).expect("Bob should exist");
+    let bob_account = state.get_account(&bob).invariant("Bob should exist");
     let bob_thb = bob_account.get_token_balance(token_thb);
 
     println!("Alice KANARI balance: {}", alice_kanari);
@@ -221,7 +224,7 @@ fn test_balance_updates_immediately_after_second_mint_object() -> Result<()> {
 
     let first = state
         .get_account(&alice)
-        .expect("Alice account should exist after first mint")
+        .invariant("Alice account should exist after first mint")
         .get_token_balance(token_type);
     assert_eq!(first, 100, "first mint should be visible immediately");
 
@@ -246,7 +249,7 @@ fn test_balance_updates_immediately_after_second_mint_object() -> Result<()> {
 
     let second = state
         .get_account(&alice)
-        .expect("Alice account should exist after second mint")
+        .invariant("Alice account should exist after second mint")
         .get_token_balance(token_type);
     assert_eq!(
         second, 150,
@@ -262,7 +265,7 @@ fn test_self_transfer_should_not_duplicate_coins() -> Result<()> {
     use kanari_move_runtime_v1::state::StateManager;
     use move_core_types::account_address::AccountAddress;
 
-    let alice = AccountAddress::from_hex_literal("0x01").unwrap();
+    let alice = AccountAddress::from_hex_literal("0x01").invariant("valid test address");
     let mut state = StateManager::new_in_memory();
 
     // Initialize Alice's account with balance for storing Coins
@@ -296,7 +299,7 @@ fn test_self_transfer_should_not_duplicate_coins() -> Result<()> {
 
     let balance_after_mint1 = state
         .get_account(&alice)
-        .expect("Alice should exist")
+        .invariant("Alice should exist")
         .get_token_balance(token_type);
     println!("After mint 1: {}", balance_after_mint1);
     assert_eq!(balance_after_mint1, 100, "First mint should result in 100");
@@ -325,7 +328,7 @@ fn test_self_transfer_should_not_duplicate_coins() -> Result<()> {
 
     let balance_after_mint2 = state
         .get_account(&alice)
-        .expect("Alice should exist")
+        .invariant("Alice should exist")
         .get_token_balance(token_type);
     println!("After mint 2: {}", balance_after_mint2);
     assert_eq!(
@@ -380,7 +383,7 @@ fn test_self_transfer_should_not_duplicate_coins() -> Result<()> {
 
     let balance_after_transfer = state
         .get_account(&alice)
-        .expect("Alice should exist")
+        .invariant("Alice should exist")
         .get_token_balance(token_type);
     println!("After self-transfer: {}", balance_after_transfer);
 
@@ -400,7 +403,7 @@ fn test_mint_then_self_transfer_real_scenario() -> Result<()> {
     use kanari_move_runtime_v1::state::StateManager;
     use move_core_types::account_address::AccountAddress;
 
-    let alice = AccountAddress::from_hex_literal("0x01").unwrap();
+    let alice = AccountAddress::from_hex_literal("0x01").invariant("valid test address");
     let mut state = StateManager::new_in_memory();
     let account = kanari_move_runtime_v1::state::Account::new(alice);
     state.save_account(&account)?;
@@ -429,7 +432,7 @@ fn test_mint_then_self_transfer_real_scenario() -> Result<()> {
     state.apply_changeset(&cs_mint1)?;
     let bal1 = state
         .get_account(&alice)
-        .expect("Alice exists")
+        .invariant("Alice exists")
         .get_token_balance(token_type);
     println!("After mint 1: {}", bal1);
     assert_eq!(bal1, 100);
@@ -456,7 +459,7 @@ fn test_mint_then_self_transfer_real_scenario() -> Result<()> {
     state.apply_changeset(&cs_mint2)?;
     let bal2 = state
         .get_account(&alice)
-        .expect("Alice exists")
+        .invariant("Alice exists")
         .get_token_balance(token_type);
     println!("After mint 2: {}", bal2);
     assert_eq!(bal2, 200);
@@ -486,7 +489,7 @@ fn test_mint_then_self_transfer_real_scenario() -> Result<()> {
     state.apply_changeset(&cs_split)?;
     let bal3 = state
         .get_account(&alice)
-        .expect("Alice exists")
+        .invariant("Alice exists")
         .get_token_balance(token_type);
     println!("After self-transfer: {}", bal3);
 

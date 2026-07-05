@@ -95,27 +95,17 @@ module kanari_system::kanari {
     }
 
 
-    /// KANARI tokens to the treasury
-    public entry fun transfer(c: coin::Coin<KANARI>, recipient: address) {
-        transfer::public_transfer(c, recipient)
-    }
-
     /// Transfer a specific amount of KANARI from a mutable coin object.
-    /// This keeps the remainder in the sender's original coin object.
-    public entry fun transfer_amount(
+    public entry fun transfer(
         c: &mut coin::Coin<KANARI>,
         amount: u64,
         recipient: address,
         ctx: &mut TxContext
     ) {
-        let sender = tx_context::sender(ctx);
-        if (sender == recipient) {
-            return
-        };
-
         let split_coin = coin::split(c, amount, ctx);
         transfer::public_transfer(split_coin, recipient);
     }
+
 
     /// Burns KANARI tokens, decreasing total supply
     public entry fun burn(treasury_cap: &mut TreasuryCap<KANARI>, coin: Coin<KANARI>) {

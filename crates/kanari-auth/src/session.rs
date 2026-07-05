@@ -11,6 +11,7 @@ use kanari_crypto::keys::CurveType;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 use crate::AuthError;
 
@@ -20,7 +21,7 @@ const DEFAULT_SESSION_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 /// Maximum session timeout (7 days)
 const MAX_SESSION_TIMEOUT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Represents an authenticated user session
+/// Represents an authenticated user session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     /// Unique session identifier
@@ -32,7 +33,8 @@ pub struct Session {
     /// Wallet address associated with this session
     pub wallet_address: String,
 
-    /// Decrypted private key held in memory for authenticated operations
+    /// Decrypted private key held in memory for authenticated operations.
+    /// Never serialized; it is zeroized when the session is invalidated or dropped.
     #[serde(skip)]
     pub private_key: Option<String>,
 
@@ -73,7 +75,7 @@ impl Session {
         let now = Utc::now();
         let timeout_duration = timeout.unwrap_or(DEFAULT_SESSION_TIMEOUT);
 
-        // Cap timeout at maximum allowed
+        // Cap timeout at maximum allowed.
         let actual_timeout = if timeout_duration > MAX_SESSION_TIMEOUT {
             MAX_SESSION_TIMEOUT
         } else {
@@ -108,8 +110,12 @@ impl Session {
         self.last_activity = Utc::now();
     }
 
-    /// Invalidate the session
+    /// Invalidate the session and immediately erase any decrypted key material.
     pub fn invalidate(&mut self) {
+        if let Some(private_key) = self.private_key.as_mut() {
+            private_key.zeroize();
+        }
+        self.private_key = None;
         self.is_valid = false;
     }
 
@@ -156,6 +162,14 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Some(private_key) = self.private_key.as_mut() {
+            private_key.zeroize();
+        }
+    }
+}
+
 /// Session manager that handles multiple active sessions
 #[derive(Debug)]
 pub struct SessionManager {
@@ -175,7 +189,7 @@ impl SessionManager {
         Self {
             sessions: std::collections::HashMap::new(),
             email_sessions: std::collections::HashMap::new(),
-            max_sessions_per_user: 5, // Allow up to 5 concurrent sessions per user
+            max_sessions_per_user: 5,
         }
     }
 
@@ -203,7 +217,7 @@ impl SessionManager {
         if let Some(user_sessions) = self.email_sessions.get(&email)
             && user_sessions.len() >= self.max_sessions_per_user
         {
-            // Remove oldest session
+            // Removing the oldest session drops it and zeroizes its private key.
             if let Some(oldest_id) = user_sessions.first() {
                 self.sessions.remove(oldest_id);
             }
@@ -287,6 +301,9 @@ impl SessionManager {
     pub fn invalidate_all_user_sessions(&mut self, email: &str) {
         if let Some(session_ids) = self.email_sessions.remove(email) {
             for session_id in session_ids {
+                if let Some(session) = self.sessions.get_mut(&session_id) {
+                    session.invalidate();
+                }
                 self.sessions.remove(&session_id);
             }
         }
@@ -307,6 +324,9 @@ impl SessionManager {
                 .collect();
 
             for expired_id in expired_ids {
+                if let Some(session) = self.sessions.get_mut(&expired_id) {
+                    session.invalidate();
+                }
                 self.sessions.remove(&expired_id);
                 session_ids.retain(|id| id != &expired_id);
             }
@@ -351,6 +371,7 @@ mod tests {
         assert_eq!(session.email, "user@example.com");
         assert_eq!(session.wallet_address, "0x123");
         assert!(!session.is_expired());
+        assert!(session.time_remaining().unwrap() <= DEFAULT_SESSION_TIMEOUT);
     }
 
     #[test]
@@ -369,6 +390,34 @@ mod tests {
 
         assert!(session.is_expired());
         assert!(session.time_remaining().is_none());
+    }
+
+    #[test]
+    fn test_session_timeout_is_capped() {
+        let session = Session::new(
+            "user@example.com".to_string(),
+            "0x123".to_string(),
+            Some("kanari_test".to_string()),
+            CurveType::Ed25519,
+            Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        );
+
+        assert!(session.time_remaining().unwrap() <= MAX_SESSION_TIMEOUT);
+    }
+
+    #[test]
+    fn test_invalidate_erases_private_key() {
+        let mut session = Session::new(
+            "user@example.com".to_string(),
+            "0x123".to_string(),
+            Some("kanari_test".to_string()),
+            CurveType::Ed25519,
+            None,
+        );
+
+        session.invalidate();
+        assert!(session.private_key.is_none());
+        assert!(session.is_expired());
     }
 
     #[test]
@@ -407,10 +456,14 @@ mod tests {
         );
 
         let json = session.to_json().unwrap();
+        assert!(!json.contains("kanari_test"));
+        assert!(!json.contains("private_key"));
+
         let restored = Session::from_json(&json).unwrap();
 
         assert_eq!(session.session_id, restored.session_id);
         assert_eq!(session.email, restored.email);
         assert_eq!(session.wallet_address, restored.wallet_address);
+        assert!(restored.private_key.is_none());
     }
 }

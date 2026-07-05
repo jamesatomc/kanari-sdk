@@ -5,18 +5,17 @@ pub mod scheduler;
 pub use scheduler::TransactionScheduler;
 
 pub mod changeset;
-pub mod genesis;
-pub mod kanari_gas_meter;
+mod common;
+mod genesis;
+mod kanari_gas_meter;
 pub mod move_runtime;
 
 pub mod state;
 pub mod storage;
 
-pub use changeset::{AccountChange, ChangeSet};
+pub use changeset::ChangeSet;
 
 /// Grouped runtime exports. Prefer these paths for new code.
 pub mod runtime {
     pub use crate::move_runtime::MoveRuntime;
 }
-pub use state::{Account, StateManager};
-pub use storage::move_vm_state::MoveVMState;

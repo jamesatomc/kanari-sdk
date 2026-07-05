@@ -88,11 +88,8 @@ module kanari_system::transfer {
         freeze_object(obj)
     }
 
-    /// DEPRECATED: Transfer function that doesn't properly track objects
-    /// Use share_object() or keep objects as function returns instead
+    /// Transfer an owned object to another address.
     public fun public_transfer<T: key + store>(obj: T, recipient: address) {
-        // WORKAROUND: Store object data for tracking before consuming
-        // Extract UID if object has one
         transfer_with_uid(obj, recipient);
     }
 

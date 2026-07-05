@@ -1,31 +1,14 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Object storage operations
+use crate::common::ids::canonical_object_id;
 use crate::{changeset::ChangeSet, storage::object_storage::StoredObject};
 use kanari_system_natives::transfer_natives::TransferredObject;
-use kanari_types::object::{IDRecord, UIDRecord};
 use log::debug;
-use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::StructTag;
 use std::str::FromStr;
 
 impl super::MoveRuntime {
-    fn canonical_object_id_str(object_id: &str) -> Option<String> {
-        let trimmed = object_id.trim();
-        let normalized = if trimmed.starts_with("0x") {
-            trimmed.to_string()
-        } else {
-            format!("0x{}", trimmed)
-        };
-
-        AccountAddress::from_hex_literal(&normalized)
-            .ok()
-            .map(|addr| addr.to_hex_literal())
-    }
-
-    /// Add transferred objects from native function tracking to changeset
-    /// Also persists objects to ObjectStorage for later retrieval
     pub(crate) fn add_transferred_objects_to_changeset(
         &self,
         cs: &mut ChangeSet,
@@ -36,7 +19,6 @@ impl super::MoveRuntime {
         debug!("Processing {} transferred objects", count);
 
         for obj in transferred {
-            // take ownership of fields to avoid unnecessary clones where possible
             let id = obj.object_id;
             let obj_type = obj.object_type;
             let owner = obj.recipient;
@@ -56,7 +38,12 @@ impl super::MoveRuntime {
                 continue;
             }
 
-            let Some(canonical_id) = Self::canonical_object_id_str(&id) else {
+            let normalized_id = if id.trim().starts_with("0x") {
+                id.clone()
+            } else {
+                format!("0x{}", id.trim())
+            };
+            let Some(canonical_id) = canonical_object_id(&normalized_id) else {
                 debug!("Skipping transferred object with invalid object id: {}", id);
                 continue;
             };
@@ -78,39 +65,17 @@ impl super::MoveRuntime {
 
                 match self.object_storage.store_object(stored_obj) {
                     Ok(_) => debug!("Object {} persisted to ObjectStorage", canonical_id),
-                    Err(e) => {
-                        debug!(
-                            "WARNING: Failed to persist object {} to storage: {}. Object remains in changeset.",
-                            canonical_id, e
-                        );
-                    }
+                    Err(e) => debug!(
+                        "WARNING: Failed to persist object {} to storage: {}. Object remains in changeset.",
+                        canonical_id, e
+                    ),
                 }
             }
 
-            // Upsert by object_id: a transferred object should represent the final owner/state.
-            // This avoids duplicate entries for the same id from mixed paths
-            // (e.g. mutable writeback + native transfer capture in the same tx).
             cs.created_objects
                 .retain(|(existing_id, _)| existing_id != &canonical_id);
 
-            // Add to created_objects in changeset (after storage to avoid double clone).
-            // Pass the explicit ID to ensure ChangeSet uses the same ID as ObjectStorage.
-            let uid = if let Ok(addr) = AccountAddress::from_hex_literal(&canonical_id) {
-                Some(UIDRecord::new(addr))
-            } else {
-                None
-            };
-
-            // For DEX/DeFi objects, also create IDRecord for copyable ID tracking
-            let id_record = if let Ok(addr) = AccountAddress::from_hex_literal(&canonical_id) {
-                Some(IDRecord::new(addr))
-            } else {
-                None
-            };
-
-            // Detect special objects (TreasuryCap, Coin) and add them to changeset
             if let Ok(struct_tag) = StructTag::from_str(&obj_type) {
-                // Parse TreasuryCap resources
                 if self.is_treasury_resource(&struct_tag)
                     && let Some(total) = self.extract_treasury_total_from_bytes(&data)
                     && let Some(token_type) = self.token_type_from_struct_tag(&struct_tag)
@@ -119,10 +84,6 @@ impl super::MoveRuntime {
                     debug!("Detected TreasuryCap object: supply={}", total);
                 }
 
-                // Parse Coin resources (Balance)
-                // Each Coin object detected adds to token_balance_sets which will be ACCUMULATED
-                // in StateManager. Multiple coins of the same type to same owner in one transaction
-                // are consolidated by add_token_balance_set, and separate transactions accumulate.
                 if self.is_balance_resource(&struct_tag)
                     && let Some(amount) = self.extract_balance_from_bytes(&data, &struct_tag)
                     && let Some(token_type) = self.token_type_from_struct_tag(&struct_tag)
@@ -132,25 +93,17 @@ impl super::MoveRuntime {
                 }
             }
 
-            // Log object type for debugging
-            if id_record.is_some() {
-                debug!(
-                    "Object {} - UID: {:?}, ID: {:?}",
-                    canonical_id,
-                    uid.as_ref().map(|u| u.address()),
-                    id_record.as_ref().map(|i| i.address())
-                );
-            }
+            let created =
+                Self::build_created_object(owner, &canonical_id, &obj_type, data, next_version);
 
-            cs.add_created_object(
-                owner,
-                obj_type,
-                data,
-                next_version,
-                uid,
-                id_record,
-                Some(canonical_id),
+            debug!(
+                "Object {} - UID: {:?}, ID: {:?}",
+                canonical_id,
+                created.uid.as_ref().map(|u| u.address()),
+                created.id.as_ref().map(|i| i.address())
             );
+
+            cs.created_objects.push((canonical_id, created));
         }
 
         if count > 0 {
@@ -160,36 +113,5 @@ impl super::MoveRuntime {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::move_runtime::MoveRuntime;
-
-    #[test]
-    fn speculative_transferred_objects_do_not_mutate_object_storage() {
-        let runtime = MoveRuntime::new_with_natives_in_memory(vec![]).unwrap();
-        let owner = AccountAddress::from_hex_literal("0x1234").unwrap();
-        let object_id = "0xabcd".to_string();
-        let object_type = "0x2::test::Object".to_string();
-        let object = TransferredObject {
-            object_id: object_id.clone(),
-            object_type: object_type.clone(),
-            recipient: owner,
-            data: vec![1, 2, 3],
-            should_persist: true,
-            is_frozen: false,
-        };
-
-        let mut speculative = ChangeSet::new();
-        runtime.add_transferred_objects_to_changeset(&mut speculative, vec![object.clone()], false);
-
-        assert_eq!(runtime.object_storage.count(), 0);
-        assert_eq!(speculative.created_objects.len(), 1);
-
-        let mut canonical = ChangeSet::new();
-        runtime.add_transferred_objects_to_changeset(&mut canonical, vec![object], true);
-
-        assert_eq!(runtime.object_storage.count(), 1);
-        let canonical_id = MoveRuntime::canonical_object_id_str(&object_id).unwrap();
-        assert!(runtime.object_storage.get_object(&canonical_id).is_some());
-    }
-}
+#[path = "../../tests/unit/object_ops_tests.rs"]
+mod tests;

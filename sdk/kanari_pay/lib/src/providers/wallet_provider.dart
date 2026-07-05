@@ -481,13 +481,20 @@ class WalletState extends ChangeNotifier {
     }
   }
 
-  Future<String?> transfer(String recipient, int amount) async {
+  Future<String?> transfer(
+    String recipient,
+    int amount, {
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
+  }) async {
     if (_client == null || _wallet == null) return 'Client not initialized';
     return _runTransaction(() async {
       final result = await _client!.transfer(
         wallet: _wallet!,
         recipient: recipient,
         amount: amount,
+        gasLimit: gasLimit,
+        gasPrice: gasPrice,
       );
       return 'Success: Hash ${result.hash}';
     });
@@ -499,6 +506,8 @@ class WalletState extends ChangeNotifier {
     required String function,
     List<String> typeArgs = const [],
     List<List<int>> args = const [],
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) async {
     if (_client == null || _wallet == null) return 'Client not initialized';
     return _runTransaction(() async {
@@ -509,15 +518,26 @@ class WalletState extends ChangeNotifier {
         function: function,
         typeArgs: typeArgs,
         args: args,
+        gasLimit: gasLimit,
+        gasPrice: gasPrice,
       );
       return 'Success: Hash ${result.hash}';
     });
   }
 
-  Future<String?> burn(int amount) async {
+  Future<String?> burn(
+    int amount, {
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
+  }) async {
     if (_client == null || _wallet == null) return 'Client not initialized';
     return _runTransaction(() async {
-      final result = await _client!.burn(wallet: _wallet!, amount: amount);
+      final result = await _client!.burn(
+        wallet: _wallet!,
+        amount: amount,
+        gasLimit: gasLimit,
+        gasPrice: gasPrice,
+      );
       return 'Success: Hash ${result.hash}';
     });
   }
@@ -525,8 +545,10 @@ class WalletState extends ChangeNotifier {
   Future<String?> transferToken(
     String recipient,
     String tokenType,
-    int amount,
-  ) async {
+    int amount, {
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
+  }) async {
     if (_client == null || _wallet == null) return 'Client not initialized';
     return _runTransaction(() async {
       final result = await _client!.transferToken(
@@ -534,6 +556,8 @@ class WalletState extends ChangeNotifier {
         recipient: recipient,
         tokenType: tokenType,
         amount: amount,
+        gasLimit: gasLimit,
+        gasPrice: gasPrice,
       );
       return 'Success: Hash ${result.hash}';
     });

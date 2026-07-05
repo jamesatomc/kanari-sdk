@@ -258,6 +258,20 @@ class BcsUtils {
 
     return '$packageAddr::${parts[1]}::${parts[2]}';
   }
+
+  /// Canonical token type for equality checks.
+  /// Keeps the type path intact but expands the package address to 32 bytes.
+  static String canonicalTokenType(String tokenType) {
+    final normalized = normalizeTokenType(tokenType);
+    final parts = normalized.split('::');
+    final packageAddr = normalizeAddress(parts[0]);
+    return '$packageAddr::${parts.sublist(1).join('::')}';
+  }
+
+  /// Compare token types while accepting both short and full package addresses.
+  static bool tokenTypesEqual(String left, String right) {
+    return canonicalTokenType(left) == canonicalTokenType(right);
+  }
 }
 
 /// Transaction argument builder (chainable)

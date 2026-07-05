@@ -1,6 +1,7 @@
 use anyhow::Result;
+use kanari_types::error::KanariUnwrapExt;
 
-use kanari_move_runtime_v1::{ChangeSet, StateManager, changeset::CreatedObject};
+use kanari_move_runtime_v1::{ChangeSet, changeset::CreatedObject, state::StateManager};
 use move_core_types::account_address::AccountAddress;
 
 #[test]
@@ -15,7 +16,7 @@ fn test_ownership_transfer() -> Result<()> {
     // 3. Create an object (Coin)
     let object_id = "0xAAAA";
     let object_data = vec![1, 2, 3]; // Dummy data
-    let object_type = "0x2::coin::Coin<0x2::kanari::KANARI>";
+    let object_type = "0x2::coin::Coin<0x2::james::JAMES>";
 
     let created_obj = CreatedObject {
         owner: alice,
@@ -94,7 +95,7 @@ fn test_object_transfer_removes_from_old_owner() -> Result<()> {
     // Create object owned by Alice
     let object_id = "0xAAAA";
     let object_data = vec![1, 2, 3];
-    let object_type = "0x2::coin::coin::Coin<0x2::kanari::KANARI>";
+    let object_type = "0x2::coin::coin::Coin<0x2::james::JAMES>";
 
     let created_obj = CreatedObject {
         owner: alice,
@@ -190,7 +191,7 @@ fn test_coin_split_inflation() -> Result<()> {
     let mut coin_a_data = vec![0u8; 32]; // UID
     coin_a_data.extend_from_slice(&1000u64.to_le_bytes()); // Balance 1000
 
-    let object_type = "0x2::coin::Coin<0x2::kanari::KANARI>";
+    let object_type = "0x2::coin::Coin<0x2::james::JAMES>";
 
     let created_a = CreatedObject {
         owner: alice,
@@ -263,9 +264,11 @@ fn test_coin_split_inflation() -> Result<()> {
     assert_eq!(bob_owned_final.len(), 1, "Bob should only own Coin B");
 
     // Verify Data of Coin A in DB
-    let stored_a = state.get_object(coin_a_id)?.expect("Coin A must exist");
+    let stored_a = state.get_object(coin_a_id)?.invariant("Coin A must exist");
     // Check last 8 bytes
-    let stored_balance_bytes: [u8; 8] = stored_a.data[32..40].try_into().unwrap();
+    let stored_balance_bytes: [u8; 8] = stored_a.data[32..40]
+        .try_into()
+        .invariant("stored coin balance bytes should be 8 bytes");
     let stored_balance = u64::from_le_bytes(stored_balance_bytes);
     assert_eq!(stored_balance, 500, "Coin A balance should be 500");
 
@@ -278,7 +281,7 @@ fn test_transfer_with_same_version_is_not_treated_as_collision() -> Result<()> {
     let alice = AccountAddress::from_hex_literal("0x1111")?;
     let bob = AccountAddress::from_hex_literal("0x2222")?;
     let object_id = "0xABCD";
-    let coin_type = "0x2::coin::Coin<0x2::kanari::KANARI>";
+    let coin_type = "0x2::coin::Coin<0x2::james::JAMES>";
 
     let mut coin_data = AccountAddress::from_hex_literal(object_id)?.to_vec();
     coin_data.extend_from_slice(&500u64.to_le_bytes());
@@ -338,7 +341,7 @@ fn test_duplicate_created_object_id_keeps_latest_owner() -> Result<()> {
     let alice = AccountAddress::from_hex_literal("0x1111")?;
     let bob = AccountAddress::from_hex_literal("0x2222")?;
     let object_id = "0xDEAD";
-    let coin_type = "0x2::coin::Coin<0x2::kanari::KANARI>";
+    let coin_type = "0x2::coin::Coin<0x2::james::JAMES>";
 
     let mut init_data = AccountAddress::from_hex_literal(object_id)?.to_vec();
     init_data.extend_from_slice(&1000u64.to_le_bytes());

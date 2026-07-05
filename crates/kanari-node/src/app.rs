@@ -5,6 +5,7 @@ use anyhow::Result;
 use kanari_core::BlockchainEngine;
 use kanari_rpc_server::start_server_with_transaction_broadcaster;
 use kanari_types::address::Address as KanariAddress;
+use kanari_types::error::{KanariError, KanariUnwrapExt};
 use kanari_types::kanari::KanariModule;
 use libp2p::identity::Keypair;
 use serde::Serialize;
@@ -35,8 +36,7 @@ fn env_write_guard() -> &'static Mutex<()> {
 }
 
 fn path_to_env_value(path: &std::path::Path) -> Result<&str> {
-    path.to_str()
-        .ok_or_else(|| anyhow::anyhow!("Invalid data directory path: {}", path.display()))
+    path.to_str().require("Invalid data directory path")
 }
 
 fn short_value(value: impl AsRef<str>) -> String {
@@ -96,8 +96,10 @@ fn normalize_authority_id(authority_id: String) -> String {
 
 fn decode_hex_bytes(label: &str, value: &str, expected_len: usize) -> Result<Vec<u8>> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
-    let bytes =
-        hex::decode(trimmed).map_err(|e| anyhow::anyhow!("Invalid {} hex: {}", label, e))?;
+    let bytes = hex::decode(trimmed).map_err(|e| KanariError::OperationFailed {
+        context: "invalid hex input",
+        details: format!("{}: {}", label, e),
+    })?;
     if bytes.len() != expected_len {
         anyhow::bail!(
             "Invalid {} length: expected {} bytes, got {}",
@@ -115,27 +117,21 @@ pub fn configure_consensus_signing_key(
     public_keys_path: &std::path::Path,
 ) -> Result<()> {
     let private_key = decode_hex_bytes("consensus private key seed", private_key_hex, 32)?;
-    let private_key: [u8; 32] = private_key
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("Invalid consensus private key seed length"))?;
+    let private_key: [u8; 32] = private_key.try_into().map_err(|_| {
+        KanariError::InvariantViolation("Invalid consensus private key seed length")
+    })?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&private_key);
 
-    let public_keys_json = std::fs::read_to_string(public_keys_path).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to read consensus public keys file {}: {}",
-            public_keys_path.display(),
-            e
-        )
-    })?;
-    let public_key_hex_by_authority: BTreeMap<String, String> =
-        serde_json::from_str(&public_keys_json).map_err(|e| {
-            anyhow::anyhow!(
-                "Invalid consensus public keys JSON {}: {}",
-                public_keys_path.display(),
-                e
-            )
+    let public_keys_json =
+        std::fs::read_to_string(public_keys_path).map_err(|e| KanariError::OperationFailed {
+            context: "failed to read consensus public keys file",
+            details: format!("{}: {}", public_keys_path.display(), e),
         })?;
-
+    let public_key_hex_by_authority: BTreeMap<String, String> =
+        serde_json::from_str(&public_keys_json).map_err(|e| KanariError::OperationFailed {
+            context: "invalid consensus public keys JSON",
+            details: format!("{}: {}", public_keys_path.display(), e),
+        })?;
     let mut public_keys = BTreeMap::new();
     for (authority, key_hex) in public_key_hex_by_authority {
         public_keys.insert(
@@ -386,7 +382,10 @@ pub async fn run_node(
                 let payload = serde_json::to_string(&signed_tx)?;
                 network_tx_for_rpc
                     .send(P2PMessage::NewTransaction(payload))
-                    .map_err(|e| anyhow::anyhow!("failed to queue transaction broadcast: {}", e))?;
+                    .map_err(|e| KanariError::OperationFailed {
+                        context: "failed to queue transaction broadcast",
+                        details: e.to_string(),
+                    })?;
                 Ok(())
             },
         )

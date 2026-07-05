@@ -3,12 +3,46 @@
 
 use kanari_rpc_api::{AccountInfo, BlockData, BlockchainStats, FullBlockData};
 use kanari_types::address::Address as KanariAddress;
+use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use log::{info, warn};
 
 use super::*;
 use crate::{BlockchainEngine, Checkpoint, CheckpointSyncData};
 
 impl BlockchainEngine {
+    fn committed_transaction_count_for_stats(&self, fallback_count: usize) -> usize {
+        let Some(store) = &self.persistent_store else {
+            return fallback_count;
+        };
+
+        match store.logical_entries() {
+            Ok(entries) => {
+                let mut payload_hashes = std::collections::HashSet::new();
+                let mut indexed_hashes = std::collections::HashSet::new();
+
+                for (key, _) in &entries {
+                    if let Some(hash) = key.strip_prefix(b"tx_payload/") {
+                        payload_hashes.insert(hash.to_vec());
+                    } else if let Some(hash) = key.strip_prefix(b"tx_index/") {
+                        indexed_hashes.insert(hash.to_vec());
+                    }
+                }
+
+                payload_hashes
+                    .intersection(&indexed_hashes)
+                    .count()
+                    .max(fallback_count)
+            }
+            Err(error) => {
+                warn!(
+                    "Failed to scan committed transaction history for stats: {}",
+                    error
+                );
+                fallback_count
+            }
+        }
+    }
+
     pub fn latest_checkpoint_hash_hex(&self) -> String {
         let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
         chain
@@ -33,11 +67,13 @@ impl BlockchainEngine {
             }
         };
         let pending_transactions = self.pending_transaction_len();
+        let total_transactions =
+            self.committed_transaction_count_for_stats(chain.get_transaction_count());
 
         BlockchainStats {
             height: chain.height(),
             total_blocks: chain.dag_checkpoints.len(),
-            total_transactions: chain.get_transaction_count(),
+            total_transactions,
             pending_transactions,
             total_accounts: state.account_count(),
             total_supply: state.total_supply,
@@ -75,9 +111,13 @@ impl BlockchainEngine {
             }
 
             for (token_type, balance) in &acc.token_balances {
-                actual_token_balances
-                    .entry(token_type.clone())
-                    .or_insert_with(|| balance.value());
+                if token_type == KANARI_TOKEN_TYPE {
+                    actual_token_balances.insert(token_type.clone(), balance.value());
+                } else {
+                    actual_token_balances
+                        .entry(token_type.clone())
+                        .or_insert_with(|| balance.value());
+                }
             }
 
             AccountInfo {
@@ -309,65 +349,5 @@ impl BlockchainEngine {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{CheckpointSyncData, consensus::Checkpoint};
-    use kanari_crypto::keys::{CurveType, generate_keypair};
-    use kanari_types::transaction::{SignedTransaction, Transaction};
-
-    fn signed_transfer(sequence_number: u64) -> SignedTransaction {
-        let sender = generate_keypair(CurveType::Ed25519).unwrap();
-        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
-        let tx = Transaction::new_transfer(
-            sender.tagged_address(),
-            recipient.address,
-            1,
-            sequence_number,
-        );
-        let mut signed_tx = SignedTransaction::new(tx);
-        signed_tx
-            .sign(&sender.private_key, sender.curve_type)
-            .unwrap();
-        signed_tx
-    }
-
-    #[test]
-    fn sync_checkpoint_from_data_rejects_empty_checkpoint() {
-        let engine = BlockchainEngine::new_in_memory().unwrap();
-        let prev_hash = {
-            let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
-            chain.latest_checkpoint().hash().unwrap()
-        };
-        let state_root = engine
-            .state
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .compute_state_root();
-        let checkpoint = Checkpoint::new(1, vec![], vec![], state_root, 42, prev_hash);
-        let sync_data = CheckpointSyncData { checkpoint };
-
-        let error = engine.sync_checkpoint_from_data(&sync_data).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Refusing to sync empty checkpoint")
-        );
-        assert_eq!(engine.get_stats().height, 0);
-    }
-
-    #[test]
-    fn sync_checkpoint_from_data_rejects_root_mismatch() {
-        let engine = BlockchainEngine::new_in_memory().unwrap();
-        let prev_hash = {
-            let chain = engine.blockchain.read().unwrap_or_else(|e| e.into_inner());
-            chain.latest_checkpoint().hash().unwrap()
-        };
-        let signed_tx = signed_transfer(0);
-        let checkpoint = Checkpoint::new(1, vec![], vec![signed_tx], vec![9u8; 32], 42, prev_hash);
-        let sync_data = CheckpointSyncData { checkpoint };
-
-        let error = engine.sync_checkpoint_from_data(&sync_data).unwrap_err();
-        assert!(error.to_string().contains("state root mismatch"));
-        assert_eq!(engine.get_stats().height, 0);
-    }
-}
+#[path = "../../tests/unit/engine_queries_tests.rs"]
+mod tests;

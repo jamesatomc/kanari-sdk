@@ -1,6 +1,10 @@
 use anyhow::Result;
 use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
-use kanari_move_runtime_v1::{Account, ChangeSet, StateManager};
+use kanari_move_runtime_v1::{
+    ChangeSet,
+    state::{Account, StateManager},
+};
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::kanari::KANARI_TOKEN_TYPE;
 use move_core_types::account_address::AccountAddress;
 use std::collections::BTreeMap;
@@ -47,7 +51,7 @@ fn restart_recovery_preserves_native_supply_invariants() -> Result<()> {
         initial_state
             .store
             .load::<u64>(b"total_supply")?
-            .expect("backfilled total_supply must be persisted"),
+            .invariant("backfilled total_supply must be persisted"),
         GENESIS_SUPPLY
     );
     initial_state.validate_supply_invariants()?;
@@ -63,7 +67,7 @@ fn restart_recovery_preserves_native_supply_invariants() -> Result<()> {
     assert_eq!(
         reopened_state
             .load_account(&alice)?
-            .expect("alice account must persist")
+            .invariant("alice account must persist")
             .native_balance(),
         GENESIS_SUPPLY
     );
@@ -78,14 +82,14 @@ fn restart_recovery_preserves_native_supply_invariants() -> Result<()> {
     assert_eq!(
         reopened_state
             .load_account(&alice)?
-            .expect("alice account must remain present")
+            .invariant("alice account must remain present")
             .native_balance(),
         GENESIS_SUPPLY - transfer_amount
     );
     assert_eq!(
         reopened_state
             .load_account(&bob)?
-            .expect("bob account must be created by transfer")
+            .invariant("bob account must be created by transfer")
             .native_balance(),
         transfer_amount
     );
@@ -97,11 +101,11 @@ fn restart_recovery_preserves_native_supply_invariants() -> Result<()> {
     assert_eq!(
         final_state
             .load_account(&alice)?
-            .expect("alice account must survive restart")
+            .invariant("alice account must survive restart")
             .native_balance()
             + final_state
                 .load_account(&bob)?
-                .expect("bob account must survive restart")
+                .invariant("bob account must survive restart")
                 .native_balance(),
         GENESIS_SUPPLY
     );

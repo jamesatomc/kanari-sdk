@@ -5,7 +5,7 @@ use move_vm_types::gas::GasMeter;
 
 /// Weighted gas meter used to cap VM execution work.
 /// Coin deduction is handled outside this type; this meter only tracks internal execution cost.
-pub struct KanariGasMeter {
+pub(crate) struct KanariGasMeter {
     /// Internal gas consumed so far.
     gas_used: u64,
     /// Maximum internal gas allowed for one execution.
@@ -13,7 +13,7 @@ pub struct KanariGasMeter {
 }
 
 impl KanariGasMeter {
-    pub fn new(gas_limit: u64) -> Self {
+    pub(crate) fn new(gas_limit: u64) -> Self {
         Self {
             gas_used: 0,
             gas_limit,
@@ -22,16 +22,32 @@ impl KanariGasMeter {
 
     /// Charge additional internal gas and fail once the limit is exceeded.
     #[inline]
-    pub fn charge(&mut self, amount: u64) -> PartialVMResult<()> {
-        self.gas_used = self.gas_used.saturating_add(amount);
+    fn charge(&mut self, amount: u64) -> PartialVMResult<()> {
+        self.gas_used = self.gas_used.checked_add(amount).ok_or_else(|| {
+            out_of_gas_error("Kanari execution gas counter overflowed".to_string())
+        })?;
 
         if self.gas_used > self.gas_limit {
-            return Err(PartialVMError::new(StatusCode::OUT_OF_GAS).with_message(
-                "Kanari Execution Limit Exceeded: Infinite Loop Detected!".to_string(),
+            return Err(out_of_gas_error(
+                "Kanari execution limit exceeded".to_string(),
             ));
         }
         Ok(())
     }
+
+    #[inline]
+    fn charge_internal_gas(&mut self, amount: InternalGas) -> PartialVMResult<()> {
+        self.charge(amount.into())
+    }
+
+    #[inline]
+    fn charge_with_len(&mut self, base: u64, len: usize) -> PartialVMResult<()> {
+        self.charge(base.saturating_add(len as u64))
+    }
+}
+
+fn out_of_gas_error(message: String) -> PartialVMError {
+    PartialVMError::new(StatusCode::OUT_OF_GAS).with_message(message)
 }
 
 const SIMPLE_INSTR_COST: u64 = 1;
@@ -54,7 +70,6 @@ const VEC_PUSH_BACK_COST: u64 = 4;
 const VEC_POP_BACK_COST: u64 = 4;
 const VEC_UNPACK_COST: u64 = 6;
 const VEC_SWAP_COST: u64 = 4;
-const NATIVE_FUNCTION_BASE_COST: u64 = 20;
 const NATIVE_FUNCTION_PRE_EXEC_COST: u64 = 8;
 const DROP_FRAME_COST: u64 = 3;
 
@@ -84,28 +99,37 @@ impl GasMeter for KanariGasMeter {
         &mut self,
         _module_id: &move_core_types::language_storage::ModuleId,
         _func_name: &str,
-        _args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
-        _num_locals: move_core_types::gas_algebra::NumArgs,
+        args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
+        num_locals: move_core_types::gas_algebra::NumArgs,
     ) -> PartialVMResult<()> {
-        self.charge(CALL_COST)
+        self.charge(
+            CALL_COST
+                .saturating_add(args.len() as u64)
+                .saturating_add(u64::from(num_locals)),
+        )
     }
 
     fn charge_call_generic(
         &mut self,
         _module_id: &move_core_types::language_storage::ModuleId,
         _func_name: &str,
-        _ty_args: impl ExactSizeIterator<Item = impl move_vm_types::views::TypeView>,
-        _args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
-        _num_locals: move_core_types::gas_algebra::NumArgs,
+        ty_args: impl ExactSizeIterator<Item = impl move_vm_types::views::TypeView>,
+        args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
+        num_locals: move_core_types::gas_algebra::NumArgs,
     ) -> PartialVMResult<()> {
-        self.charge(CALL_GENERIC_COST)
+        self.charge(
+            CALL_GENERIC_COST
+                .saturating_add(ty_args.len() as u64)
+                .saturating_add(args.len() as u64)
+                .saturating_add(u64::from(num_locals)),
+        )
     }
 
     fn charge_ld_const(
         &mut self,
-        _size: move_core_types::gas_algebra::NumBytes,
+        size: move_core_types::gas_algebra::NumBytes,
     ) -> PartialVMResult<()> {
-        self.charge(CONST_LOAD_COST)
+        self.charge(CONST_LOAD_COST.saturating_add(u64::from(size)))
     }
 
     fn charge_ld_const_after_deserialization(
@@ -139,17 +163,17 @@ impl GasMeter for KanariGasMeter {
     fn charge_pack(
         &mut self,
         _is_generic: bool,
-        _args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
+        args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge(PACK_COST)
+        self.charge_with_len(PACK_COST, args.len())
     }
 
     fn charge_unpack(
         &mut self,
         _is_generic: bool,
-        _args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
+        args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge(UNPACK_COST)
+        self.charge_with_len(UNPACK_COST, args.len())
     }
 
     fn charge_read_ref(
@@ -186,9 +210,9 @@ impl GasMeter for KanariGasMeter {
     fn charge_vec_pack<'a>(
         &mut self,
         _ty: impl move_vm_types::views::TypeView + 'a,
-        _args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
+        args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge(VEC_PACK_COST)
+        self.charge_with_len(VEC_PACK_COST, args.len())
     }
 
     fn charge_vec_len(&mut self, _ty: impl move_vm_types::views::TypeView) -> PartialVMResult<()> {
@@ -223,10 +247,10 @@ impl GasMeter for KanariGasMeter {
     fn charge_vec_unpack(
         &mut self,
         _ty: impl move_vm_types::views::TypeView,
-        _expect_num_elements: move_core_types::gas_algebra::NumArgs,
+        expect_num_elements: move_core_types::gas_algebra::NumArgs,
         _elems: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge(VEC_UNPACK_COST)
+        self.charge(VEC_UNPACK_COST.saturating_add(u64::from(expect_num_elements)))
     }
 
     fn charge_vec_swap(&mut self, _ty: impl move_vm_types::views::TypeView) -> PartialVMResult<()> {
@@ -235,18 +259,22 @@ impl GasMeter for KanariGasMeter {
 
     fn charge_native_function(
         &mut self,
-        _amount: InternalGas,
+        amount: InternalGas,
         _ret_vals: Option<impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>>,
     ) -> PartialVMResult<()> {
-        self.charge(NATIVE_FUNCTION_BASE_COST)
+        self.charge_internal_gas(amount)
     }
 
     fn charge_native_function_before_execution(
         &mut self,
-        _ty_args: impl ExactSizeIterator<Item = impl move_vm_types::views::TypeView>,
-        _args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
+        ty_args: impl ExactSizeIterator<Item = impl move_vm_types::views::TypeView>,
+        args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge(NATIVE_FUNCTION_PRE_EXEC_COST)
+        self.charge(
+            NATIVE_FUNCTION_PRE_EXEC_COST
+                .saturating_add(ty_args.len() as u64)
+                .saturating_add(args.len() as u64),
+        )
     }
 
     fn charge_drop_frame(
@@ -262,5 +290,45 @@ impl GasMeter for KanariGasMeter {
 
     fn set_profiler(&mut self, _profiler: move_vm_profiler::GasProfiler) {
         // Do nothing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kanari_types::error::KanariUnwrapExt;
+    use move_core_types::gas_algebra::NumBytes;
+    use move_vm_types::gas::GasMeter;
+
+    #[test]
+    fn native_function_uses_reported_internal_gas() {
+        let mut meter = KanariGasMeter::new(10);
+        let ret_vals: Option<std::iter::Empty<move_vm_types::values::Value>> = None;
+        let err = meter
+            .charge_native_function(InternalGas::new(11), ret_vals)
+            .expect_err("native gas should count toward the execution cap");
+        assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
+    }
+
+    #[test]
+    fn gas_counter_overflow_becomes_out_of_gas() {
+        let mut meter = KanariGasMeter::new(u64::MAX);
+        meter
+            .charge(u64::MAX)
+            .invariant("max charge should fit once");
+
+        let err = meter
+            .charge(1)
+            .expect_err("overflow should not silently disable the gas cap");
+        assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
+    }
+
+    #[test]
+    fn ld_const_scales_with_constant_size() {
+        let mut meter = KanariGasMeter::new(5);
+        let err = meter
+            .charge_ld_const(NumBytes::new(4))
+            .expect_err("large constants should consume more gas than tiny ones");
+        assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
     }
 }

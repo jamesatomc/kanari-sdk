@@ -2,11 +2,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Helper functions for MoveRuntime resource parsing and object ID generation
+use kanari_system_natives::dynamic_field::{DynamicFieldResolver, DynamicFieldStorageExt};
 use kanari_types::balance::BalanceModule;
 use kanari_types::coin::CoinModule;
 
 use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::{StructTag, TypeTag};
+use std::sync::Arc;
+
+struct RuntimeDynamicFieldResolver {
+    store: Arc<crate::storage::persistent_store::PersistentStore>,
+}
+
+impl RuntimeDynamicFieldResolver {
+    fn dynamic_field_key(object_id: &str, name_bytes: &[u8]) -> Vec<u8> {
+        let hash = kanari_crypto::hash_data_blake3(name_bytes);
+        let mut key = b"df:".to_vec();
+        key.extend_from_slice(object_id.as_bytes());
+        key.extend_from_slice(b":");
+        key.extend_from_slice(hex::encode(&hash[0..16]).as_bytes());
+        key
+    }
+}
+
+impl DynamicFieldResolver for RuntimeDynamicFieldResolver {
+    fn get_dynamic_field(&self, object_id: &str, name_bytes: &[u8]) -> Option<Vec<u8>> {
+        let key = Self::dynamic_field_key(object_id, name_bytes);
+        self.store.load::<Vec<u8>>(&key).ok().flatten()
+    }
+}
 
 /// Size of a Move object UID in bytes (address)
 const UID_SIZE: usize = 32;
@@ -14,6 +38,12 @@ const UID_SIZE: usize = 32;
 const U64_SIZE: usize = 8;
 
 impl super::MoveRuntime {
+    pub(crate) fn dynamic_field_storage_ext(&self) -> DynamicFieldStorageExt {
+        DynamicFieldStorageExt::new(Arc::new(RuntimeDynamicFieldResolver {
+            store: self.state.store(),
+        }))
+    }
+
     /// Preload potential object arguments into LoadedObjectsExt before execution
     /// This enables native_borrow_global and borrow_global_mut to resolve objects during VM execution
     pub(crate) fn preload_objects_for_execution(

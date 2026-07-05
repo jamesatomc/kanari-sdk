@@ -4,8 +4,9 @@
 // Gas metering and accounting operations
 use crate::changeset::ChangeSet;
 use anyhow::Result;
+use kanari_types::GasConfig;
 use kanari_types::address::Address as KanariAddress;
-use kanari_types::gas_v2::{GasMeter, GasOperation};
+use kanari_types::gas::{GasMeter, GasOperation};
 use move_core_types::account_address::AccountAddress;
 
 use move_core_types::language_storage::ModuleId;
@@ -25,7 +26,7 @@ impl super::MoveRuntime {
         storage_deleted: u64,
     ) -> Result<()> {
         let mut meter = GasMeter::new(gas_limit, gas_price);
-        let config = kanari_types::gas_v2::GasConfig::default();
+        let config = GasConfig::default();
 
         // Charge execution gas
         meter.consume(gas_op.gas_units())?;

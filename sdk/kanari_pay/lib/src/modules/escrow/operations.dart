@@ -5,6 +5,7 @@ import '../../client/kanari_client.dart';
 import '../../core/bcs_utils.dart';
 import '../../kanari_wallet.dart';
 import '../../models/transaction.dart';
+import '../transactions/constants.dart';
 import 'constants.dart';
 
 class EscrowOperations {
@@ -32,8 +33,8 @@ class EscrowOperations {
     required int amount,
     required String description,
     required String tokenType,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) async {
     final normalizedToken = BcsUtils.normalizeTokenType(tokenType);
     final coinObjectId = await _findOwnedCoinObjectId(
@@ -69,7 +70,7 @@ class EscrowOperations {
 
     for (final obj in account.ownedObjects ?? const []) {
       final objToken = BcsUtils.extractCoinTypeFromObjectType(obj.type);
-      if (objToken != null && objToken == tokenType) {
+      if (objToken != null && BcsUtils.tokenTypesEqual(objToken, tokenType)) {
         return BcsUtils.normalizeObjectId(obj.id);
       }
     }
@@ -87,8 +88,8 @@ class EscrowOperations {
     required String dealObjectId,
     required String coinType,
     required String proofObjectId,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) => _executeAction(
     wallet: wallet,
     coinType: coinType,
@@ -106,8 +107,8 @@ class EscrowOperations {
     required String dealObjectId,
     required String coinType,
     required String proofObjectId,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) => _executeAction(
     wallet: wallet,
     coinType: coinType,
@@ -126,8 +127,8 @@ class EscrowOperations {
     required String coinType,
     required String reason,
     required String proofObjectId,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) => _executeAction(
     wallet: wallet,
     coinType: coinType,
@@ -146,8 +147,8 @@ class EscrowOperations {
     required String coinType,
     required String functionName,
     required TransactionArgs args,
-    int gasLimit = 100000,
-    int gasPrice = 10,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
   }) {
     return rpc.executeFunction(
       wallet: wallet,

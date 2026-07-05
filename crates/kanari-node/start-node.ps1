@@ -9,6 +9,7 @@ param(
     [string]$BaseDataDir = "$env:USERPROFILE\.kanari\node-db",
     [int]$BasePeerPort = 19000,
     [int]$BaseRpcPort = 19001,
+    [string]$RpcHost = "0.0.0.0",
     [string]$Authorities = "",
     [string]$Bootstrap = "",
     [string]$ConsensusPrivateKeyHex = "",
@@ -24,7 +25,8 @@ $rpcPort = $ports.RpcPort
 $dataDir = Get-NodeDataDir -NodeId $NodeId -DataDir $DataDir -BaseDataDir $BaseDataDir
 $authId = "0x$NodeId"
 $localIp = Get-LanIpAddress
-$rpcUrl = Get-NodeRpcUrl -HostIp $localIp -RpcPort $rpcPort
+$rpcConnectHost = Get-RpcConnectHost -RpcHost $RpcHost -LanIp $localIp
+$rpcUrl = Get-NodeRpcUrl -HostIp $rpcConnectHost -RpcPort $rpcPort
 
 if (-not (Test-Path $dataDir)) {
     New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
@@ -35,13 +37,10 @@ Write-Host 'Starting Kanari Node' $NodeId -ForegroundColor Green
 Write-Host '========================================' -ForegroundColor Cyan
 Write-Host 'P2P Port:' $p2pPort -ForegroundColor Yellow
 Write-Host 'RPC Port:' $rpcPort -ForegroundColor Yellow
+Write-Host 'RPC Bind Host:' $RpcHost -ForegroundColor Yellow
 Write-Host 'Network:' $Network -ForegroundColor Yellow
 Write-Host 'Data Dir:' $dataDir -ForegroundColor Yellow
-if ($localIp) {
-    Write-Host "RPC URL:  $rpcUrl" -ForegroundColor Yellow
-} else {
-    Write-Host 'RPC URL:  (no LAN IP detected) RPC will bind to all interfaces' -ForegroundColor DarkYellow
-}
+Write-Host "RPC URL:  $rpcUrl" -ForegroundColor Yellow
 Write-Host '========================================' -ForegroundColor Cyan
 Write-Host ''
 
@@ -86,7 +85,7 @@ $nodeArgs = @(
     "--network", $Network,
     "--p2p-port", $p2pPort,
     "--rpc-port", $rpcPort,
-    "--rpc-host", "0.0.0.0",
+    "--rpc-host", $RpcHost,
     "--data-dir", $dataDir,
     "--authority-id", $authId,
     "--authorities", $Authorities,

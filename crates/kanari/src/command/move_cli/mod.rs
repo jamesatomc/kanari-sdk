@@ -14,6 +14,7 @@ use kanari_system_natives::event::EventsExt;
 use kanari_system_natives::object::{DeletedObjectsExt, SavedObjectsExt};
 use kanari_system_natives::transfer_natives::TransferredObjectsExt;
 use kanari_types::address::Address as KanariAddress;
+use kanari_types::error::KanariUnwrapExt;
 use move_core_types::{account_address::AccountAddress, identifier::Identifier};
 use move_package::source_package::layout::SourcePackageLayout;
 use move_stdlib_natives::{GasParameters, NurseryGasParameters, all_natives, nursery_natives};
@@ -21,6 +22,7 @@ use move_unit_test::extensions::set_extension_hook;
 use move_vm_runtime::native_functions::NativeFunction;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Subcommand;
 
 type NativeFunctionRecord = (AccountAddress, Identifier, Identifier, NativeFunction);
@@ -58,8 +60,8 @@ impl MoveCommand {
                 let config = t.build_config.clone();
                 // Construct standard library natives so native functions used by Move
                 // packages (e.g., stdlib and unit_test helpers) are available to the VM
-                let std_addr =
-                    AccountAddress::from_hex_literal(KanariAddress::STD_ADDRESS).unwrap();
+                let std_addr = AccountAddress::from_hex_literal(KanariAddress::STD_ADDRESS)
+                    .invariant("stdlib address");
                 let std_natives = all_natives(std_addr, GasParameters::zeros())
                     .into_iter()
                     .chain(nursery_natives(
@@ -70,7 +72,8 @@ impl MoveCommand {
 
                 // Construct kanari crypto/system natives (registered under package address 0x2)
                 let system_addr =
-                    AccountAddress::from_hex_literal(KanariAddress::KANARI_SYSTEM_ADDRESS).unwrap();
+                    AccountAddress::from_hex_literal(KanariAddress::KANARI_SYSTEM_ADDRESS)
+                        .invariant("system address");
                 let system_natives = kanari_system_natives::all_natives(
                     system_addr,
                     kanari_system_natives::GasParameters::zeros(),
@@ -84,6 +87,9 @@ impl MoveCommand {
                     exts.add(DeletedObjectsExt::default());
                     exts.add(SavedObjectsExt::default());
                     exts.add(DynamicFieldsExt::default());
+                    exts.add(
+                        kanari_system_natives::dynamic_field::DynamicFieldStorageExt::default(),
+                    );
                     exts.add(kanari_system_natives::object::LoadedObjectsExt::default());
                     exts.add(kanari_system_natives::object::BorrowedObjectsExt::default());
                 }));
@@ -112,7 +118,8 @@ pub fn reroot_path(path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let path = path.unwrap_or_else(|| PathBuf::from("."));
     // Always root ourselves to the package root, and then compile relative to that.
     let rooted_path = SourcePackageLayout::try_find_root(&path.canonicalize()?)?;
-    std::env::set_current_dir(rooted_path).unwrap();
+    std::env::set_current_dir(rooted_path)
+        .context("Failed to set current directory to Move package root")?;
 
     Ok(PathBuf::from("."))
 }

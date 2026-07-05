@@ -6,6 +6,7 @@ use crate::command::move_cli::reroot_path;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use kanari_types::error::KanariUnwrapExt;
 use move_package::BuildConfig;
 use std::path::PathBuf;
 
@@ -47,7 +48,7 @@ impl Verify {
                 mu.unit.module.serialize(&mut b)?;
                 found = Some(b);
             }
-            found.ok_or_else(|| anyhow::anyhow!("No modules found in package"))?
+            found.require("No modules found in package")?
         } else {
             bail!("Either --file or --package-path must be provided")
         };

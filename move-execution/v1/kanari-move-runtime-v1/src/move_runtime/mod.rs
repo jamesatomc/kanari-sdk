@@ -11,6 +11,8 @@ use kanari_system_natives::object::{
 };
 use kanari_system_natives::transfer_natives::TransferredObjectsExt;
 use kanari_types::clock::ClockModule;
+
+use kanari_types::error::KanariUnwrapExt;
 use kanari_types::event::Event;
 use log::debug;
 use move_binary_format::file_format::CompiledModule;
@@ -29,9 +31,9 @@ pub mod load_system_modules;
 mod object_ops;
 mod parsers;
 use kanari_types::address::Address as KanariAddress;
-use kanari_types::gas_v2::GasOperation;
+use kanari_types::gas::GasOperation;
 use kanari_types::tx_context::TxContextModule;
-pub mod move_runtime_extensions;
+mod move_runtime_extensions;
 use crate::changeset::ChangeSet;
 use crate::state::StateManager;
 use crate::storage::move_vm_state::MoveVMState;
@@ -119,11 +121,7 @@ impl MoveRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub fn new() -> Result<Self> {
-        Self::new_with_natives(vec![])
-    }
-
-    pub fn new_with_natives(natives: Vec<NativeFunctionTable>) -> Result<Self> {
+    pub(crate) fn new_with_natives(natives: Vec<NativeFunctionTable>) -> Result<Self> {
         let state = if cfg!(miri) {
             MoveVMState::new_in_memory()?
         } else {
@@ -137,7 +135,7 @@ impl MoveRuntime {
         Self::new_internal(natives, state, None)
     }
 
-    pub fn new_with_natives_and_store(
+    pub(crate) fn new_with_natives_and_store(
         natives: Vec<NativeFunctionTable>,
         store: Arc<PersistentStore>,
     ) -> Result<Self> {
@@ -155,8 +153,7 @@ impl MoveRuntime {
             .flat_map(|table| table.into_iter())
             .collect();
 
-        let vm = MoveVM::new(all_natives.clone())
-            .map_err(|e| anyhow::anyhow!(format!("VM init error: {:?}", e)))?;
+        let vm = MoveVM::new(all_natives.clone()).require("VM init error")?;
 
         let object_storage: Arc<dyn ObjectStore> = match shared_store {
             Some(store) if !cfg!(miri) => match ObjectStorage::boxed_with_store(store) {
@@ -167,15 +164,14 @@ impl MoveRuntime {
                 }
             },
             _ if cfg!(miri) => Arc::from(ObjectStorage::boxed_inmemory()),
-            _ => match ObjectStorage::boxed_with_persistence() {
+            _ => match ObjectStorage::boxed_with_store(state.store()) {
                 Ok(store) => Arc::from(store),
                 Err(e) => {
-                    log::warn!("[RUNTIME] DB load failed. Fallback to in-memory: {}", e);
+                    log::warn!("[RUNTIME] shared object store load failed: {}", e);
                     Arc::from(ObjectStorage::boxed_inmemory())
                 }
             },
         };
-
         let resolver = KanariMoveResolver {
             state: state.clone(),
             _object_storage: object_storage.clone(),
@@ -237,8 +233,7 @@ impl MoveRuntime {
     }
 
     pub fn spawn_worker(&self) -> Result<Self> {
-        let vm = MoveVM::new(self.all_natives.as_ref().clone())
-            .map_err(|e| anyhow::anyhow!("Worker VM init error: {:?}", e))?;
+        let vm = MoveVM::new(self.all_natives.as_ref().clone()).require("Worker VM init error")?;
 
         Ok(MoveRuntime {
             vm: Arc::new(RwLock::new(vm)),
@@ -254,7 +249,7 @@ impl MoveRuntime {
 
     pub fn spawn_isolated_worker(&self) -> Result<Self> {
         let vm = MoveVM::new(self.all_natives.as_ref().clone())
-            .map_err(|e| anyhow::anyhow!("Isolated worker VM init error: {:?}", e))?;
+            .require("Isolated worker VM init error")?;
 
         let object_storage: Arc<dyn ObjectStore> =
             match ObjectStorage::boxed_with_store(self.state.store()) {
@@ -293,8 +288,8 @@ impl MoveRuntime {
 
     /// Rebuild the VM instance so cached module state is refreshed.
     pub fn reload_vm_cache(&self) -> Result<()> {
-        let new_vm = MoveVM::new(self.all_natives.as_ref().clone())
-            .map_err(|e| anyhow::anyhow!("Failed to reload MoveVM: {:?}", e))?;
+        let new_vm =
+            MoveVM::new(self.all_natives.as_ref().clone()).require("Failed to reload MoveVM")?;
 
         // Replace the VM instance to clear internal caches.
         *self.write_vm() = new_vm;
@@ -309,7 +304,7 @@ impl MoveRuntime {
     pub fn clear_object_cache(&self) -> Result<()> {
         self.object_storage
             .clear()
-            .map_err(|e| anyhow::anyhow!("Failed to clear runtime object cache: {}", e))
+            .require("Failed to clear runtime object cache")
     }
 
     /// Preload system modules into the VM cache to ensure dependencies are available
@@ -396,24 +391,6 @@ impl MoveRuntime {
             true,
         )
     }
-
-    pub fn publish_module_with_persistence(
-        &self,
-        module_bytes: Vec<u8>,
-        sender: AccountAddress,
-        gas_info: Option<(u64, u64)>,
-        persist_runtime_state: bool,
-    ) -> Result<ChangeSet> {
-        self.publish_module_with_context_and_persistence(
-            module_bytes,
-            sender,
-            gas_info,
-            None,
-            None,
-            persist_runtime_state,
-        )
-    }
-
     pub fn publish_module_with_context_and_persistence(
         &self,
         module_bytes: Vec<u8>,
@@ -441,9 +418,12 @@ impl MoveRuntime {
 
             session
                 .publish_module(module_bytes.clone(), sender, &mut metered_gas)
-                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+                .require("Move VM operation failed")?;
 
-            session.finish().0.map_err(|e| anyhow::anyhow!("{:?}", e))?
+            session
+                .finish()
+                .0
+                .require("Failed to finish publish session")?
         };
 
         if persist_runtime_state {
@@ -493,8 +473,7 @@ impl MoveRuntime {
             );
         }
 
-        verify_module_unmetered(compiled)
-            .map_err(|e| anyhow::anyhow!("Module bytecode verification failed: {:?}", e))?;
+        verify_module_unmetered(compiled).require("Module bytecode verification failed")?;
         self.verify_module(compiled)?;
         self.verify_module_upgrade_compatibility(module_id, compiled, module_bytes)
     }
@@ -527,25 +506,7 @@ impl MoveRuntime {
                 )
             })
     }
-
-    /// Execute the init() function from a module (used for genesis initialization)
-    pub fn execute_init_function(
-        &self,
-        module_addr: AccountAddress,
-        module_name: &str,
-        args: Vec<Vec<u8>>,
-    ) -> Result<ChangeSet> {
-        log::info!(
-            "Executing {}.init() with {} arguments",
-            module_name,
-            args.len()
-        );
-
-        self.execute_init_function_internal(module_addr, module_name, args, None, None)
-            .map_err(|e| anyhow::anyhow!("Failed to execute init(): {:?}", e))
-    }
-
-    pub fn execute_init_function_with_context(
+    pub(crate) fn execute_init_function_with_context(
         &self,
         module_addr: AccountAddress,
         module_name: &str,
@@ -554,42 +515,8 @@ impl MoveRuntime {
         tx_hash: Option<Vec<u8>>,
     ) -> Result<ChangeSet> {
         self.execute_init_function_internal(module_addr, module_name, args, timestamp, tx_hash)
-            .map_err(|e| anyhow::anyhow!("Failed to execute init(): {:?}", e))
+            .require("Failed to execute init()")
     }
-
-    /// Execute init function with a type witness (for coin initialization)
-    pub fn execute_init_function_with_type_witness(
-        &self,
-        module_addr: AccountAddress,
-        module_name: &str,
-        witness_type_name: &str,
-        args: Vec<Vec<u8>>,
-    ) -> Result<ChangeSet> {
-        log::info!(
-            "Executing {}.init() with type witness {} and {} arguments",
-            module_name,
-            witness_type_name,
-            args.len()
-        );
-
-        let mut init_args = Vec::with_capacity(args.len() + 1);
-
-        // `init(witness: T, ctx: &mut TxContext)` expects the witness as a function argument,
-        // not a generic type argument. An empty payload lets `execute_entry_function_internal`
-        // synthesize the OTW bytes from the function parameter layout.
-        init_args.push(Vec::new());
-        init_args.extend(args);
-
-        self.execute_init_function_internal(module_addr, module_name, init_args, None, None)
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to execute init() with witness {}: {:?}",
-                    witness_type_name,
-                    e
-                )
-            })
-    }
-
     fn execute_init_function_internal(
         &self,
         module_addr: AccountAddress,
@@ -671,7 +598,7 @@ impl MoveRuntime {
         ]));
         move_value
             .simple_serialize()
-            .ok_or_else(|| anyhow::anyhow!("Failed to serialize TxContext MoveValue"))
+            .require("Failed to serialize TxContext MoveValue")
     }
 
     fn synthesize_otw_bytes_from_layout(layout: &MoveTypeLayout) -> Option<Vec<u8>> {
@@ -814,7 +741,7 @@ impl MoveRuntime {
         };
         self.object_storage
             .store_object(stored)
-            .map_err(|e| anyhow::anyhow!("{:?}", e))
+            .require("Object storage operation failed")
     }
 
     pub fn ensure_system_clock(&self, state: &mut StateManager) -> Result<AccountAddress> {
@@ -848,7 +775,7 @@ impl MoveRuntime {
             .created_objects
             .iter()
             .find(|(_, created)| created.type_.contains("::clock::Clock"))
-            .ok_or_else(|| anyhow::anyhow!("Clock object was not created by clock::create"))?;
+            .require("Clock object was not created by clock::create")?;
 
         let addr = AccountAddress::from_hex_literal(object_id)?;
         state.set_system_clock_object_id(addr)?;
@@ -897,26 +824,6 @@ impl MoveRuntime {
             type_args,
             args,
             ExecutionOptions::new(sender, gas_info, timestamp, None),
-        )
-    }
-
-    pub fn execute_entry_function_with_tx_hash(
-        &self,
-        module_id: &ModuleId,
-        function_name: &str,
-        type_args: Vec<TypeTag>,
-        args: Vec<Vec<u8>>,
-        sender: Option<AccountAddress>,
-        gas_info: Option<(u64, u64)>,
-        timestamp: Option<u64>,
-        tx_hash: Option<Vec<u8>>,
-    ) -> Result<ChangeSet> {
-        self.execute_entry_function_internal(
-            module_id,
-            function_name,
-            type_args,
-            args,
-            ExecutionOptions::new(sender, gas_info, timestamp, tx_hash),
         )
     }
 
@@ -998,11 +905,11 @@ impl MoveRuntime {
             ty_args_loaded.push(
                 session
                     .load_type(tag)
-                    .map_err(|e| anyhow::anyhow!("{:?}", e))?,
+                    .require("Object storage operation failed")?,
             );
         }
 
-        let ident = IdentStr::new(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let ident = IdentStr::new(function_name).require("Invalid function name")?;
 
         let mut final_args = Self::preprocess_entry_args(args);
         let tx_context_bytes =
@@ -1198,8 +1105,7 @@ impl MoveRuntime {
                 };
 
                 let (res, _new_storage) = session.finish();
-                let (move_changeset, events) =
-                    res.map_err(|e| anyhow::anyhow!("exec error: {:?}", e))?;
+                let (move_changeset, events) = res.require("exec error")?;
 
                 for (addr, account_changes) in move_changeset.accounts() {
                     for op in account_changes.resources().values() {
@@ -1375,6 +1281,7 @@ impl MoveRuntime {
         // Register the core extensions used by object, event, and dynamic-field natives.
         let mut extensions = NativeContextExtensions::default();
         extensions.add(DynamicFieldsExt::default());
+        extensions.add(self.dynamic_field_storage_ext());
         extensions.add(EventsExt::default());
         extensions.add(SavedObjectsExt::default());
         extensions.add(DeletedObjectsExt::default());
@@ -1385,44 +1292,6 @@ impl MoveRuntime {
         extensions.add(BorrowedObjectsExt::default());
 
         vm_guard.new_session_with_extensions(self.resolver.clone(), extensions)
-    }
-
-    pub fn execute_block_prologue(
-        &self,
-        state: &mut StateManager,
-        timestamp_ms: u64,
-    ) -> Result<()> {
-        let module_id = ClockModule::get_module_id()?;
-        let func_name = ClockModule::function_names().consensus_commit_prologue;
-
-        let mut args: Vec<Vec<u8>> = vec![];
-        let clock_id = self.ensure_system_clock(state)?;
-        args.push(bcs::to_bytes(&clock_id)?);
-        args.push(bcs::to_bytes(&timestamp_ms)?);
-
-        let system_sender = AccountAddress::ZERO;
-
-        let result = self.execute_entry_function(
-            &module_id,
-            func_name,
-            vec![],
-            args,
-            Some(system_sender),
-            None,
-            Some(timestamp_ms),
-        );
-
-        match result {
-            Ok(change_set) => {
-                // Apply the changeset to persist state updates (e.g., clock timestamp change)
-                state.apply_changeset(&change_set)?;
-                Ok(())
-            }
-            Err(e) => {
-                log::error!("[Block Prologue] Failed to update clock: {:?}", e);
-                Err(anyhow::anyhow!("Clock update failed: {}", e))
-            }
-        }
     }
 
     /// Execute a read-only function without persisting any state changes.
@@ -1443,7 +1312,7 @@ impl MoveRuntime {
             package_addr
         };
         let addr = AccountAddress::from_hex_literal(&format!("0x{}", addr_hex))
-            .map_err(|e| anyhow::anyhow!("Invalid package address: {}", e))?;
+            .require("Invalid package address")?;
 
         let module_id = ModuleId::new(addr, Identifier::new(module_name)?);
 
@@ -1453,7 +1322,7 @@ impl MoveRuntime {
 
         // Preload object arguments so view functions can borrow them through natives.
         self.preload_objects_for_execution(&mut session, args)
-            .map_err(|e| anyhow::anyhow!("Failed to preload objects: {}", e))?;
+            .require("Failed to preload objects")?;
 
         // Parse and load type arguments before invocation.
         let mut ty_args_loaded = Vec::with_capacity(type_args.len());
@@ -1463,12 +1332,11 @@ impl MoveRuntime {
             ty_args_loaded.push(
                 session
                     .load_type(&type_tag)
-                    .map_err(|e| anyhow::anyhow!("Failed to load type {}: {:?}", type_arg, e))?,
+                    .require("Failed to load type argument")?,
             );
         }
 
-        let ident = IdentStr::new(function_name)
-            .map_err(|e| anyhow::anyhow!("Invalid function name: {}", e))?;
+        let ident = IdentStr::new(function_name).require("Invalid function name")?;
 
         // View calls run with the unmetered gas meter.
         let mut unmetered_gas = UnmeteredGasMeter;
@@ -1482,8 +1350,7 @@ impl MoveRuntime {
 
         // Finish the session without persisting any writes.
         let (res, _new_storage) = session.finish();
-        let (_move_changeset, _events) =
-            res.map_err(|e| anyhow::anyhow!("Session error: {:?}", e))?;
+        let (_move_changeset, _events) = res.require("Session error")?;
 
         match execution_result {
             Ok(return_values) => {
@@ -1498,7 +1365,7 @@ impl MoveRuntime {
                     results
                         .into_iter()
                         .next()
-                        .ok_or_else(|| anyhow::anyhow!("View function returned no values"))
+                        .require("View function returned no values")
                 } else {
                     Ok(serde_json::Value::Array(results))
                 }
@@ -1559,11 +1426,9 @@ impl MoveRuntime {
                     if parts.len() >= 3 {
                         TypeTag::Struct(Box::new(StructTag {
                             address: AccountAddress::from_hex_literal(parts[0])
-                                .map_err(|e| anyhow::anyhow!("Invalid address in type: {}", e))?,
-                            module: Identifier::new(parts[1])
-                                .map_err(|e| anyhow::anyhow!("Invalid module in type: {}", e))?,
-                            name: Identifier::new(parts[2])
-                                .map_err(|e| anyhow::anyhow!("Invalid name in type: {}", e))?,
+                                .require("Invalid address in type")?,
+                            module: Identifier::new(parts[1]).require("Invalid module in type")?,
+                            name: Identifier::new(parts[2]).require("Invalid name in type")?,
                             type_params: vec![],
                         }))
                     } else {
@@ -1622,50 +1487,5 @@ impl MoveRuntime {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde::Deserialize;
-
-    #[derive(Debug, Deserialize, PartialEq, Eq)]
-    struct SerializedTxContext {
-        sender: AccountAddress,
-        tx_hash: Vec<u8>,
-        ids_created: u64,
-        epoch_timestamp_ms: u64,
-        sponsor: u64,
-    }
-
-    #[test]
-    fn tx_context_without_timestamp_is_deterministic() -> Result<()> {
-        let runtime = MoveRuntime::new_with_natives_in_memory(vec![])?;
-        let sender = AccountAddress::from_hex_literal("0x1111")?;
-
-        let first = runtime.build_tx_context_bytes(Some(sender), None, None)?;
-        let second = runtime.build_tx_context_bytes(Some(sender), None, None)?;
-        let ctx: SerializedTxContext = bcs::from_bytes(&first)?;
-
-        assert_eq!(first, second);
-        assert_eq!(ctx.sender, sender);
-        assert_eq!(ctx.epoch_timestamp_ms, 0);
-        assert_eq!(ctx.ids_created, 0);
-        assert_eq!(ctx.sponsor, 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn tx_context_uses_canonical_timestamp_and_hash() -> Result<()> {
-        let runtime = MoveRuntime::new_with_natives_in_memory(vec![])?;
-        let sender = AccountAddress::from_hex_literal("0x1111")?;
-        let tx_hash = vec![7u8; 32];
-
-        let bytes = runtime.build_tx_context_bytes(Some(sender), Some(42), Some(&tx_hash))?;
-        let ctx: SerializedTxContext = bcs::from_bytes(&bytes)?;
-
-        assert_eq!(ctx.sender, sender);
-        assert_eq!(ctx.tx_hash, tx_hash);
-        assert_eq!(ctx.epoch_timestamp_ms, 42);
-
-        Ok(())
-    }
-}
+#[path = "../../tests/unit/move_runtime_tests.rs"]
+mod tests;
