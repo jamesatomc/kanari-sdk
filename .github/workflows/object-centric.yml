@@ -18,7 +18,6 @@ env:
 
 jobs:
   object-centric-check:
-    if: ${{ !contains(github.event.pull_request.head.sha, 'object-pool-diagnostic') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -29,7 +28,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: rustfmt
 
@@ -40,19 +39,7 @@ jobs:
         run: python .github/scripts/apply_object_pool_recovery.py
 
       - name: Format object recovery
-        id: format
-        continue-on-error: true
-        run: cargo fmt --all 2> object-pool-fmt.log
-
-      - name: Commit diagnostic snapshot when formatting fails
-        if: steps.format.outcome == 'failure'
-        run: |
-          git config user.name 'kanari-object-bot'
-          git config user.email 'actions@users.noreply.github.com'
-          git add -A
-          git commit -m 'ci: capture object pool format failure [object-pool-diagnostic]'
-          git push origin HEAD:object-centric
-          exit 1
+        run: cargo fmt --all
 
       - name: Check object-centric crates
         run: cargo check -p kanari-types -p kanari-move-runtime-v1 -p kanari-core -p kanari-rpc-server -p kanari-rpc-client -p kanari-node -p kanari
@@ -78,6 +65,7 @@ jobs:
         run: |
           git config user.name 'kanari-object-bot'
           git config user.email 'actions@users.noreply.github.com'
+          rm -f object-pool-fmt.log
           git add -A
           if git diff --cached --quiet; then
             echo 'No validated recovery changes to commit'
