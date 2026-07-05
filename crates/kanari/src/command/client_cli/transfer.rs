@@ -77,6 +77,7 @@ impl Transfer {
             .context("Sender account has no owned object list from RPC")?;
 
         let mut selected_coin_id = None;
+        let mut selected_coin_version = None;
         let mut selected_coin_balance = 0u64;
         let mut total_coin_balance = 0u64;
 
@@ -93,6 +94,7 @@ impl Transfer {
 
             if selected_coin_id.is_none() && coin_balance > 0 {
                 selected_coin_id = Some(obj.id.clone());
+                selected_coin_version = Some(obj.version);
                 selected_coin_balance = coin_balance;
             }
         }
@@ -101,6 +103,13 @@ impl Transfer {
             format!(
                 "No spendable Coin<{}> object found for {}",
                 KANARI_TOKEN_TYPE, from_addr
+            )
+        })?;
+
+        let coin_object_version = selected_coin_version.with_context(|| {
+            format!(
+                "No version found for Coin<{}> object {}",
+                KANARI_TOKEN_TYPE, coin_object_id
             )
         })?;
 
@@ -141,6 +150,7 @@ impl Transfer {
             gas_price,
             signature: None,
             execute_immediate: Some(false),
+            object_versions: Some(vec![(coin_object_id.clone(), coin_object_version)]),
         };
         let final_call_req = sign_call_function_request(call_req, &wallet)?;
 

@@ -1,56 +1,36 @@
 ```
-# Dependencies
-target/
-**/target/
-
 # Compiled and build artifacts
-**/*.rs.bk
-**/Cargo.lock
-
+*.pyc
+__pycache__/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
+# Dependencies
+.venv/
+venv/
+node_modules/
+dist/
+build/
+target/
+.mypy_cache/
+.pytest_cache/
 # Logs and temp files
 *.log
 *.tmp
-
+*.swp
 # Environment
 .env
 .env.local
 .env.*
-
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
-
 # Coverage
 coverage/
 htmlcov/
 .coverage
-
-# Python specific
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.git/
-.mypy_cache/
-.pytest_cache/
-.hypothesis/
-
-# Rust specific
-**/target/
-Cargo.lock
 ```

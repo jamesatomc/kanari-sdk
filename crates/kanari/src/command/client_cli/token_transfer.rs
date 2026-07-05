@@ -104,6 +104,7 @@ impl TokenTransfer {
         // Find coin objects of the specified token type
         let wanted_token = normalize_token_type(&self.token);
         let mut selected_coin_id = None;
+        let mut selected_coin_version = None;
         let mut selected_coin_balance = 0u64;
         let mut total_coin_balance = 0u64;
         let mut seen_coin_types = std::collections::BTreeSet::new();
@@ -118,6 +119,7 @@ impl TokenTransfer {
                         total_coin_balance = total_coin_balance.saturating_add(coin_balance);
                         if selected_coin_id.is_none() && coin_balance > 0 {
                             selected_coin_id = Some(obj.id.clone());
+                            selected_coin_version = Some(obj.version);
                             selected_coin_balance = coin_balance;
                         }
                     }
@@ -159,6 +161,7 @@ impl TokenTransfer {
         }
 
         let coin_object_id = selected_coin_id.as_ref().invariant("selected coin checked");
+        let coin_object_version = selected_coin_version.invariant("selected coin version checked");
         eprintln!("  Using coin object: {}", coin_object_id);
         eprintln!(
             "  Selected Coin Balance: {} (base units)",
@@ -202,6 +205,7 @@ impl TokenTransfer {
             gas_price,
             signature: None, // Will be set after signing
             execute_immediate: Some(true),
+            object_versions: Some(vec![(coin_object_id.clone(), coin_object_version)]),
         };
         let final_call_req = sign_call_function_request(call_req, &wallet)?;
 
