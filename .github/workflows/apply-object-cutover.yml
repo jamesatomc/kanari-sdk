@@ -1,6 +1,9 @@
 name: Apply Object Cutover
 
 on:
+  push:
+    branches:
+      - object-centric
   pull_request:
     branches:
       - kanari-sdk
@@ -81,6 +84,7 @@ jobs:
           retention-days: 1
 
       - name: Commit validated cutover
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
           if git diff --quiet; then
             echo 'No cutover changes required'
