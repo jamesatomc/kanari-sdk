@@ -32,6 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Apply cutover
+        if: ${{ github.event_name == 'pull_request' }}
         run: |
           python .github/scripts/apply_object_cutover.py
           python .github/scripts/apply_object_transfer_cli.py
