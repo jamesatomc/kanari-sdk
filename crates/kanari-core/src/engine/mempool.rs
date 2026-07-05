@@ -14,19 +14,9 @@ impl BlockchainEngine {
             return Ok(Vec::new());
         }
 
-        // Early size check to avoid unnecessary work
         let batch_size = signed_txs.len();
-        let (pending_hashes, pending_by_sender) = {
-            let mempool = self.mempool_read();
-            (
-                mempool.pending_tx_hashes.clone(),
-                mempool.pending_sender_counts.clone(),
-            )
-        };
-
-        if pending_hashes.len().saturating_add(batch_size) > MAX_MEMPOOL_SIZE {
-            log::warn!("[MEMPOOL] Rejecting batch: Queue would exceed max size");
-            anyhow::bail!("Mempool is currently full. Please try again later.");
+        if batch_size > MAX_MEMPOOL_SIZE {
+            anyhow::bail!("Transaction batch exceeds the maximum mempool capacity");
         }
 
         let mut sender_cache = ahash::AHashMap::with_capacity(batch_size);
@@ -37,7 +27,8 @@ impl BlockchainEngine {
                 .or_insert_with(|| Self::normalize_addr(sender));
         }
 
-        // Hash, verify, and extract metadata in one parallel pass.
+        // Signature verification and hashing are intentionally performed outside the
+        // mempool write lock. Admission is revalidated and reserved atomically below.
         let mut verified_txs = signed_txs
             .into_par_iter()
             .map(
@@ -71,7 +62,8 @@ impl BlockchainEngine {
             .map(|(_, hash, sender, sequence)| (hash.clone(), sender.clone(), *sequence))
             .collect();
 
-        // Batch read account sequences to minimize state lock contention
+        // Read committed account sequences before taking the mempool lock. The pending
+        // portion is read only while holding the write lock during atomic admission.
         let base_sequences = {
             let state = self.state_read();
             let mut sequences = std::collections::HashMap::with_capacity(batch_metadata.len());
@@ -87,7 +79,8 @@ impl BlockchainEngine {
             sequences
         };
 
-        // Check executed transactions in parallel
+        // Executed transaction lookup is also expensive and does not mutate admission
+        // state, so it remains outside the mempool lock.
         let executed_hashes = {
             let chain = match self.blockchain.read() {
                 Ok(guard) => guard,
@@ -118,43 +111,71 @@ impl BlockchainEngine {
             }
         };
 
-        // Validate duplicates globally, then validate sequence numbers per sender in parallel.
+        // Validate invariants that are independent of the current mempool state.
         let mut batch_hashes = AHashSet::with_capacity(batch_size);
         let mut accepted_hashes = Vec::with_capacity(batch_size);
         let mut accepted_counts_by_sender = ahash::AHashMap::new();
         let mut sequence_groups = ahash::AHashMap::new();
+
         for (tx_hash, sender, tx_seq) in &batch_metadata {
-            if pending_hashes.contains(tx_hash) || !batch_hashes.insert(tx_hash.clone()) {
-                let tx_hash_hex = hex::encode(tx_hash);
-                anyhow::bail!("Transaction {} already in pending pool", tx_hash_hex);
+            if !batch_hashes.insert(tx_hash.clone()) {
+                anyhow::bail!(
+                    "Transaction {} appears more than once in the submitted batch",
+                    hex::encode(tx_hash)
+                );
             }
             if executed_hashes.contains(tx_hash) {
-                let tx_hash_hex = hex::encode(tx_hash);
-                anyhow::bail!("Transaction {} already executed", tx_hash_hex);
+                anyhow::bail!("Transaction {} already executed", hex::encode(tx_hash));
             }
 
             accepted_hashes.push(tx_hash.clone());
-            *accepted_counts_by_sender.entry(sender.clone()).or_insert(0) += 1;
+            *accepted_counts_by_sender.entry(sender.clone()).or_insert(0u64) += 1;
             sequence_groups
                 .entry(sender.clone())
                 .or_insert_with(Vec::new)
                 .push(*tx_seq);
         }
 
-        let sequence_groups = sequence_groups
-            .into_iter()
-            .map(|(sender, mut tx_sequences)| {
-                tx_sequences.sort_unstable();
-                let expected_start = base_sequences.get(&sender).copied().unwrap_or(0)
-                    + pending_by_sender.get(&sender).copied().unwrap_or(0);
-                (sender, expected_start, tx_sequences)
-            })
-            .collect::<Vec<_>>();
+        for tx_sequences in sequence_groups.values_mut() {
+            tx_sequences.sort_unstable();
+        }
 
-        sequence_groups.par_iter().try_for_each(
-            |(sender, expected_start, tx_sequences)| -> Result<()> {
-                for (expected_seq, tx_seq) in (*expected_start..).zip(tx_sequences.iter().copied())
-                {
+        // H-05 remediation: validate all pending-dependent conditions and reserve the
+        // hashes/sequences under one write lock. No concurrent admission can pass a
+        // stale snapshot between validation and insertion.
+        {
+            let mut mempool = self.mempool_write();
+
+            if mempool.pending_txs.len().saturating_add(batch_size) > MAX_MEMPOOL_SIZE {
+                log::warn!("[MEMPOOL] Rejecting batch: queue would exceed max size");
+                anyhow::bail!("Mempool is currently full. Please try again later.");
+            }
+
+            for (tx_hash, _, _) in &batch_metadata {
+                if mempool.pending_tx_hashes.contains(tx_hash) {
+                    anyhow::bail!(
+                        "Transaction {} already in pending pool",
+                        hex::encode(tx_hash)
+                    );
+                }
+            }
+
+            for (sender, tx_sequences) in &sequence_groups {
+                let committed_sequence = base_sequences.get(sender).copied().unwrap_or(0);
+                let pending_count = mempool
+                    .pending_sender_counts
+                    .get(sender)
+                    .copied()
+                    .unwrap_or(0);
+                let expected_start = committed_sequence.checked_add(pending_count).ok_or_else(|| {
+                    anyhow::anyhow!("Sequence number overflow for sender {}", sender)
+                })?;
+
+                for (offset, tx_seq) in tx_sequences.iter().copied().enumerate() {
+                    let expected_seq = expected_start
+                        .checked_add(offset as u64)
+                        .ok_or_else(|| anyhow::anyhow!("Sequence number overflow for sender {}", sender))?;
+
                     if tx_seq < expected_seq {
                         anyhow::bail!(
                             "Sequence number too low: expected {}, got {}",
@@ -171,16 +192,6 @@ impl BlockchainEngine {
                         );
                     }
                 }
-                Ok(())
-            },
-        )?;
-
-        // Write to mempool with minimal lock duration
-        {
-            let mut mempool = self.mempool_write();
-
-            if mempool.pending_txs.len().saturating_add(batch_size) > MAX_MEMPOOL_SIZE {
-                anyhow::bail!("Mempool is currently full. Please try again later.");
             }
 
             mempool.pending_txs.extend(

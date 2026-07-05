@@ -76,28 +76,20 @@ module kanari_system::object {
     }
 
     // --- Native Persistence ---
-    // Explicitly request the runtime to persist changes to a mutable object reference.
-    // This is required because entry functions do not automatically write back modified arguments.
+    // Explicitly request the runtime to persist changes to an object reference.
+    // The runtime must only supply mutable references after ownership/shared-object
+    // authorization has completed.
     public native fun save_object<T: key>(obj: &T);
 
-    /// Load an object from storage by its address and return a mutable reference.
-    /// This enables runtime resolution of object IDs passed from CLI.
-    /// 
-    /// # Example
-    /// ```move
-    /// let coin_ref = borrow_global_mut<Coin<USDC>>(coin_object_id);
-    /// // Use coin_ref to modify the coin
-    /// ```
+    /// Internal-only legacy loader retained for runtime compatibility.
+    ///
+    /// This function is intentionally not public. Arbitrary published modules must
+    /// receive mutable object references as transaction inputs so the trusted runtime
+    /// can authenticate ownership before Move execution begins.
     public native fun borrow_global_mut<T: key>(addr: address): &mut T;
 
     /// Load an object from storage by its address and return an immutable reference.
-    /// This allows reading any object's data without requiring ownership or mutability.
-    /// 
-    /// # Example
-    /// ```move
-    /// let coin_ref = borrow_global<Coin<USDC>>(coin_object_id);
-    /// let balance = coin::value(coin_ref);
-    /// ```
+    /// Read access does not grant mutation or persistence authority.
     public native fun borrow_global<T: key>(addr: address): &T;
 
     /// Delete an object by consuming its UID.

@@ -487,6 +487,7 @@ impl StateManager {
             || key == b"global_token_supplies"
             || key == b"treasury_index"
             || key == b"nft_collection_index"
+            || key.starts_with(b"resource:")
             || key.starts_with(b"account:")
             || key.starts_with(b"owned_objects:")
             || key.starts_with(b"df:")
@@ -504,6 +505,18 @@ impl StateManager {
 
     fn retain_canonical_state_root_entries(entries: &mut BTreeMap<Vec<u8>, Vec<u8>>) {
         let mut canonical_object_keys = BTreeSet::new();
+        let mut canonical_module_keys = BTreeSet::new();
+
+        if let Some(module_index_bytes) = entries.get(b"module_index".as_slice())
+            && let Ok(module_keys) = bcs::from_bytes::<Vec<String>>(module_index_bytes)
+        {
+            for module_key in module_keys {
+                let module_key = module_key.into_bytes();
+                if module_key.starts_with(b"module:") && entries.contains_key(&module_key) {
+                    canonical_module_keys.insert(module_key);
+                }
+            }
+        }
 
         for (key, value) in entries.iter() {
             if !key.starts_with(b"owned_objects:") {
@@ -524,6 +537,7 @@ impl StateManager {
 
         entries.retain(|key, _| {
             Self::is_canonical_state_root_key(key)
+                || (key.starts_with(b"module:") && canonical_module_keys.contains(key))
                 || (key.starts_with(b"object:") && canonical_object_keys.contains(key))
         });
     }
@@ -531,6 +545,15 @@ impl StateManager {
     fn is_canonical_smt_update(&self, key: &[u8], value: &[u8]) -> bool {
         if Self::is_canonical_state_root_key(key) {
             return true;
+        }
+
+        if key.starts_with(b"module:") {
+            return self
+                .load_internal::<Vec<String>>(b"module_index")
+                .ok()
+                .flatten()
+                .map(|modules| modules.iter().any(|module| module.as_bytes() == key))
+                .unwrap_or(false);
         }
 
         let Some(object_id) = key
@@ -561,7 +584,11 @@ impl StateManager {
                 Some(value) if self.is_canonical_smt_update(key, value) => {
                     updates.push((key.clone(), value.clone()));
                 }
-                None if Self::is_canonical_state_root_key(key) || key.starts_with(b"object:") => {
+                None
+                    if Self::is_canonical_state_root_key(key)
+                        || key.starts_with(b"module:")
+                        || key.starts_with(b"object:") =>
+                {
                     deletes.push(key.clone());
                 }
                 _ => {}

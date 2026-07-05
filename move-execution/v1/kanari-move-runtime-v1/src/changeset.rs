@@ -29,7 +29,8 @@ pub struct CreatedObject {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountChange {
     pub address: AccountAddress,
-    pub balance_delta: i64, // Positive = credit, Negative = debit
+    /// Positive = credit, negative = debit. i128 prevents lossy u64 -> i64 casts.
+    pub balance_delta: i128,
     pub sequence_increment: u64,
     pub modules_added: BTreeSet<String>,
 }
@@ -45,15 +46,15 @@ impl AccountChange {
     }
 
     pub fn debit(&mut self, amount: u64) {
-        self.balance_delta -= amount as i64;
+        self.balance_delta -= amount as i128;
     }
 
     pub fn credit(&mut self, amount: u64) {
-        self.balance_delta += amount as i64;
+        self.balance_delta += amount as i128;
     }
 
     pub fn increment_sequence(&mut self) {
-        self.sequence_increment += 1;
+        self.sequence_increment = self.sequence_increment.saturating_add(1);
     }
 
     fn add_module(&mut self, module_name: String) {
@@ -61,8 +62,8 @@ impl AccountChange {
     }
 }
 
-/// ChangeSet represents all state changes from Move VM execution
-/// This is the canonical output from Move VM that StateManager will apply
+/// ChangeSet represents all state changes from Move VM execution.
+/// This is the canonical output from Move VM that StateManager will apply.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChangeSet {
     pub account_changes: BTreeMap<AccountAddress, AccountChange>,
@@ -85,6 +86,9 @@ pub struct ChangeSet {
     pub added_dynamic_fields: Vec<(String, Vec<u8>, Vec<u8>)>,
     /// (object_id, name_bytes)
     pub removed_dynamic_fields: Vec<(String, Vec<u8>)>,
+    /// Canonical Move module/resource operations keyed exactly as the shared store.
+    /// Some(bytes) is create/modify and None is delete.
+    pub move_writes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
     pub gas_used: u64,
     pub success: bool,
     pub error_message: Option<String>,
@@ -102,6 +106,7 @@ impl ChangeSet {
             deleted_objects: Vec::new(),
             added_dynamic_fields: Vec::new(),
             removed_dynamic_fields: Vec::new(),
+            move_writes: BTreeMap::new(),
             gas_used,
             success,
             error_message,
@@ -130,27 +135,22 @@ impl ChangeSet {
 
     /// Mint operation: create new tokens
     pub fn mint(&mut self, to: AccountAddress, amount: u64) {
-        let receiver = self.get_or_create_change(to);
-        receiver.credit(amount);
+        self.get_or_create_change(to).credit(amount);
     }
 
     /// Burn operation: destroy tokens
     pub fn burn(&mut self, from: AccountAddress, amount: u64) {
-        let sender = self.get_or_create_change(from);
-        sender.debit(amount);
+        self.get_or_create_change(from).debit(amount);
     }
 
-    /// Module publish operation
-    /// Note: Does NOT increment sequence - that's handled by the engine layer
+    /// Module publish operation. Sequence handling remains in the engine layer.
     pub fn publish_module(&mut self, publisher: AccountAddress, module_name: String) {
-        let account = self.get_or_create_change(publisher);
-        account.add_module(module_name);
+        self.get_or_create_change(publisher).add_module(module_name);
     }
 
     /// Collect gas fees to DAO
     pub fn collect_gas(&mut self, dao_address: AccountAddress, gas_amount: u64) {
-        let dao = self.get_or_create_change(dao_address);
-        dao.credit(gas_amount);
+        self.get_or_create_change(dao_address).credit(gas_amount);
     }
 
     pub fn set_gas_used(&mut self, gas: u64) {
@@ -171,43 +171,44 @@ impl ChangeSet {
             && self.deleted_objects.is_empty()
             && self.added_dynamic_fields.is_empty()
             && self.removed_dynamic_fields.is_empty()
+            && self.move_writes.is_empty()
             && self.gas_used == 0
             && self.success
             && self.error_message.is_none()
     }
 
-    /// Merge another ChangeSet into this one
-    /// Used to combine Move VM changes with gas/sequence changes
-    /// Token balance sets are consolidated to prevent duplicates
+    /// Merge another ChangeSet into this one. Later Move writes replace earlier writes
+    /// for the same canonical key, matching serial transaction execution semantics.
     pub fn merge(&mut self, mut other: ChangeSet) {
         for (addr, other_change) in other.account_changes {
             let existing = self.get_or_create_change(addr);
-            existing.balance_delta += other_change.balance_delta;
-            existing.sequence_increment += other_change.sequence_increment;
-
-            // Merge modules_added without duplicates
-            for module in other_change.modules_added {
-                existing.modules_added.insert(module);
-            }
+            existing.balance_delta = existing
+                .balance_delta
+                .saturating_add(other_change.balance_delta);
+            existing.sequence_increment = existing
+                .sequence_increment
+                .saturating_add(other_change.sequence_increment);
+            existing.modules_added.extend(other_change.modules_added);
         }
         self.events.extend(other.events);
         self.treasuries.extend(other.treasuries);
         self.nft_caps.extend(other.nft_caps);
 
-        // Consolidate token_balance_sets to prevent duplicates during merge
         for (owner, token_type, amount) in other.token_balance_sets {
             self.add_token_balance_set(owner, token_type, amount.value());
         }
 
         self.created_objects.extend(other.created_objects);
         self.deleted_objects.extend(other.deleted_objects);
-
         self.added_dynamic_fields
             .append(&mut other.added_dynamic_fields);
         self.removed_dynamic_fields
             .append(&mut other.removed_dynamic_fields);
+        for (key, value) in other.move_writes {
+            self.move_writes.insert(key, value);
+        }
 
-        self.gas_used += other.gas_used;
+        self.gas_used = self.gas_used.saturating_add(other.gas_used);
         if !other.success {
             self.success = false;
             self.error_message = other.error_message;
@@ -218,9 +219,13 @@ impl ChangeSet {
         self.events.push(event);
     }
 
+    pub fn record_move_write(&mut self, key: Vec<u8>, value: Option<Vec<u8>>) {
+        self.move_writes.insert(key, value);
+    }
+
     pub fn add_deleted_object(&mut self, object_id: String) {
-        let canonical_id = Self::canonicalize_object_id(&object_id);
-        self.deleted_objects.push(canonical_id);
+        self.deleted_objects
+            .push(Self::canonicalize_object_id(&object_id));
     }
 
     fn canonicalize_object_id(object_id: &str) -> String {
@@ -229,42 +234,33 @@ impl ChangeSet {
             .unwrap_or_else(|_| object_id.to_string())
     }
 
-    /// Record a treasury (TreasuryCap) creation/update for a given token type
     pub fn add_treasury(&mut self, owner: AccountAddress, token_type: String, total_supply: u64) {
         self.treasuries
             .push((owner, token_type, TreasuryCap { total_supply }));
     }
 
-    /// Record a token balance update for an account
-    /// When multiple balance updates occur for the same (owner, token_type) pair in the same changeset,
-    /// consolidates them by summing amounts. This handles multiple coins of the same type
-    /// being transferred to the same account in one transaction.
+    /// Record an absolute token balance for a given account/token pair. Multiple coin
+    /// fragments observed in one VM session are summed to one absolute owner total.
     pub fn add_token_balance_set(
         &mut self,
         owner: AccountAddress,
         token_type: String,
         amount: u64,
     ) {
-        // Check if entry already exists for this (owner, token_type) pair
         if let Some((_, _, existing_balance)) = self
             .token_balance_sets
             .iter_mut()
             .find(|(o, t, _)| o == &owner && t == &token_type)
         {
-            // Sum amounts: multiple coins of same type to same account
-            let existing_amount = existing_balance.value();
-            let combined_amount = existing_amount.saturating_add(amount);
-            *existing_balance = BalanceRecord::new(combined_amount);
+            *existing_balance = BalanceRecord::new(
+                existing_balance.value().saturating_add(amount),
+            );
         } else {
-            // Add new entry
             self.token_balance_sets
                 .push((owner, token_type, BalanceRecord::new(amount)));
         }
     }
 
-    /// Record a created object discovered in Move write-sets
-    /// Uses O(n) linear search - acceptable for small object counts per transaction
-    /// For high-frequency object creation, consider using HashMap-based storage
     pub fn add_created_object(
         &mut self,
         owner: AccountAddress,
@@ -294,7 +290,6 @@ impl ChangeSet {
             .iter_mut()
             .find(|(id, _)| id == &canonical_id)
         {
-            // Prevent accidental Owner overwrite
             if owner.to_hex_literal() != canonical_id {
                 existing_obj.owner = owner;
             }

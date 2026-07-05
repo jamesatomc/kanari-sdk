@@ -365,19 +365,22 @@ impl StateManager {
         let supply_delta = changeset
             .account_changes
             .values()
-            .try_fold(0i64, |total, change| {
+            .try_fold(0i128, |total, change| {
                 total
                     .checked_add(change.balance_delta)
                     .require("Native supply delta overflow")
             })?;
         let next_total_supply = if supply_delta > 0 {
+            let mint_amount = u64::try_from(supply_delta)
+                .expect("Native supply delta overflowed u64 total supply");
             Some(
                 self.total_supply
-                    .checked_add(supply_delta as u64)
+                    .checked_add(mint_amount)
                     .require("Native total supply overflow")?,
             )
         } else if supply_delta < 0 {
-            let burn_amount = supply_delta.unsigned_abs();
+            let burn_amount = u64::try_from(supply_delta.unsigned_abs())
+                .expect("Native supply delta overflowed u64 total supply");
             ensure!(
                 self.total_supply >= burn_amount,
                 "Native total supply underflow: tried to burn {} from {}",
@@ -393,7 +396,8 @@ impl StateManager {
             if change.balance_delta >= 0 {
                 continue;
             }
-            let debit = change.balance_delta.unsigned_abs();
+            let debit = u64::try_from(change.balance_delta.unsigned_abs())
+                .expect("Native debit overflowed u64 account balance");
             let balance = self.load_account_or_default(*address)?.native_balance();
             ensure!(
                 balance >= debit,
@@ -419,14 +423,16 @@ impl StateManager {
             let native_token = KANARI_TOKEN_TYPE.to_string();
 
             if change.balance_delta > 0 {
-                let amount = change.balance_delta as u64;
+                let amount = u64::try_from(change.balance_delta)
+                    .expect("Native credit overflowed u64 account balance");
                 let next = account
                     .native_balance()
                     .checked_add(amount)
                     .require("Native account balance overflow")?;
                 account.set_token_balance_value(&native_token, next);
             } else if change.balance_delta < 0 {
-                let debit = change.balance_delta.unsigned_abs();
+                let debit = u64::try_from(change.balance_delta.unsigned_abs())
+                    .expect("Native debit overflowed u64 account balance");
                 let next = account.native_balance() - debit;
                 account.set_token_balance_value(&native_token, next);
             }
@@ -568,12 +574,16 @@ impl StateManager {
                     Self::balance_token_amount(&existing.type_name, &existing.data)
                         .is_some_and(|(token_type, _)| token_type == KANARI_TOKEN_TYPE);
                 if existing_native_coin {
-                    let sender_native_debit = changeset
+                    let sender_native_debit: u64 = changeset
                         .account_changes
                         .get(&existing.owner)
                         .map(|change| change.balance_delta)
                         .filter(|delta| *delta < 0)
-                        .map(i64::unsigned_abs)
+                        .map(|delta| {
+                            u64::try_from(delta.unsigned_abs()).expect(
+                                "Native debit overflowed u64 object gas adjustment",
+                            )
+                        })
                         .unwrap_or(0);
                     let already_adjusted = native_object_gas_adjusted
                         .get(&existing.owner)
@@ -667,7 +677,7 @@ impl StateManager {
                 .account_changes
                 .get(&owner)
                 .map(|change| change.balance_delta)
-                .unwrap_or(0);
+                .unwrap_or(0i128);
             let native_object_changed = native_object_changed_owners.contains(&owner);
             let adjusted_gas = native_object_gas_adjusted.get(&owner).copied().unwrap_or(0);
             if self.recompute_token_balances_for_owner(

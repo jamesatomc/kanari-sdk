@@ -1,0 +1,153 @@
+name: Security Remediation CI
+
+on:
+  pull_request:
+    branches:
+      - kanari-sdk
+    paths:
+      - "crates/**"
+      - "move-execution/**"
+      - "sdk/kanari_pay/backend/**"
+      - "scripts/security_remediation_batch1.py"
+      - "scripts/security_remediation_consensus.py"
+      - "scripts/security_remediation_checkpoint_votes.py"
+      - "scripts/security_remediation_node.py"
+      - "scripts/security_remediation_state_commit.py"
+      - "scripts/security_remediation_auth.py"
+      - "scripts/security_remediation_fixups.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/security-remediation-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: security-remediation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-and-move:
+    name: Security build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout remediation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-security-remediation-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-security-remediation-
+            ${{ runner.os }}-cargo-
+
+      - name: Apply checked idempotent transformations
+        run: |
+          python3 scripts/security_remediation_batch1.py
+          python3 scripts/security_remediation_consensus.py
+          python3 scripts/security_remediation_checkpoint_votes.py
+          python3 scripts/security_remediation_node.py
+          python3 scripts/security_remediation_state_commit.py
+          python3 scripts/security_remediation_auth.py
+          python3 scripts/security_remediation_fixups.py
+
+      - name: Package transformed source diagnostics
+        run: |
+          tar -czf /tmp/security-transformed-source.tar.gz \
+            crates/kanari-core \
+            crates/kanari-node \
+            crates/kanari-rpc-server \
+            crates/kanari-auth \
+            crates/run-auth \
+            move-execution/v1/kanari-move-runtime-v1 \
+            scripts/security_remediation_batch1.py \
+            scripts/security_remediation_consensus.py \
+            scripts/security_remediation_checkpoint_votes.py \
+            scripts/security_remediation_node.py \
+            scripts/security_remediation_state_commit.py \
+            scripts/security_remediation_auth.py \
+            scripts/security_remediation_fixups.py
+
+      - name: Upload transformed source diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-transformed-source
+          path: /tmp/security-transformed-source.tar.gz
+          retention-days: 1
+
+      - name: Format Rust
+        id: rustfmt
+        continue-on-error: true
+        run: |
+          set +e
+          cargo fmt --all > /tmp/rustfmt.log 2>&1
+          status=$?
+          echo "$status" > /tmp/rustfmt.status
+          cat /tmp/rustfmt.log
+          exit 0
+
+      - name: Upload rustfmt diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-diagnostics
+          path: |
+            /tmp/rustfmt.log
+            /tmp/rustfmt.status
+          retention-days: 1
+
+      - name: Enforce rustfmt success
+        run: test "$(cat /tmp/rustfmt.status)" = "0"
+
+      - name: Check affected Rust crates
+        run: cargo check -p kanari-core -p kanari-node -p kanari-move-runtime-v1 -p kanari-rpc-server -p kanari-auth -p run-auth
+
+      - name: Test Move runtime remediation
+        run: cargo test -p kanari-move-runtime-v1
+
+      - name: Test Kanari core library
+        run: cargo test -p kanari-core --lib
+
+      - name: Test authentication security
+        run: cargo test -p kanari-auth
+
+      - name: Test Kanari framework Move package
+        run: cargo run -p kanari -- move test crates/kanari-frameworks/packages/kanari-system
+
+      - name: Test DEX Move package
+        run: cargo run -p kanari -- move test sdk/kanari_pay/backend/dex_v1
+
+      - name: Test escrow Move package
+        run: cargo run -p kanari -- move test sdk/kanari_pay/backend/kanari_escrow
+
+      - name: Persist validated transformations
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          if git diff --quiet; then
+            echo "No generated remediation changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add move-execution/v1/kanari-move-runtime-v1 crates/kanari-core crates/kanari-node crates/kanari-rpc-server crates/kanari-auth crates/run-auth
+          git commit -m "security: apply validated remediation transforms"
+          git pull --rebase origin "${{ github.head_ref }}"
+          git push origin HEAD:"${{ github.head_ref }}"

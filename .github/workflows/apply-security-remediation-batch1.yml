@@ -1,0 +1,41 @@
+name: Apply Security Remediation Batch 1
+
+on:
+  push:
+    branches:
+      - security/audit-remediation-2026-07-05
+    paths:
+      - .github/workflows/apply-security-remediation-batch1.yml
+      - scripts/security_remediation_batch1.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/audit-remediation-2026-07-05
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply checked transformations
+        run: python3 scripts/security_remediation_batch1.py
+      - name: Format Rust
+        run: cargo fmt --all
+      - name: Check affected crates
+        run: cargo check -p kanari-move-runtime-v1 -p kanari-core -p kanari-rpc-server
+      - name: Test runtime
+        run: cargo test -p kanari-move-runtime-v1
+      - name: Commit transformed sources
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add move-execution/v1/kanari-move-runtime-v1 crates/kanari-core crates/kanari-rpc-server
+          git commit -m "security: canonical writes, fail-closed persistence, and RPC bounds"
+          git pull --rebase origin security/audit-remediation-2026-07-05
+          git push origin HEAD:security/audit-remediation-2026-07-05

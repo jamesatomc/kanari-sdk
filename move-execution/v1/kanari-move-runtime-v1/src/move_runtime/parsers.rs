@@ -25,17 +25,31 @@ impl super::MoveRuntime {
 
         for (addr, account_changes) in move_cs.accounts() {
             for (module_name, op) in account_changes.modules() {
-                if matches!(op, MoveOp::New(_) | MoveOp::Modify(_)) {
-                    kanari_cs.publish_module(*addr, module_name.to_string());
+                let key = format!(
+                    "module:{}:{}",
+                    addr.to_hex_literal(),
+                    module_name.as_str()
+                )
+                .into_bytes();
+                match op {
+                    MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
+                        kanari_cs.publish_module(*addr, module_name.to_string());
+                        kanari_cs.record_move_write(key, Some(bytes.to_vec()));
+                    }
+                    MoveOp::Delete => kanari_cs.record_move_write(key, None),
                 }
             }
 
             for (struct_tag, op) in account_changes.resources() {
+                let resource_key =
+                    format!("resource:{}:{}", addr.to_hex_literal(), struct_tag).into_bytes();
                 match op {
                     MoveOp::New(bytes) | MoveOp::Modify(bytes) => {
+                        kanari_cs.record_move_write(resource_key, Some(bytes.to_vec()));
+
                         let Some(object_id) = object_id_from_bytes(bytes) else {
                             debug!(
-                                "[PARSER] skipping resource without UID/ID: addr={} type={}",
+                                "[PARSER] resource has no UID/ID: addr={} type={}",
                                 addr.to_hex_literal(),
                                 struct_tag
                             );
@@ -56,8 +70,9 @@ impl super::MoveRuntime {
                         kanari_cs.created_objects.push((object_id, created));
                     }
                     MoveOp::Delete => {
+                        kanari_cs.record_move_write(resource_key, None);
                         debug!(
-                            "[PARSER] skipping delete without concrete object id: addr={} type={}",
+                            "[PARSER] resource delete recorded: addr={} type={}",
                             addr.to_hex_literal(),
                             struct_tag
                         );

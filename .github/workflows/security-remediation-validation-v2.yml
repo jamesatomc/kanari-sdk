@@ -1,0 +1,167 @@
+name: Security Remediation Validation V2
+
+on:
+  push:
+    branches:
+      - security/audit-remediation-2026-07-05
+    paths:
+      - "crates/**"
+      - "move-execution/**"
+      - "sdk/kanari_pay/backend/**"
+      - "scripts/security_remediation_*.py"
+      - ".github/workflows/security-remediation-validation-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-remediation-validation-v2
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/audit-remediation-2026-07-05
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-security-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-security-v2-
+            ${{ runner.os }}-security-remediation-
+
+      - name: Apply transformations
+        id: transforms
+        continue-on-error: true
+        run: |
+          set +e
+          {
+            python3 scripts/security_remediation_batch1.py &&
+            python3 scripts/security_remediation_consensus.py &&
+            python3 scripts/security_remediation_node.py &&
+            python3 scripts/security_remediation_checkpoint_votes.py &&
+            python3 scripts/security_remediation_state_commit.py &&
+            python3 scripts/security_remediation_auth.py &&
+            python3 scripts/security_remediation_fixups.py
+          } > /tmp/transforms.log 2>&1
+          status=$?
+          echo "$status" > /tmp/transforms.status
+          cat /tmp/transforms.log
+          exit 0
+
+      - name: Upload transform diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: transform-diagnostics-v2
+          path: |
+            /tmp/transforms.log
+            /tmp/transforms.status
+          retention-days: 1
+
+      - name: Enforce transform success
+        run: test "$(cat /tmp/transforms.status)" = "0"
+
+      - name: Format transformed Rust
+        id: rustfmt
+        continue-on-error: true
+        run: |
+          set +e
+          cargo fmt --all > /tmp/rustfmt.log 2>&1
+          status=$?
+          echo "$status" > /tmp/rustfmt.status
+          cat /tmp/rustfmt.log
+          exit 0
+
+      - name: Upload rustfmt diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-diagnostics-v2
+          path: |
+            /tmp/rustfmt.log
+            /tmp/rustfmt.status
+          retention-days: 1
+
+      - name: Enforce rustfmt success
+        run: test "$(cat /tmp/rustfmt.status)" = "0"
+
+      - name: Package transformed source
+        run: |
+          tar -czf /tmp/security-transformed-source-v2.tar.gz \
+            crates/kanari-core \
+            crates/kanari-node \
+            crates/kanari-rpc-server \
+            crates/kanari-auth \
+            crates/run-auth \
+            move-execution/v1/kanari-move-runtime-v1
+
+      - name: Upload transformed source
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-transformed-source-v2
+          path: /tmp/security-transformed-source-v2.tar.gz
+          retention-days: 1
+
+      - name: Cargo check
+        id: cargo_check
+        continue-on-error: true
+        run: |
+          set +e
+          cargo check \
+            -p kanari-core \
+            -p kanari-node \
+            -p kanari-move-runtime-v1 \
+            -p kanari-rpc-server \
+            -p kanari-auth \
+            -p run-auth \
+            > /tmp/cargo-check.log 2>&1
+          status=$?
+          echo "$status" > /tmp/cargo-check.status
+          cat /tmp/cargo-check.log
+          exit 0
+
+      - name: Upload cargo-check diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-check-diagnostics-v2
+          path: |
+            /tmp/cargo-check.log
+            /tmp/cargo-check.status
+          retention-days: 1
+
+      - name: Enforce cargo-check success
+        run: test "$(cat /tmp/cargo-check.status)" = "0"
+
+      - name: Test Move runtime
+        run: cargo test -p kanari-move-runtime-v1
+
+      - name: Test core
+        run: cargo test -p kanari-core --lib
+
+      - name: Test authentication
+        run: cargo test -p kanari-auth
+
+      - name: Test framework Move package
+        run: cargo run -p kanari -- move test crates/kanari-frameworks/packages/kanari-system
+
+      - name: Test DEX Move package
+        run: cargo run -p kanari -- move test sdk/kanari_pay/backend/dex_v1
+
+      - name: Test escrow Move package
+        run: cargo run -p kanari -- move test sdk/kanari_pay/backend/kanari_escrow

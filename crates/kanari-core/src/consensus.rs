@@ -1,18 +1,22 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use kanari_crypto::hash_data_blake3;
 use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::SignedTransaction;
 use mysticeti_consensus::protocol::Protocol as MysticetiProtocol;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub type VertexId = [u8; 32];
 pub type Round = u64;
 pub type AuthorityId = String;
 pub type TransactionBatch = Arc<[SignedTransaction]>;
+
+pub const CHECKPOINT_PROTOCOL_VERSION: u64 = 3;
 
 fn logical_tx_hash(tx: &SignedTransaction) -> Vec<u8> {
     tx.transaction_hash().to_vec()
@@ -22,6 +26,38 @@ fn vertex_id_from_hash_bytes(bytes: &[u8]) -> VertexId {
     let mut id = [0u8; 32];
     id.copy_from_slice(&bytes[..32]);
     id
+}
+
+pub fn checkpoint_quorum_size(authority_count: usize) -> usize {
+    if authority_count == 0 {
+        0
+    } else {
+        (authority_count * 2) / 3 + 1
+    }
+}
+
+pub fn compute_committee_digest(
+    authorities: &[AuthorityId],
+    public_keys: &BTreeMap<AuthorityId, Vec<u8>>,
+) -> Result<Vec<u8>> {
+    let mut members = authorities
+        .iter()
+        .map(|authority| {
+            let key = public_keys
+                .get(authority)
+                .with_context(|| format!("Missing consensus public key for {authority}"))?;
+            Ok((authority.clone(), key.clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    members.sort_by(|a, b| a.0.cmp(&b.0));
+    members.dedup_by(|a, b| a.0 == b.0);
+    if members.len() != authorities.len() {
+        anyhow::bail!("Consensus authority set contains duplicates");
+    }
+    Ok(hash_data_blake3(&bcs::to_bytes(&(
+        b"kanari:committee:v1".as_slice(),
+        members,
+    ))?))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,14 +138,14 @@ impl DagVertex {
             signature: Vec::new(),
             metadata,
         };
-        let hash = vertex.compute_hash()?;
-        vertex.id = hash;
+        vertex.id = vertex.compute_hash()?;
         Ok(vertex)
     }
 
     pub fn compute_hash(&self) -> Result<VertexId> {
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
         let bytes = bcs::to_bytes(&(
+            b"kanari:dag-vertex:v2".as_slice(),
             &self.chain_id,
             self.round,
             &self.author,
@@ -121,7 +157,6 @@ impl DagVertex {
         Ok(vertex_id_from_hash_bytes(&hash_data_blake3(&bytes)))
     }
 
-    /// Bind the externally assigned Mysticeti block id to the full Kanari vertex payload.
     pub fn signing_digest(&self) -> Result<VertexId> {
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
         let bytes = bcs::to_bytes(&(
@@ -153,6 +188,19 @@ impl DagVertex {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointSignature {
+    pub authority: AuthorityId,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointCertificate {
+    pub epoch: u64,
+    pub committee_digest: Vec<u8>,
+    pub signatures: Vec<CheckpointSignature>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub sequence: u64,
@@ -161,6 +209,22 @@ pub struct Checkpoint {
     pub state_root: Vec<u8>,
     pub timestamp: u64,
     pub prev_checkpoint_hash: Vec<u8>,
+    #[serde(default)]
+    pub chain_id: String,
+    #[serde(default = "default_checkpoint_protocol_version")]
+    pub protocol_version: u64,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub committee_digest: Vec<u8>,
+    #[serde(default)]
+    pub commit_round: Round,
+    #[serde(default)]
+    pub certificate: Option<CheckpointCertificate>,
+}
+
+fn default_checkpoint_protocol_version() -> u64 {
+    CHECKPOINT_PROTOCOL_VERSION
 }
 
 impl Checkpoint {
@@ -182,18 +246,150 @@ impl Checkpoint {
             state_root,
             timestamp,
             prev_checkpoint_hash,
+            chain_id: String::new(),
+            protocol_version: CHECKPOINT_PROTOCOL_VERSION,
+            epoch: 0,
+            committee_digest: Vec::new(),
+            commit_round: 0,
+            certificate: None,
         }
     }
 
-    pub fn hash(&self) -> Result<Vec<u8>> {
+    pub fn with_consensus_context(
+        mut self,
+        chain_id: String,
+        epoch: u64,
+        committee_digest: Vec<u8>,
+        commit_round: Round,
+    ) -> Self {
+        self.chain_id = chain_id;
+        self.epoch = epoch;
+        self.committee_digest = committee_digest;
+        self.commit_round = commit_round;
+        self
+    }
+
+    pub fn proposal_digest(&self) -> Result<Vec<u8>> {
         let tx_hashes: Vec<Vec<u8>> = self.transactions.iter().map(logical_tx_hash).collect();
-        let serialized = bcs::to_bytes(&(
+        Ok(hash_data_blake3(&bcs::to_bytes(&(
+            b"kanari:checkpoint-proposal:v3".as_slice(),
+            self.protocol_version,
+            &self.chain_id,
+            self.epoch,
+            &self.committee_digest,
+            self.commit_round,
             self.sequence,
+            &self.vertices,
             &tx_hashes,
             &self.state_root,
+            self.timestamp,
             &self.prev_checkpoint_hash,
-        ))?;
-        Ok(hash_data_blake3(&serialized))
+        ))?))
+    }
+
+    pub fn add_signature(&mut self, authority: AuthorityId, signature: Vec<u8>) {
+        let certificate = self
+            .certificate
+            .get_or_insert_with(|| CheckpointCertificate {
+                epoch: self.epoch,
+                committee_digest: self.committee_digest.clone(),
+                signatures: Vec::new(),
+            });
+        certificate
+            .signatures
+            .retain(|existing| existing.authority != authority);
+        certificate
+            .signatures
+            .push(CheckpointSignature { authority, signature });
+        certificate
+            .signatures
+            .sort_by(|a, b| a.authority.cmp(&b.authority));
+    }
+
+    pub fn verify_certificate(
+        &self,
+        authorities: &[AuthorityId],
+        public_keys: &BTreeMap<AuthorityId, Vec<u8>>,
+    ) -> Result<()> {
+        if self.sequence == 0 {
+            return Ok(());
+        }
+        if self.protocol_version != CHECKPOINT_PROTOCOL_VERSION {
+            anyhow::bail!(
+                "Unsupported checkpoint protocol version {}",
+                self.protocol_version
+            );
+        }
+        if self.chain_id.is_empty() {
+            anyhow::bail!("Checkpoint chain_id is empty");
+        }
+        let expected_committee = compute_committee_digest(authorities, public_keys)?;
+        if self.committee_digest != expected_committee {
+            anyhow::bail!("Checkpoint committee digest does not match active committee");
+        }
+        let certificate = self
+            .certificate
+            .as_ref()
+            .context("Checkpoint is missing a quorum certificate")?;
+        if certificate.epoch != self.epoch
+            || certificate.committee_digest != self.committee_digest
+        {
+            anyhow::bail!("Checkpoint certificate context mismatch");
+        }
+
+        let authority_set: BTreeSet<_> = authorities.iter().cloned().collect();
+        if authority_set.len() != authorities.len() {
+            anyhow::bail!("Active authority set contains duplicates");
+        }
+        let digest = self.proposal_digest()?;
+        let mut verified = BTreeSet::new();
+        for vote in &certificate.signatures {
+            if !authority_set.contains(&vote.authority) {
+                anyhow::bail!("Checkpoint vote from non-committee authority {}", vote.authority);
+            }
+            if !verified.insert(vote.authority.clone()) {
+                anyhow::bail!("Duplicate checkpoint vote from {}", vote.authority);
+            }
+            let public_key = public_keys
+                .get(&vote.authority)
+                .with_context(|| format!("Missing public key for {}", vote.authority))?;
+            let key_bytes: [u8; 32] = public_key
+                .as_slice()
+                .try_into()
+                .context("Invalid Ed25519 consensus public key length")?;
+            let verifying_key = VerifyingKey::from_bytes(&key_bytes)
+                .context("Invalid Ed25519 consensus public key")?;
+            let signature = Signature::from_slice(&vote.signature)
+                .context("Invalid checkpoint signature length")?;
+            verifying_key
+                .verify(&digest, &signature)
+                .with_context(|| format!("Invalid checkpoint signature from {}", vote.authority))?;
+        }
+
+        let quorum = checkpoint_quorum_size(authorities.len());
+        if verified.len() < quorum {
+            anyhow::bail!(
+                "Checkpoint certificate has {} valid signatures; quorum is {}",
+                verified.len(),
+                quorum
+            );
+        }
+        Ok(())
+    }
+
+    pub fn hash(&self) -> Result<Vec<u8>> {
+        let proposal = self.proposal_digest()?;
+        let certificate = self.certificate.clone().map(|mut certificate| {
+            certificate
+                .signatures
+                .sort_by(|a, b| a.authority.cmp(&b.authority));
+            certificate
+        });
+        Ok(hash_data_blake3(&bcs::to_bytes(&(
+            b"kanari:certified-checkpoint:v3".as_slice(),
+            proposal,
+            certificate,
+        ))?))
     }
 
     pub fn genesis() -> Self {
@@ -204,6 +400,12 @@ impl Checkpoint {
             state_root: smt::default_hashes()[0].to_vec(),
             timestamp: 0,
             prev_checkpoint_hash: vec![0u8; 32],
+            chain_id: "genesis".to_string(),
+            protocol_version: CHECKPOINT_PROTOCOL_VERSION,
+            epoch: 0,
+            committee_digest: Vec::new(),
+            commit_round: 0,
+            certificate: None,
         }
     }
 }
