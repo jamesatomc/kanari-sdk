@@ -30,21 +30,58 @@ function asRecord(value: unknown) {
     : {};
 }
 
+function titleCaseTransactionKind(value: string) {
+  return value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function unwrapCheckpointTransaction(value: unknown) {
+  const signedTransaction = asRecord(value);
+  const transaction = asRecord(signedTransaction.transaction);
+  const firstVariant = Object.entries(transaction)[0];
+
+  if (firstVariant) {
+    const [variant, payload] = firstVariant;
+    return {
+      record: asRecord(payload),
+      variant,
+    };
+  }
+
+  return {
+    record: signedTransaction,
+    variant: "",
+  };
+}
+
 function summarizeCheckpointTransaction(transaction: unknown) {
-  const record = asRecord(transaction);
-  const txType = readString(record, "tx_type", readString(record, "type", "transaction"));
+  const { record, variant } = unwrapCheckpointTransaction(transaction);
+  const txType = readString(record, "tx_type", readString(record, "type", variant || "transaction"));
   const moduleName = readString(record, "module_name", readString(record, "module", ""));
   const functionName = readString(record, "function", "");
-  const publishedModule = readString(record, "module_name", "");
+  const packageModules = asArray(record.modules)
+    .map((module) => readString(module, "module_name", ""))
+    .filter(Boolean);
+  const moduleDetail = packageModules.join(", ") || moduleName;
+  const normalizedType = txType.toLowerCase();
+  const isUpgrade = normalizedType.includes("upgrade");
   const isPublish =
     readBoolean(record, "is_publish", false) ||
-    txType.toLowerCase().includes("publish") ||
-    publishedModule.length > 0;
+    normalizedType.includes("publish");
+
+  if (isUpgrade) {
+    return {
+      label: normalizedType.includes("package") ? "Upgrade Package" : "Upgrade Module",
+      detail: moduleDetail || "Move package upgrade",
+    };
+  }
 
   if (isPublish) {
     return {
-      label: "Publish Module",
-      detail: publishedModule || moduleName || "Move module publication",
+      label: normalizedType.includes("package") ? "Publish Package" : "Publish Module",
+      detail: moduleDetail || "Move module publication",
     };
   }
 
@@ -56,7 +93,7 @@ function summarizeCheckpointTransaction(transaction: unknown) {
   }
 
   return {
-    label: txType.replace(/_/g, " "),
+    label: titleCaseTransactionKind(txType),
     detail: moduleName || functionName || "Checkpoint transaction",
   };
 }

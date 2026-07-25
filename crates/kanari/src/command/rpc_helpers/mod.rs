@@ -96,8 +96,16 @@ pub fn sign_publish_module_request(
 }
 
 pub fn sign_publish_package_request(
+    request: PublishPackageRequest,
+    wallet: &Wallet,
+) -> Result<PublishPackageRequest> {
+    sign_publish_package_request_as(request, wallet, false)
+}
+
+pub fn sign_publish_package_request_as(
     mut request: PublishPackageRequest,
     wallet: &Wallet,
+    upgrade: bool,
 ) -> Result<PublishPackageRequest> {
     ensure!(
         request
@@ -105,22 +113,35 @@ pub fn sign_publish_package_request(
             .as_ref()
             .map(|sig| sig.is_empty())
             .unwrap_or(true),
-        "Refusing to overwrite existing publish-package signature"
+        "Refusing to overwrite existing publish/upgrade-package signature"
     );
-    let transaction = Transaction::PublishPackage {
-        sender: request.sender.clone(),
-        modules: request
-            .modules
-            .iter()
-            .map(|module| PublishedModule {
-                module_name: module.module_name.clone(),
-                module_bytes: module.module_bytes.clone(),
-            })
-            .collect(),
-        gas_payment: request.gas_payment.clone(),
-        gas_limit: request.gas_limit,
-        gas_price: request.gas_price,
-        nonce: request.canonical_nonce().map_err(map_nonce_error)?,
+    let modules = request
+        .modules
+        .iter()
+        .map(|module| PublishedModule {
+            module_name: module.module_name.clone(),
+            module_bytes: module.module_bytes.clone(),
+        })
+        .collect();
+    let nonce = request.canonical_nonce().map_err(map_nonce_error)?;
+    let transaction = if upgrade {
+        Transaction::UpgradePackage {
+            sender: request.sender.clone(),
+            modules,
+            gas_payment: request.gas_payment.clone(),
+            gas_limit: request.gas_limit,
+            gas_price: request.gas_price,
+            nonce,
+        }
+    } else {
+        Transaction::PublishPackage {
+            sender: request.sender.clone(),
+            modules,
+            gas_payment: request.gas_payment.clone(),
+            gas_limit: request.gas_limit,
+            gas_price: request.gas_price,
+            nonce,
+        }
     };
 
     let mut signed_tx = SignedTransaction::new(transaction);

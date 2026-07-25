@@ -359,6 +359,16 @@ impl MysticetiBackend {
 
         self.core.drain_submitted_transactions();
         let Some(block) = self.core.try_new_block() else {
+            // `try_send` only hands the transactions to Mysticeti's local queue;
+            // `try_new_block` is the first point where they become anchored in a
+            // native block. After a restart or threshold-clock stall, Core may
+            // decline to produce a block even though Kanari has marked the hashes
+            // as submitted. Roll the marks back so the next producer tick can
+            // re-offer still-pending mempool transactions instead of stranding
+            // them forever.
+            for (_, hash) in &candidates {
+                self.submitted_tx_hashes.remove(hash);
+            }
             return Ok(None);
         };
         let reference = *block.reference();

@@ -27,6 +27,8 @@ impl BlockchainEngine {
                 signed_tx.transaction,
                 kanari_types::transaction::Transaction::PublishModule { .. }
                     | kanari_types::transaction::Transaction::PublishPackage { .. }
+                    | kanari_types::transaction::Transaction::UpgradeModule { .. }
+                    | kanari_types::transaction::Transaction::UpgradePackage { .. }
                     | kanari_types::transaction::Transaction::ExecuteFunction { .. }
             )
         })
@@ -139,6 +141,8 @@ impl BlockchainEngine {
                 signed_tx.transaction,
                 kanari_types::transaction::Transaction::PublishModule { .. }
                     | kanari_types::transaction::Transaction::PublishPackage { .. }
+                    | kanari_types::transaction::Transaction::UpgradeModule { .. }
+                    | kanari_types::transaction::Transaction::UpgradePackage { .. }
             )
         });
         if validate_supply {

@@ -1423,7 +1423,10 @@ impl BlockchainEngine {
         let has_module_publish = transactions.iter().any(|tx| {
             matches!(
                 tx.transaction,
-                Transaction::PublishModule { .. } | Transaction::PublishPackage { .. }
+                Transaction::PublishModule { .. }
+                    | Transaction::PublishPackage { .. }
+                    | Transaction::UpgradeModule { .. }
+                    | Transaction::UpgradePackage { .. }
             )
         });
         if serial_execution
@@ -1771,10 +1774,12 @@ impl BlockchainEngine {
     ) -> Result<ChangeSet> {
         let sender_addr = KanariAddress::parse_to_account_address(tx.sender_address())?;
         let gas_op = match tx {
-            Transaction::PublishModule { module_bytes, .. } => GasOperation::PublishModule {
+            Transaction::PublishModule { module_bytes, .. }
+            | Transaction::UpgradeModule { module_bytes, .. } => GasOperation::PublishModule {
                 module_size: module_bytes.len(),
             },
-            Transaction::PublishPackage { modules, .. } => GasOperation::PublishModule {
+            Transaction::PublishPackage { modules, .. }
+            | Transaction::UpgradePackage { modules, .. } => GasOperation::PublishModule {
                 module_size: modules.iter().map(|module| module.module_bytes.len()).sum(),
             },
             Transaction::ExecuteFunction { .. } => {
@@ -1983,10 +1988,12 @@ impl BlockchainEngine {
         let native_call = tx.native_call();
 
         let gas_op = match tx {
-            Transaction::PublishModule { module_bytes, .. } => GasOperation::PublishModule {
+            Transaction::PublishModule { module_bytes, .. }
+            | Transaction::UpgradeModule { module_bytes, .. } => GasOperation::PublishModule {
                 module_size: module_bytes.len(),
             },
-            Transaction::PublishPackage { modules, .. } => GasOperation::PublishModule {
+            Transaction::PublishPackage { modules, .. }
+            | Transaction::UpgradePackage { modules, .. } => GasOperation::PublishModule {
                 module_size: modules.iter().map(|module| module.module_bytes.len()).sum(),
             },
             Transaction::ExecuteFunction { .. } => {
@@ -2052,6 +2059,25 @@ impl BlockchainEngine {
                     }
                 }
             }
+            Transaction::UpgradeModule {
+                sender,
+                module_bytes,
+                ..
+            } => {
+                match runtime.upgrade_module_with_context_and_persistence(
+                    module_bytes.clone(),
+                    KanariAddress::parse_to_account_address(sender)?,
+                    Some((tx.gas_limit(), effective_gas_price(tx.gas_price()))),
+                    timestamp,
+                    Some(tx.hash()),
+                    persist_runtime_state,
+                ) {
+                    Ok(move_cs) => changeset.merge(move_cs),
+                    Err(e) => {
+                        changeset.mark_failed(format!("Upgrade failed: {}", e));
+                    }
+                }
+            }
             Transaction::PublishPackage {
                 sender, modules, ..
             } => {
@@ -2070,6 +2096,27 @@ impl BlockchainEngine {
                     Ok(move_cs) => changeset.merge(move_cs),
                     Err(e) => {
                         changeset.mark_failed(format!("Publish package failed: {}", e));
+                    }
+                }
+            }
+            Transaction::UpgradePackage {
+                sender, modules, ..
+            } => {
+                let package_modules = modules
+                    .iter()
+                    .map(|module| (module.module_name.clone(), module.module_bytes.clone()))
+                    .collect();
+                match runtime.upgrade_package_with_context_and_persistence(
+                    package_modules,
+                    KanariAddress::parse_to_account_address(sender)?,
+                    Some((tx.gas_limit(), effective_gas_price(tx.gas_price()))),
+                    timestamp,
+                    Some(tx.hash()),
+                    persist_runtime_state,
+                ) {
+                    Ok(move_cs) => changeset.merge(move_cs),
+                    Err(e) => {
+                        changeset.mark_failed(format!("Upgrade package failed: {}", e));
                     }
                 }
             }

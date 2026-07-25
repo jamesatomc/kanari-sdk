@@ -38,8 +38,10 @@ pub enum MoveCommand {
     Test(test::Test),
     /// Generate Move docs
     Docgen(docgen::Docgen),
-    /// Publish Move module to blockchain
+    /// Publish Move modules on chain
     Publish(publish::Publish),
+    /// Upgrade already-published Move modules on chain
+    Upgrade(publish::Publish),
     /// Verify Move module bytecode locally (RPC)
     Verify(verify::Verify),
     /// Call Move function on blockchain
@@ -104,7 +106,11 @@ impl MoveCommand {
             }
             MoveCommand::Publish(p) => {
                 let config = p.build_config.clone();
-                p.execute(None, config)
+                p.execute_as(None, config, publish::PublishOperation::Publish)
+            }
+            MoveCommand::Upgrade(p) => {
+                let config = p.build_config.clone();
+                p.execute_as(None, config, publish::PublishOperation::Upgrade)
             }
             MoveCommand::Verify(v) => v.execute(),
             MoveCommand::Call(c) => c.execute(),

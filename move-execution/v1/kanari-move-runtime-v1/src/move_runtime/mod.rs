@@ -62,6 +62,13 @@ pub struct MoveRuntime {
     pub(crate) module_publish_lock: Arc<Mutex<()>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModulePublishIntent {
+    Publish,
+    Upgrade,
+    Bootstrap,
+}
+
 type LoadedMutableObject = (
     usize,
     String,
@@ -585,6 +592,23 @@ impl MoveRuntime {
         Ok(())
     }
 
+    pub fn upgrade_module(
+        &self,
+        module_bytes: Vec<u8>,
+        sender: AccountAddress,
+        gas_info: Option<(u64, u64)>,
+        timestamp: Option<u64>,
+    ) -> Result<ChangeSet> {
+        self.upgrade_module_with_context_and_persistence(
+            module_bytes,
+            sender,
+            gas_info,
+            timestamp,
+            None,
+            true,
+        )
+    }
+
     pub fn publish_module(
         &self,
         module_bytes: Vec<u8>,
@@ -601,6 +625,47 @@ impl MoveRuntime {
             true,
         )
     }
+
+    pub fn bootstrap_module_with_context_and_persistence(
+        &self,
+        module_bytes: Vec<u8>,
+        sender: AccountAddress,
+        gas_info: Option<(u64, u64)>,
+        timestamp: Option<u64>,
+        tx_hash: Option<Vec<u8>>,
+        persist_runtime_state: bool,
+    ) -> Result<ChangeSet> {
+        self.publish_module_with_intent_and_persistence(
+            module_bytes,
+            sender,
+            gas_info,
+            timestamp,
+            tx_hash,
+            persist_runtime_state,
+            ModulePublishIntent::Bootstrap,
+        )
+    }
+
+    pub fn upgrade_module_with_context_and_persistence(
+        &self,
+        module_bytes: Vec<u8>,
+        sender: AccountAddress,
+        gas_info: Option<(u64, u64)>,
+        timestamp: Option<u64>,
+        tx_hash: Option<Vec<u8>>,
+        persist_runtime_state: bool,
+    ) -> Result<ChangeSet> {
+        self.publish_module_with_intent_and_persistence(
+            module_bytes,
+            sender,
+            gas_info,
+            timestamp,
+            tx_hash,
+            persist_runtime_state,
+            ModulePublishIntent::Upgrade,
+        )
+    }
+
     pub fn publish_module_with_context_and_persistence(
         &self,
         module_bytes: Vec<u8>,
@@ -610,13 +675,34 @@ impl MoveRuntime {
         _tx_hash: Option<Vec<u8>>,
         persist_runtime_state: bool,
     ) -> Result<ChangeSet> {
+        self.publish_module_with_intent_and_persistence(
+            module_bytes,
+            sender,
+            gas_info,
+            _timestamp,
+            _tx_hash,
+            persist_runtime_state,
+            ModulePublishIntent::Publish,
+        )
+    }
+
+    fn publish_module_with_intent_and_persistence(
+        &self,
+        module_bytes: Vec<u8>,
+        sender: AccountAddress,
+        gas_info: Option<(u64, u64)>,
+        _timestamp: Option<u64>,
+        _tx_hash: Option<Vec<u8>>,
+        persist_runtime_state: bool,
+        intent: ModulePublishIntent,
+    ) -> Result<ChangeSet> {
         let _publish_guard = self
             .module_publish_lock
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let compiled = CompiledModule::deserialize_with_defaults(&module_bytes)?;
         let module_id = compiled.self_id();
-        self.verify_module_publish_safety(sender, &module_id, &compiled, &module_bytes)?;
+        self.verify_module_publish_safety(sender, &module_id, &compiled, &module_bytes, intent)?;
 
         let (move_changeset, events, vm_gas_used) = {
             // 🟢 Separate Lock into a variable first to prevent it from being dropped immediately
@@ -676,6 +762,47 @@ impl MoveRuntime {
         _tx_hash: Option<Vec<u8>>,
         persist_runtime_state: bool,
     ) -> Result<ChangeSet> {
+        self.publish_package_with_intent_and_persistence(
+            modules,
+            sender,
+            gas_info,
+            _timestamp,
+            _tx_hash,
+            persist_runtime_state,
+            ModulePublishIntent::Publish,
+        )
+    }
+
+    pub fn upgrade_package_with_context_and_persistence(
+        &self,
+        modules: Vec<(String, Vec<u8>)>,
+        sender: AccountAddress,
+        gas_info: Option<(u64, u64)>,
+        timestamp: Option<u64>,
+        tx_hash: Option<Vec<u8>>,
+        persist_runtime_state: bool,
+    ) -> Result<ChangeSet> {
+        self.publish_package_with_intent_and_persistence(
+            modules,
+            sender,
+            gas_info,
+            timestamp,
+            tx_hash,
+            persist_runtime_state,
+            ModulePublishIntent::Upgrade,
+        )
+    }
+
+    fn publish_package_with_intent_and_persistence(
+        &self,
+        modules: Vec<(String, Vec<u8>)>,
+        sender: AccountAddress,
+        gas_info: Option<(u64, u64)>,
+        _timestamp: Option<u64>,
+        _tx_hash: Option<Vec<u8>>,
+        persist_runtime_state: bool,
+        intent: ModulePublishIntent,
+    ) -> Result<ChangeSet> {
         let _publish_guard = self
             .module_publish_lock
             .lock()
@@ -686,7 +813,6 @@ impl MoveRuntime {
         for (module_name, module_bytes) in &modules {
             let compiled = CompiledModule::deserialize_with_defaults(module_bytes)?;
             let module_id = compiled.self_id();
-            self.verify_module_publish_safety(sender, &module_id, &compiled, module_bytes)?;
             if module_id.name().as_str() != module_name {
                 anyhow::bail!(
                     "Module publish rejected: declared module name {} does not match bytecode self id {}",
@@ -694,6 +820,7 @@ impl MoveRuntime {
                     module_id.name()
                 );
             }
+            self.verify_module_publish_safety(sender, &module_id, &compiled, module_bytes, intent)?;
             total_module_size = total_module_size.saturating_add(module_bytes.len());
             compiled_modules.push((module_id, module_bytes.clone()));
         }
@@ -755,6 +882,7 @@ impl MoveRuntime {
         module_id: &ModuleId,
         compiled: &CompiledModule,
         module_bytes: &[u8],
+        intent: ModulePublishIntent,
     ) -> Result<()> {
         if module_id.address() != &sender {
             anyhow::bail!(
@@ -765,9 +893,43 @@ impl MoveRuntime {
             );
         }
 
+        let old_bytes = self.verify_module_publish_intent(module_id, intent)?;
         verify_module_unmetered(compiled).require("Module bytecode verification failed")?;
         self.verify_module(compiled)?;
-        self.verify_module_upgrade_compatibility(module_id, compiled, module_bytes)
+        if let Some(old_bytes) = old_bytes {
+            self.verify_module_upgrade_compatibility(
+                module_id,
+                compiled,
+                module_bytes,
+                &old_bytes,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn verify_module_publish_intent(
+        &self,
+        module_id: &ModuleId,
+        intent: ModulePublishIntent,
+    ) -> Result<Option<Vec<u8>>> {
+        let old_bytes = self.state.try_get_module(module_id)?;
+        match (intent, old_bytes) {
+            (ModulePublishIntent::Bootstrap, old_bytes) => Ok(old_bytes),
+            (ModulePublishIntent::Publish, Some(_)) => {
+                anyhow::bail!(
+                    "Module publish rejected: module {} already exists. Use upgrade for compatibility-checked replacement.",
+                    module_id
+                );
+            }
+            (ModulePublishIntent::Publish, None) => Ok(None),
+            (ModulePublishIntent::Upgrade, None) => {
+                anyhow::bail!(
+                    "Module upgrade rejected: module {} does not exist. Publish the package before upgrading it.",
+                    module_id
+                );
+            }
+            (ModulePublishIntent::Upgrade, Some(old_bytes)) => Ok(Some(old_bytes)),
+        }
     }
 
     fn verify_module_upgrade_compatibility(
@@ -775,15 +937,13 @@ impl MoveRuntime {
         module_id: &ModuleId,
         compiled: &CompiledModule,
         module_bytes: &[u8],
+        old_bytes: &[u8],
     ) -> Result<()> {
-        let Some(old_bytes) = self.state.try_get_module(module_id)? else {
-            return Ok(());
-        };
         if old_bytes == module_bytes {
             return Ok(());
         }
 
-        let old_compiled = CompiledModule::deserialize_with_defaults(&old_bytes)?;
+        let old_compiled = CompiledModule::deserialize_with_defaults(old_bytes)?;
         let old_norm = normalized::Module::new(&old_compiled);
         let new_norm = normalized::Module::new(compiled);
 

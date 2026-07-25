@@ -11,7 +11,7 @@ use kanari_rpc_api::{
     BuildPublishModuleRequest, BuildPublishPackageRequest, BuildTokenTransferRequest,
     CallFunctionRequest, FungibleAssetTransactionsResponse, GetFungibleAssetTransactionsRequest,
     ObjectTransferData, PublishModuleRequest, PublishPackageRequest, TransactionDetails,
-    TransactionErrorData, TransactionErrorReason, ViewFunctionRequest,
+    TransactionErrorData, TransactionErrorReason, ViewFunctionRequest, methods,
 };
 use kanari_types::address::Address;
 use kanari_types::coin::CoinModule;
@@ -666,7 +666,10 @@ fn tx_mentions_token_type(tx: &Transaction, token_type: &str) -> bool {
                 .iter()
                 .any(|input| input.object_ref.object_id.contains(token_type.as_str()))
         }
-        Transaction::PublishModule { .. } | Transaction::PublishPackage { .. } => false,
+        Transaction::PublishModule { .. }
+        | Transaction::PublishPackage { .. }
+        | Transaction::UpgradeModule { .. }
+        | Transaction::UpgradePackage { .. } => false,
     }
 }
 
@@ -708,42 +711,71 @@ fn extract_hash_param(params: &serde_json::Value) -> Option<String> {
         })
 }
 
-fn build_publish_signed_tx(module_data: PublishModuleRequest) -> SignedTransaction {
+fn build_publish_signed_tx(module_data: PublishModuleRequest, upgrade: bool) -> SignedTransaction {
     let nonce = module_data
         .canonical_nonce()
         .expect("publish request canonical nonce must be validated before signing");
-    let mut signed_tx = SignedTransaction::new(Transaction::PublishModule {
-        sender: module_data.sender,
-        module_bytes: module_data.module_bytes,
-        module_name: module_data.module_name,
-        gas_payment: module_data.gas_payment,
-        gas_limit: module_data.gas_limit,
-        gas_price: module_data.gas_price,
-        nonce,
-    });
+    let transaction = if upgrade {
+        Transaction::UpgradeModule {
+            sender: module_data.sender,
+            module_bytes: module_data.module_bytes,
+            module_name: module_data.module_name,
+            gas_payment: module_data.gas_payment,
+            gas_limit: module_data.gas_limit,
+            gas_price: module_data.gas_price,
+            nonce,
+        }
+    } else {
+        Transaction::PublishModule {
+            sender: module_data.sender,
+            module_bytes: module_data.module_bytes,
+            module_name: module_data.module_name,
+            gas_payment: module_data.gas_payment,
+            gas_limit: module_data.gas_limit,
+            gas_price: module_data.gas_price,
+            nonce,
+        }
+    };
+    let mut signed_tx = SignedTransaction::new(transaction);
     maybe_attach_signature(&mut signed_tx, module_data.signature);
     signed_tx
 }
 
-fn build_publish_package_signed_tx(package_data: PublishPackageRequest) -> SignedTransaction {
+fn build_publish_package_signed_tx(
+    package_data: PublishPackageRequest,
+    upgrade: bool,
+) -> SignedTransaction {
     let nonce = package_data
         .canonical_nonce()
         .expect("publish package request canonical nonce must be validated before signing");
-    let mut signed_tx = SignedTransaction::new(Transaction::PublishPackage {
-        sender: package_data.sender,
-        modules: package_data
-            .modules
-            .into_iter()
-            .map(|module| PublishedModule {
-                module_name: module.module_name,
-                module_bytes: module.module_bytes,
-            })
-            .collect(),
-        gas_payment: package_data.gas_payment,
-        gas_limit: package_data.gas_limit,
-        gas_price: package_data.gas_price,
-        nonce,
-    });
+    let modules = package_data
+        .modules
+        .into_iter()
+        .map(|module| PublishedModule {
+            module_name: module.module_name,
+            module_bytes: module.module_bytes,
+        })
+        .collect();
+    let transaction = if upgrade {
+        Transaction::UpgradePackage {
+            sender: package_data.sender,
+            modules,
+            gas_payment: package_data.gas_payment,
+            gas_limit: package_data.gas_limit,
+            gas_price: package_data.gas_price,
+            nonce,
+        }
+    } else {
+        Transaction::PublishPackage {
+            sender: package_data.sender,
+            modules,
+            gas_payment: package_data.gas_payment,
+            gas_limit: package_data.gas_limit,
+            gas_price: package_data.gas_price,
+            nonce,
+        }
+    };
+    let mut signed_tx = SignedTransaction::new(transaction);
     maybe_attach_signature(&mut signed_tx, package_data.signature);
     signed_tx
 }
@@ -884,7 +916,18 @@ fn map_transaction_to_details(
             gas_limit,
             gas_price,
             ..
+        }
+        | Transaction::UpgradeModule {
+            sender,
+            module_bytes,
+            module_name,
+            nonce,
+            gas_payment,
+            gas_limit,
+            gas_price,
+            ..
         } => {
+            let tx_type = tx.tx_type_label();
             let module_prefix = sender_address.clone();
             let module_funcs = extract_functions_from_bytes(module_bytes).map(|fns| {
                 fns.into_iter()
@@ -896,7 +939,7 @@ fn map_transaction_to_details(
                 hash,
                 status_str,
                 block_height,
-                "publish_module",
+                tx_type,
                 sender.clone(),
                 sender_address.clone(),
                 *nonce,
@@ -916,7 +959,17 @@ fn map_transaction_to_details(
             gas_limit,
             gas_price,
             ..
+        }
+        | Transaction::UpgradePackage {
+            sender,
+            modules,
+            nonce,
+            gas_payment,
+            gas_limit,
+            gas_price,
+            ..
         } => {
+            let tx_type = tx.tx_type_label();
             let published_modules = modules
                 .iter()
                 .map(|module| format!("{}::{}", sender_address, module.module_name))
@@ -938,7 +991,7 @@ fn map_transaction_to_details(
                 hash,
                 status_str,
                 block_height,
-                "publish_package",
+                tx_type,
                 sender.clone(),
                 sender_address.clone(),
                 *nonce,
@@ -2260,6 +2313,17 @@ pub async fn handle_get_fungible_asset_transactions(
 
 /// Handle publish module request
 pub async fn handle_publish_module(state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
+    let is_upgrade = request.method == methods::UPGRADE_MODULE;
+    let action = if is_upgrade {
+        "upgrade_module"
+    } else {
+        "publish"
+    };
+    let failure_message = if is_upgrade {
+        "Module upgrade failed"
+    } else {
+        "Module publication failed"
+    };
     let mut module_data: PublishModuleRequest =
         match parse_labeled_params(request.id, &request.params, "module data") {
             Ok(data) => data,
@@ -2279,20 +2343,36 @@ pub async fn handle_publish_module(state: &RpcServerState, request: &RpcRequest)
     }
 
     let execute_immediate = module_data.execute_immediate.unwrap_or(false);
-    let signed_tx = build_publish_signed_tx(module_data);
+    let signed_tx = build_publish_signed_tx(module_data, is_upgrade);
 
     execute_or_submit_response(
         state,
         request.id,
         signed_tx,
         execute_immediate,
-        "publish",
-        "Module publication failed",
+        action,
+        failure_message,
     )
     .await
 }
 
 pub async fn handle_publish_package(state: &RpcServerState, request: &RpcRequest) -> RpcResponse {
+    let is_upgrade = request.method == methods::UPGRADE_PACKAGE;
+    let action = if is_upgrade {
+        "upgrade_package"
+    } else {
+        "publish_package"
+    };
+    let empty_package_message = if is_upgrade {
+        "Package upgrade requires at least one module"
+    } else {
+        "Package publish requires at least one module"
+    };
+    let failure_message = if is_upgrade {
+        "Package upgrade failed"
+    } else {
+        "Package publication failed"
+    };
     let mut package_data: PublishPackageRequest =
         match parse_labeled_params(request.id, &request.params, "package data") {
             Ok(data) => data,
@@ -2303,7 +2383,7 @@ pub async fn handle_publish_package(state: &RpcServerState, request: &RpcRequest
         return *response;
     }
     if package_data.modules.is_empty() {
-        return invalid_params_response(request.id, "Package publish requires at least one module");
+        return invalid_params_response(request.id, empty_package_message);
     }
     if let Err(response) =
         validate_object_inputs_and_gas(request.id, &[], package_data.gas_payment.as_ref())
@@ -2315,15 +2395,15 @@ pub async fn handle_publish_package(state: &RpcServerState, request: &RpcRequest
     }
 
     let execute_immediate = package_data.execute_immediate.unwrap_or(false);
-    let signed_tx = build_publish_package_signed_tx(package_data);
+    let signed_tx = build_publish_package_signed_tx(package_data, is_upgrade);
 
     execute_or_submit_response(
         state,
         request.id,
         signed_tx,
         execute_immediate,
-        "publish_package",
-        "Package publication failed",
+        action,
+        failure_message,
     )
     .await
 }

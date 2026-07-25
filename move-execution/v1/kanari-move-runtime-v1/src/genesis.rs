@@ -61,11 +61,13 @@ pub fn init_genesis(state: &mut StateManager) -> Result<()> {
             module_name
         );
 
-        match runtime.publish_module(
+        match runtime.bootstrap_module_with_context_and_persistence(
             module.bytes.clone(),
             system_addr,
             None, // No gas info for genesis
             None, // No timestamp
+            None, // No transaction hash
+            true, // Persist genesis framework state
         ) {
             Ok(changeset) => {
                 log::info!(

@@ -435,15 +435,14 @@ pub fn get_keystore_path() -> PathBuf {
         return path;
     }
 
-    if let Ok(config) = load_kanari_config() {
-        if let Some(path) = config
+    if let Ok(config) = load_kanari_config()
+        && let Some(path) = config
             .get("keystore_path")
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|path| !path.is_empty())
-        {
-            return PathBuf::from(path);
-        }
+    {
+        return PathBuf::from(path);
     }
 
     default_keystore_path()

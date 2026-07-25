@@ -496,7 +496,7 @@ fn create_save_object_test_package() -> Result<PathBuf> {
         "GasMeterSaveObjectE2E",
         "0x46",
         "gas_meter_save_object_e2e.move",
-        "module tester::gas_meter_save_object_e2e {\n    use kanari_system::object::{Self, UID};\n    use kanari_system::tx_context::{Self, TxContext};\n\n    struct Blob has key, store {\n        id: UID,\n        data: vector<u8>,\n    }\n\n    public entry fun save_blob(data: vector<u8>, ctx: &mut TxContext) {\n        let blob = Blob { id: object::new(ctx), data };\n        object::save_object(&blob);\n        let Blob { id, data: _ } = blob;\n        object::delete(id);\n    }\n}\n",
+        "module tester::gas_meter_save_object_e2e {\n    use kanari_system::object::{Self, UID};\n    use kanari_system::tx_context::TxContext;\n\n    struct Blob has key, store {\n        id: UID,\n        data: vector<u8>,\n    }\n\n    public entry fun save_blob(data: vector<u8>, ctx: &mut TxContext) {\n        let blob = Blob { id: object::new(ctx), data };\n        object::save_object(&blob);\n        let Blob { id, data: _ } = blob;\n        object::delete(id);\n    }\n}\n",
     )
 }
 

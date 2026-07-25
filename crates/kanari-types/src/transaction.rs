@@ -347,6 +347,25 @@ pub enum Transaction {
         gas_price: u64,
         nonce: u64,
     },
+    /// Upgrade an existing Move module.
+    UpgradeModule {
+        sender: String,
+        module_bytes: Vec<u8>,
+        module_name: String,
+        gas_payment: Option<GasPayment>,
+        gas_limit: u64,
+        gas_price: u64,
+        nonce: u64,
+    },
+    /// Upgrade an existing Move package as one atomic transaction.
+    UpgradePackage {
+        sender: String,
+        modules: Vec<PublishedModule>,
+        gas_payment: Option<GasPayment>,
+        gas_limit: u64,
+        gas_price: u64,
+        nonce: u64,
+    },
     /// Execute a Move function
     ExecuteFunction {
         sender: String,
@@ -376,8 +395,10 @@ impl Transaction {
 
     pub fn sender(&self) -> &str {
         match self {
-            Transaction::PublishModule { sender, .. } => sender,
-            Transaction::PublishPackage { sender, .. } => sender,
+            Transaction::PublishModule { sender, .. }
+            | Transaction::PublishPackage { sender, .. }
+            | Transaction::UpgradeModule { sender, .. }
+            | Transaction::UpgradePackage { sender, .. } => sender,
             Transaction::ExecuteFunction { sender, .. } => sender,
         }
     }
@@ -388,24 +409,30 @@ impl Transaction {
 
     pub fn nonce(&self) -> u64 {
         match self {
-            Transaction::PublishModule { nonce, .. } => *nonce,
-            Transaction::PublishPackage { nonce, .. } => *nonce,
+            Transaction::PublishModule { nonce, .. }
+            | Transaction::PublishPackage { nonce, .. }
+            | Transaction::UpgradeModule { nonce, .. }
+            | Transaction::UpgradePackage { nonce, .. } => *nonce,
             Transaction::ExecuteFunction { nonce, .. } => *nonce,
         }
     }
 
     pub fn gas_limit(&self) -> u64 {
         match self {
-            Transaction::PublishModule { gas_limit, .. } => *gas_limit,
-            Transaction::PublishPackage { gas_limit, .. } => *gas_limit,
+            Transaction::PublishModule { gas_limit, .. }
+            | Transaction::PublishPackage { gas_limit, .. }
+            | Transaction::UpgradeModule { gas_limit, .. }
+            | Transaction::UpgradePackage { gas_limit, .. } => *gas_limit,
             Transaction::ExecuteFunction { gas_limit, .. } => *gas_limit,
         }
     }
 
     pub fn gas_price(&self) -> u64 {
         match self {
-            Transaction::PublishModule { gas_price, .. } => *gas_price,
-            Transaction::PublishPackage { gas_price, .. } => *gas_price,
+            Transaction::PublishModule { gas_price, .. }
+            | Transaction::PublishPackage { gas_price, .. }
+            | Transaction::UpgradeModule { gas_price, .. }
+            | Transaction::UpgradePackage { gas_price, .. } => *gas_price,
             Transaction::ExecuteFunction { gas_price, .. } => *gas_price,
         }
     }
@@ -466,10 +493,12 @@ impl Transaction {
                     }
                 }
             }
-            Transaction::PublishModule { module_name, .. } => {
+            Transaction::PublishModule { module_name, .. }
+            | Transaction::UpgradeModule { module_name, .. } => {
                 keys.push(format!("module:{}", module_name));
             }
-            Transaction::PublishPackage { modules, .. } => {
+            Transaction::PublishPackage { modules, .. }
+            | Transaction::UpgradePackage { modules, .. } => {
                 keys.extend(
                     modules
                         .iter()
@@ -486,15 +515,20 @@ impl Transaction {
     pub fn object_inputs(&self) -> Vec<ObjectInput> {
         match self {
             Transaction::ExecuteFunction { object_inputs, .. } => object_inputs.clone(),
-            Transaction::PublishModule { .. } | Transaction::PublishPackage { .. } => Vec::new(),
+            Transaction::PublishModule { .. }
+            | Transaction::PublishPackage { .. }
+            | Transaction::UpgradeModule { .. }
+            | Transaction::UpgradePackage { .. } => Vec::new(),
         }
     }
 
     pub fn gas_payment(&self) -> Option<GasPayment> {
         match self {
             Transaction::ExecuteFunction { gas_payment, .. } => gas_payment.clone(),
-            Transaction::PublishModule { gas_payment, .. } => gas_payment.clone(),
-            Transaction::PublishPackage { gas_payment, .. } => gas_payment.clone(),
+            Transaction::PublishModule { gas_payment, .. }
+            | Transaction::PublishPackage { gas_payment, .. }
+            | Transaction::UpgradeModule { gas_payment, .. }
+            | Transaction::UpgradePackage { gas_payment, .. } => gas_payment.clone(),
         }
     }
 
@@ -504,6 +538,8 @@ impl Transaction {
             Transaction::ExecuteFunction { .. }
                 | Transaction::PublishModule { .. }
                 | Transaction::PublishPackage { .. }
+                | Transaction::UpgradeModule { .. }
+                | Transaction::UpgradePackage { .. }
         )
     }
 
@@ -597,6 +633,8 @@ impl Transaction {
         match self {
             Transaction::PublishModule { .. } => "publish_module",
             Transaction::PublishPackage { .. } => "publish_package",
+            Transaction::UpgradeModule { .. } => "upgrade_module",
+            Transaction::UpgradePackage { .. } => "upgrade_package",
             Transaction::ExecuteFunction {
                 module, function, ..
             } if module == &GasModule::module_path()
@@ -761,7 +799,10 @@ mod tests {
                 assert_eq!(function, GasModule::function_names().transfer);
                 assert_eq!(*nonce, 7);
             }
-            Transaction::PublishModule { .. } | Transaction::PublishPackage { .. } => {
+            Transaction::PublishModule { .. }
+            | Transaction::PublishPackage { .. }
+            | Transaction::UpgradeModule { .. }
+            | Transaction::UpgradePackage { .. } => {
                 panic!("transfer helper must build a call")
             }
         }
@@ -793,7 +834,10 @@ mod tests {
                 assert_eq!(*nonce, 7);
                 assert_eq!(args.len(), 3);
             }
-            Transaction::PublishModule { .. } | Transaction::PublishPackage { .. } => {
+            Transaction::PublishModule { .. }
+            | Transaction::PublishPackage { .. }
+            | Transaction::UpgradeModule { .. }
+            | Transaction::UpgradePackage { .. } => {
                 panic!("object transfer helper must build a call")
             }
         }
@@ -849,6 +893,109 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_transactions_have_upgrade_type_labels() {
+        let gas_payment = GasPayment {
+            payment_objects: vec![ObjectRef::new(
+                "0xgas",
+                Some(7),
+                Some("0xdigest".to_string()),
+            )],
+            owner: "0x1".to_string(),
+            budget: 100_000,
+            price: 1,
+        };
+        let module_tx = Transaction::UpgradeModule {
+            sender: "0x1".to_string(),
+            module_bytes: vec![1, 2, 3],
+            module_name: "demo".to_string(),
+            gas_payment: Some(gas_payment.clone()),
+            gas_limit: 100_000,
+            gas_price: 1,
+            nonce: 0,
+        };
+        let package_tx = Transaction::UpgradePackage {
+            sender: "0x1".to_string(),
+            modules: vec![PublishedModule {
+                module_name: "demo".to_string(),
+                module_bytes: vec![1, 2, 3],
+            }],
+            gas_payment: Some(gas_payment.clone()),
+            gas_limit: 100_000,
+            gas_price: 1,
+            nonce: 1,
+        };
+
+        assert_eq!(module_tx.tx_type_label(), "upgrade_module");
+        assert_eq!(package_tx.tx_type_label(), "upgrade_package");
+        assert!(module_tx.requires_strict_object_metadata());
+        assert!(package_tx.requires_strict_object_metadata());
+        assert!(module_tx.object_inputs().is_empty());
+        assert!(package_tx.object_inputs().is_empty());
+        assert_eq!(module_tx.gas_payment(), Some(gas_payment.clone()));
+        assert_eq!(package_tx.gas_payment(), Some(gas_payment));
+        assert_eq!(
+            module_tx.get_conflict_keys(),
+            vec!["module:demo".to_string(), "object:0xgas".to_string()]
+        );
+        assert_eq!(
+            package_tx.get_conflict_keys(),
+            vec!["module:demo".to_string(), "object:0xgas".to_string()]
+        );
+    }
+
+    #[test]
+    fn upgrade_package_conflict_keys_are_deterministic_and_deduplicated() {
+        let tx = Transaction::UpgradePackage {
+            sender: "0x1".to_string(),
+            modules: vec![
+                PublishedModule {
+                    module_name: "zeta".to_string(),
+                    module_bytes: vec![],
+                },
+                PublishedModule {
+                    module_name: "alpha".to_string(),
+                    module_bytes: vec![],
+                },
+                PublishedModule {
+                    module_name: "alpha".to_string(),
+                    module_bytes: vec![],
+                },
+            ],
+            gas_payment: None,
+            gas_limit: 100_000,
+            gas_price: 1,
+            nonce: 1,
+        };
+
+        assert_eq!(
+            tx.get_conflict_keys(),
+            vec![
+                "module:alpha".to_string(),
+                "module:zeta".to_string(),
+                "owner:0x1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn upgrade_transactions_without_gas_fall_back_to_owner_conflict_key() {
+        let tx = Transaction::UpgradeModule {
+            sender: "0x1".to_string(),
+            module_bytes: vec![1, 2, 3],
+            module_name: "demo".to_string(),
+            gas_payment: None,
+            gas_limit: 100_000,
+            gas_price: 1,
+            nonce: 0,
+        };
+
+        assert_eq!(
+            tx.get_conflict_keys(),
+            vec!["module:demo".to_string(), "owner:0x1".to_string()]
+        );
+    }
+
+    #[test]
     fn tampering_transaction_after_signing_invalidates_signature_cache() {
         let keypair = kanari_crypto::keys::generate_keypair(CurveType::Ed25519).unwrap();
         let mut signed_tx = SignedTransaction::new(Transaction::new_burn_with_gas(
@@ -866,7 +1013,10 @@ mod tests {
 
         match &mut signed_tx.transaction {
             Transaction::ExecuteFunction { nonce, .. } => *nonce += 1,
-            Transaction::PublishModule { .. } | Transaction::PublishPackage { .. } => {
+            Transaction::PublishModule { .. }
+            | Transaction::PublishPackage { .. }
+            | Transaction::UpgradeModule { .. }
+            | Transaction::UpgradePackage { .. } => {
                 unreachable!()
             }
         }
@@ -913,7 +1063,10 @@ mod tests {
 
         match &mut signed_tx.transaction {
             Transaction::ExecuteFunction { nonce, .. } => *nonce += 1,
-            Transaction::PublishModule { .. } | Transaction::PublishPackage { .. } => {
+            Transaction::PublishModule { .. }
+            | Transaction::PublishPackage { .. }
+            | Transaction::UpgradeModule { .. }
+            | Transaction::UpgradePackage { .. } => {
                 unreachable!()
             }
         }

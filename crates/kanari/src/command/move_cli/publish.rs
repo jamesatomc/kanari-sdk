@@ -7,7 +7,7 @@ use crate::command::common::{
     resolve_sender, resolve_transaction_gas,
 };
 use crate::command::rpc_helpers::{
-    render_transaction_submission, require_rpc_result, sign_publish_package_request,
+    render_transaction_submission, require_rpc_result, sign_publish_package_request_as,
     submit_blocking_rpc,
 };
 use anyhow::{Context, Result, bail};
@@ -24,9 +24,48 @@ use std::time::Duration;
 const MAX_PUBLISH_GAS_RETRIES: usize = 60;
 const PUBLISH_GAS_RETRY_DELAY_MS: u64 = 250;
 
-/// Publish the Move module to the blockchain
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishOperation {
+    Publish,
+    Upgrade,
+}
+
+impl PublishOperation {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Publish => "Publishing",
+            Self::Upgrade => "Upgrading",
+        }
+    }
+
+    fn past_tense(self) -> &'static str {
+        match self {
+            Self::Publish => "Published",
+            Self::Upgrade => "Upgraded",
+        }
+    }
+
+    fn build_method(self) -> &'static str {
+        match self {
+            Self::Publish => methods::BUILD_PUBLISH_PACKAGE,
+            Self::Upgrade => methods::BUILD_UPGRADE_PACKAGE,
+        }
+    }
+
+    fn submit_method(self) -> &'static str {
+        match self {
+            Self::Publish => methods::PUBLISH_PACKAGE,
+            Self::Upgrade => methods::UPGRADE_PACKAGE,
+        }
+    }
+}
+
+/// Publish or upgrade Move modules on chain.
+///
+/// Re-running this command for an already-published module id performs a
+/// compatibility-checked upgrade. Existing module storage is preserved when the
+/// upgrade is rejected.
 #[derive(Parser, Clone)]
-#[clap(name = "publish")]
 pub struct Publish {
     #[clap(flatten)]
     pub build_config: BuildConfig,
@@ -48,6 +87,15 @@ impl Publish {
     }
 
     pub fn execute(self, path: Option<PathBuf>, config: BuildConfig) -> Result<()> {
+        self.execute_as(path, config, PublishOperation::Publish)
+    }
+
+    pub fn execute_as(
+        self,
+        path: Option<PathBuf>,
+        config: BuildConfig,
+        operation: PublishOperation,
+    ) -> Result<()> {
         let rerooted_path = reroot_path(path.or(self.package_path.clone()))?;
         let (gas_limit, gas_price) = resolve_transaction_gas(self.gas_limit, self.gas_price);
         let rpc = get_rpc_endpoint(self.rpc_endpoint.clone());
@@ -102,7 +150,7 @@ impl Publish {
         );
         let sender_for_tx = get_sender_for_tx(&wallet, &sender_normalized)?;
 
-        eprintln!("Publishing modules to blockchain...");
+        eprintln!("{} modules on chain...", operation.verb());
         eprintln!("   RPC: {}", rpc);
         eprintln!("   Sender: {}", sender_for_tx);
 
@@ -149,9 +197,12 @@ impl Publish {
         }
 
         if package_modules.is_empty() {
-            eprintln!("Warning: No modules were published. All modules were skipped or rejected.");
+            eprintln!(
+                "Warning: No modules were {}. All modules were skipped or rejected.",
+                operation.past_tense().to_ascii_lowercase()
+            );
             eprintln!("Package build and validation complete!");
-            eprintln!("   Published: 0 modules");
+            eprintln!("   {}: 0 modules", operation.past_tense());
             eprintln!("   Skipped: {} dependency modules", skipped_count);
             return Ok(());
         }
@@ -180,7 +231,7 @@ impl Publish {
                     let prepared = submit_blocking_rpc(
                         &client,
                         &rpc,
-                        methods::BUILD_PUBLISH_PACKAGE,
+                        operation.build_method(),
                         serde_json::to_value(BuildPublishPackageRequest {
                             sender: sender_for_tx.clone(),
                             modules: package_modules.clone(),
@@ -189,13 +240,26 @@ impl Publish {
                             nonce: None,
                             execute_immediate: Some(true),
                         })
-                        .context("Failed to serialize build publish package request")?,
+                        .with_context(|| {
+                            format!(
+                                "Failed to serialize build {} package request",
+                                operation.past_tense().to_ascii_lowercase()
+                            )
+                        })?,
                     )?;
                     serde_json::from_value(require_rpc_result(
                         prepared,
-                        "RPC did not return prepared publish package request",
+                        &format!(
+                            "RPC did not return prepared {} package request",
+                            operation.past_tense().to_ascii_lowercase()
+                        ),
                     )?)
-                    .context("Failed to decode prepared publish package request")
+                    .with_context(|| {
+                        format!(
+                            "Failed to decode prepared {} package request",
+                            operation.past_tense().to_ascii_lowercase()
+                        )
+                    })
                 };
 
                 match attempt() {
@@ -224,19 +288,28 @@ impl Publish {
             eprintln!("   Gas payment object: {}", gas_object.object_id);
         }
 
-        let request = sign_publish_package_request(prepared, &wallet)?;
-        eprintln!("     Sending publish package RPC to {}...", rpc);
+        let request = sign_publish_package_request_as(
+            prepared,
+            &wallet,
+            operation == PublishOperation::Upgrade,
+        )?;
+        eprintln!(
+            "     Sending {} package RPC to {}...",
+            operation.past_tense().to_ascii_lowercase(),
+            rpc
+        );
         let rpc_response = submit_blocking_rpc(
             &client,
             &rpc,
-            methods::PUBLISH_PACKAGE,
+            operation.submit_method(),
             serde_json::to_value(request)?,
         )?;
         let published = render_transaction_submission(&client, &rpc, rpc_response, "     ", false)?;
 
         eprintln!("Package build and validation complete!");
         eprintln!(
-            "   Published: {} package transaction ({} modules)",
+            "   {}: {} package transaction ({} modules)",
+            operation.past_tense(),
             usize::from(published),
             package_modules.len()
         );

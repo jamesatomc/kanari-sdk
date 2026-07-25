@@ -32,9 +32,13 @@ fn is_vm_heavy_rpc(method: &str) -> bool {
         method,
         methods::VERIFY_MODULE
             | methods::BUILD_PUBLISH_MODULE
+            | methods::BUILD_UPGRADE_MODULE
             | methods::PUBLISH_MODULE
+            | methods::UPGRADE_MODULE
             | methods::BUILD_PUBLISH_PACKAGE
+            | methods::BUILD_UPGRADE_PACKAGE
             | methods::PUBLISH_PACKAGE
+            | methods::UPGRADE_PACKAGE
             | methods::BUILD_CALL_FUNCTION
             | methods::BUILD_TOKEN_TRANSFER
             | methods::CALL_FUNCTION
@@ -265,10 +269,18 @@ async fn handle_rpc(
         methods::GET_NETWORK_STATUS => handle_network_status(&state, &request).await,
 
         // Module operations
-        methods::BUILD_PUBLISH_MODULE => handle_build_publish_module(&state, &request).await,
-        methods::PUBLISH_MODULE => handle_publish_module(&state, &request).await,
-        methods::BUILD_PUBLISH_PACKAGE => handle_build_publish_package(&state, &request).await,
-        methods::PUBLISH_PACKAGE => handle_publish_package(&state, &request).await,
+        methods::BUILD_PUBLISH_MODULE | methods::BUILD_UPGRADE_MODULE => {
+            handle_build_publish_module(&state, &request).await
+        }
+        methods::PUBLISH_MODULE | methods::UPGRADE_MODULE => {
+            handle_publish_module(&state, &request).await
+        }
+        methods::BUILD_PUBLISH_PACKAGE | methods::BUILD_UPGRADE_PACKAGE => {
+            handle_build_publish_package(&state, &request).await
+        }
+        methods::PUBLISH_PACKAGE | methods::UPGRADE_PACKAGE => {
+            handle_publish_package(&state, &request).await
+        }
         methods::GET_MODULE => handle_get_module(&state, &request).await,
         methods::LIST_MODULES => handle_list_modules(&state, &request).await,
         methods::VERIFY_MODULE => handle_verify_module(&state, &request).await,

@@ -7,6 +7,15 @@ Cargo.lock
 frameworks/kanari-framework/build
 data
 
+# Web / docs local dependencies and build output
+node_modules
+.next
+out
+dist
+coverage
+.turbo
+.vercel
+
 # Local environment secrets
 .env
 **/.env

@@ -1302,37 +1302,69 @@ pub mod methods {
 
     // Module operations
     #[open_rpc_method(
-        summary = "Publish module",
-        description = "Publishes Move module bytecode.",
+        summary = "Publish or upgrade module",
+        description = "Publishes Move module bytecode. If the module id already exists, this performs a compatibility-checked upgrade.",
         params = [("module", "Module publication payload.", true, schema_object())],
-        result = ("publication", "Publish execution or pending status.", schema_object()),
+        result = ("publication", "Publish/upgrade execution or pending status.", schema_object()),
         tags = ["module"]
     )]
     pub const PUBLISH_MODULE: &str = "kanari_publishModule";
     #[open_rpc_method(
-        summary = "Build publish module transaction",
-        description = "Resolves nonce and gas payment for a module publication and returns a canonical unsigned request.",
-        params = [("module", "Unsigned module publication payload.", true, schema_object())],
-        result = ("module", "Prepared publish-module request.", schema_object()),
+        summary = "Upgrade module",
+        description = "Alias of kanari_publishModule for compatibility-checked module upgrades.",
+        params = [("module", "Module upgrade payload.", true, schema_object())],
+        result = ("upgrade", "Upgrade execution or pending status.", schema_object()),
+        tags = ["module"]
+    )]
+    pub const UPGRADE_MODULE: &str = "kanari_upgradeModule";
+    #[open_rpc_method(
+        summary = "Build publish or upgrade module transaction",
+        description = "Resolves nonce and gas payment for a module publication or compatibility-checked upgrade and returns a canonical unsigned request.",
+        params = [("module", "Unsigned module publication/upgrade payload.", true, schema_object())],
+        result = ("module", "Prepared publish/upgrade-module request.", schema_object()),
         tags = ["module"]
     )]
     pub const BUILD_PUBLISH_MODULE: &str = "kanari_buildPublishModule";
     #[open_rpc_method(
-        summary = "Publish package",
-        description = "Publishes multiple Move modules atomically in one package transaction.",
+        summary = "Build upgrade module transaction",
+        description = "Alias of kanari_buildPublishModule for compatibility-checked module upgrades.",
+        params = [("module", "Unsigned module upgrade payload.", true, schema_object())],
+        result = ("module", "Prepared upgrade-module request.", schema_object()),
+        tags = ["module"]
+    )]
+    pub const BUILD_UPGRADE_MODULE: &str = "kanari_buildUpgradeModule";
+    #[open_rpc_method(
+        summary = "Publish or upgrade package",
+        description = "Publishes multiple Move modules atomically in one package transaction. Existing module ids are compatibility-checked upgrades.",
         params = [("package", "Package publication payload.", true, schema_object())],
-        result = ("publication", "Publish execution or pending status.", schema_object()),
+        result = ("publication", "Publish/upgrade execution or pending status.", schema_object()),
         tags = ["module"]
     )]
     pub const PUBLISH_PACKAGE: &str = "kanari_publishPackage";
     #[open_rpc_method(
-        summary = "Build publish package transaction",
-        description = "Resolves nonce and gas payment for an atomic package publication and returns a canonical unsigned request.",
-        params = [("package", "Unsigned package publication payload.", true, schema_object())],
-        result = ("package", "Prepared publish-package request.", schema_object()),
+        summary = "Upgrade package",
+        description = "Alias of kanari_publishPackage for compatibility-checked atomic package upgrades.",
+        params = [("package", "Package upgrade payload.", true, schema_object())],
+        result = ("upgrade", "Upgrade execution or pending status.", schema_object()),
+        tags = ["module"]
+    )]
+    pub const UPGRADE_PACKAGE: &str = "kanari_upgradePackage";
+    #[open_rpc_method(
+        summary = "Build publish or upgrade package transaction",
+        description = "Resolves nonce and gas payment for an atomic package publication or compatibility-checked upgrade and returns a canonical unsigned request.",
+        params = [("package", "Unsigned package publication/upgrade payload.", true, schema_object())],
+        result = ("package", "Prepared publish/upgrade-package request.", schema_object()),
         tags = ["module"]
     )]
     pub const BUILD_PUBLISH_PACKAGE: &str = "kanari_buildPublishPackage";
+    #[open_rpc_method(
+        summary = "Build upgrade package transaction",
+        description = "Alias of kanari_buildPublishPackage for compatibility-checked atomic package upgrades.",
+        params = [("package", "Unsigned package upgrade payload.", true, schema_object())],
+        result = ("package", "Prepared upgrade-package request.", schema_object()),
+        tags = ["module"]
+    )]
+    pub const BUILD_UPGRADE_PACKAGE: &str = "kanari_buildUpgradePackage";
     #[open_rpc_method(
         summary = "Get module",
         description = "Returns module metadata by address and module name.",

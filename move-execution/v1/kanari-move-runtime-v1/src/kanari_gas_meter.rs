@@ -50,6 +50,11 @@ impl KanariGasMeter {
     }
 
     #[inline]
+    fn generic_extra(is_generic: bool, extra: u64) -> u64 {
+        if is_generic { extra } else { 0 }
+    }
+
+    #[inline]
     fn value_size(value: &impl move_vm_types::views::ValueView) -> u64 {
         value.legacy_abstract_memory_size().into()
     }
@@ -67,7 +72,9 @@ const STORE_LOC_COST: u64 = 3;
 const CALL_COST: u64 = 8;
 const CALL_GENERIC_COST: u64 = 10;
 const PACK_COST: u64 = 5;
+const PACK_GENERIC_EXTRA_COST: u64 = 2;
 const UNPACK_COST: u64 = 5;
+const UNPACK_GENERIC_EXTRA_COST: u64 = 2;
 const READ_REF_COST: u64 = 3;
 const WRITE_REF_COST: u64 = 6;
 const EQ_COST: u64 = 2;
@@ -99,9 +106,9 @@ impl GasMeter for KanariGasMeter {
 
     fn charge_pop(
         &mut self,
-        _popped_val: impl move_vm_types::views::ValueView,
+        popped_val: impl move_vm_types::views::ValueView,
     ) -> PartialVMResult<()> {
-        self.charge(SIMPLE_INSTR_COST)
+        self.charge(SIMPLE_INSTR_COST.saturating_add(Self::value_size(&popped_val)))
     }
 
     fn charge_call(
@@ -143,9 +150,9 @@ impl GasMeter for KanariGasMeter {
 
     fn charge_ld_const_after_deserialization(
         &mut self,
-        _val: impl move_vm_types::views::ValueView,
+        val: impl move_vm_types::views::ValueView,
     ) -> PartialVMResult<()> {
-        self.charge(CONST_LOAD_COST)
+        self.charge(CONST_LOAD_COST.saturating_add(Self::value_size(&val)))
     }
 
     fn charge_copy_loc(
@@ -171,18 +178,24 @@ impl GasMeter for KanariGasMeter {
 
     fn charge_pack(
         &mut self,
-        _is_generic: bool,
+        is_generic: bool,
         args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge_with_len(PACK_COST, args.len())
+        self.charge_with_len(
+            PACK_COST.saturating_add(Self::generic_extra(is_generic, PACK_GENERIC_EXTRA_COST)),
+            args.len(),
+        )
     }
 
     fn charge_unpack(
         &mut self,
-        _is_generic: bool,
+        is_generic: bool,
         args: impl ExactSizeIterator<Item = impl move_vm_types::views::ValueView>,
     ) -> PartialVMResult<()> {
-        self.charge_with_len(UNPACK_COST, args.len())
+        self.charge_with_len(
+            UNPACK_COST.saturating_add(Self::generic_extra(is_generic, UNPACK_GENERIC_EXTRA_COST)),
+            args.len(),
+        )
     }
 
     fn charge_read_ref(
@@ -360,6 +373,51 @@ mod tests {
         let err = meter
             .charge_copy_loc(value)
             .expect_err("copying a large value must consume size-dependent gas");
+        assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
+    }
+
+    #[test]
+    fn popped_values_scale_with_value_size() {
+        let mut meter = KanariGasMeter::new(16);
+        let value = move_vm_types::values::Value::vector_u8(vec![0; 64]);
+        let err = meter
+            .charge_pop(value)
+            .expect_err("popping a large value must consume size-dependent gas");
+        assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
+    }
+
+    #[test]
+    fn deserialized_constants_scale_with_value_size() {
+        let mut meter = KanariGasMeter::new(16);
+        let value = move_vm_types::values::Value::vector_u8(vec![0; 64]);
+        let err = meter
+            .charge_ld_const_after_deserialization(value)
+            .expect_err("deserialized large constants must consume size-dependent gas");
+        assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
+    }
+
+    #[test]
+    fn generic_pack_and_unpack_charge_extra() {
+        let mut plain_pack = KanariGasMeter::new(PACK_COST);
+        plain_pack
+            .charge_pack(false, std::iter::empty::<move_vm_types::values::Value>())
+            .expect("plain pack should fit the base cost");
+
+        let mut generic_pack = KanariGasMeter::new(PACK_COST);
+        let err = generic_pack
+            .charge_pack(true, std::iter::empty::<move_vm_types::values::Value>())
+            .expect_err("generic pack should charge more than plain pack");
+        assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
+
+        let mut plain_unpack = KanariGasMeter::new(UNPACK_COST);
+        plain_unpack
+            .charge_unpack(false, std::iter::empty::<move_vm_types::values::Value>())
+            .expect("plain unpack should fit the base cost");
+
+        let mut generic_unpack = KanariGasMeter::new(UNPACK_COST);
+        let err = generic_unpack
+            .charge_unpack(true, std::iter::empty::<move_vm_types::values::Value>())
+            .expect_err("generic unpack should charge more than plain unpack");
         assert_eq!(err.major_status(), StatusCode::OUT_OF_GAS);
     }
 }

@@ -3,7 +3,7 @@
   "info": {
     "title": "Kanari JSON-RPC",
     "description": "Kanari JSON-RPC API for interaction with kanari server.",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "contact": {
       "name": "Kanari Network",
       "url": "https://kanarinetwork.site",
@@ -720,8 +720,8 @@
     },
     {
       "name": "kanari_publishModule",
-      "summary": "Publish module",
-      "description": "Publishes Move module bytecode.",
+      "summary": "Publish or upgrade module",
+      "description": "Publishes Move module bytecode. If the module id already exists, this performs a compatibility-checked upgrade.",
       "params": [
         {
           "name": "module",
@@ -734,7 +734,35 @@
       ],
       "result": {
         "name": "publication",
-        "description": "Publish execution or pending status.",
+        "description": "Publish/upgrade execution or pending status.",
+        "required": true,
+        "schema": {
+          "type": "object"
+        }
+      },
+      "tags": [
+        {
+          "name": "module"
+        }
+      ]
+    },
+    {
+      "name": "kanari_upgradeModule",
+      "summary": "Upgrade module",
+      "description": "Alias of kanari_publishModule for compatibility-checked module upgrades.",
+      "params": [
+        {
+          "name": "module",
+          "description": "Module upgrade payload.",
+          "required": true,
+          "schema": {
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "upgrade",
+        "description": "Upgrade execution or pending status.",
         "required": true,
         "schema": {
           "type": "object"
@@ -748,12 +776,12 @@
     },
     {
       "name": "kanari_buildPublishModule",
-      "summary": "Build publish module transaction",
-      "description": "Resolves nonce and gas payment for a module publication and returns a canonical unsigned request.",
+      "summary": "Build publish or upgrade module transaction",
+      "description": "Resolves nonce and gas payment for a module publication or compatibility-checked upgrade and returns a canonical unsigned request.",
       "params": [
         {
           "name": "module",
-          "description": "Unsigned module publication payload.",
+          "description": "Unsigned module publication/upgrade payload.",
           "required": true,
           "schema": {
             "type": "object"
@@ -762,7 +790,35 @@
       ],
       "result": {
         "name": "module",
-        "description": "Prepared publish-module request.",
+        "description": "Prepared publish/upgrade-module request.",
+        "required": true,
+        "schema": {
+          "type": "object"
+        }
+      },
+      "tags": [
+        {
+          "name": "module"
+        }
+      ]
+    },
+    {
+      "name": "kanari_buildUpgradeModule",
+      "summary": "Build upgrade module transaction",
+      "description": "Alias of kanari_buildPublishModule for compatibility-checked module upgrades.",
+      "params": [
+        {
+          "name": "module",
+          "description": "Unsigned module upgrade payload.",
+          "required": true,
+          "schema": {
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "module",
+        "description": "Prepared upgrade-module request.",
         "required": true,
         "schema": {
           "type": "object"
@@ -776,8 +832,8 @@
     },
     {
       "name": "kanari_publishPackage",
-      "summary": "Publish package",
-      "description": "Publishes multiple Move modules atomically in one package transaction.",
+      "summary": "Publish or upgrade package",
+      "description": "Publishes multiple Move modules atomically in one package transaction. Existing module ids are compatibility-checked upgrades.",
       "params": [
         {
           "name": "package",
@@ -790,7 +846,35 @@
       ],
       "result": {
         "name": "publication",
-        "description": "Publish execution or pending status.",
+        "description": "Publish/upgrade execution or pending status.",
+        "required": true,
+        "schema": {
+          "type": "object"
+        }
+      },
+      "tags": [
+        {
+          "name": "module"
+        }
+      ]
+    },
+    {
+      "name": "kanari_upgradePackage",
+      "summary": "Upgrade package",
+      "description": "Alias of kanari_publishPackage for compatibility-checked atomic package upgrades.",
+      "params": [
+        {
+          "name": "package",
+          "description": "Package upgrade payload.",
+          "required": true,
+          "schema": {
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "upgrade",
+        "description": "Upgrade execution or pending status.",
         "required": true,
         "schema": {
           "type": "object"
@@ -804,12 +888,12 @@
     },
     {
       "name": "kanari_buildPublishPackage",
-      "summary": "Build publish package transaction",
-      "description": "Resolves nonce and gas payment for an atomic package publication and returns a canonical unsigned request.",
+      "summary": "Build publish or upgrade package transaction",
+      "description": "Resolves nonce and gas payment for an atomic package publication or compatibility-checked upgrade and returns a canonical unsigned request.",
       "params": [
         {
           "name": "package",
-          "description": "Unsigned package publication payload.",
+          "description": "Unsigned package publication/upgrade payload.",
           "required": true,
           "schema": {
             "type": "object"
@@ -818,7 +902,35 @@
       ],
       "result": {
         "name": "package",
-        "description": "Prepared publish-package request.",
+        "description": "Prepared publish/upgrade-package request.",
+        "required": true,
+        "schema": {
+          "type": "object"
+        }
+      },
+      "tags": [
+        {
+          "name": "module"
+        }
+      ]
+    },
+    {
+      "name": "kanari_buildUpgradePackage",
+      "summary": "Build upgrade package transaction",
+      "description": "Alias of kanari_buildPublishPackage for compatibility-checked atomic package upgrades.",
+      "params": [
+        {
+          "name": "package",
+          "description": "Unsigned package upgrade payload.",
+          "required": true,
+          "schema": {
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "package",
+        "description": "Prepared upgrade-package request.",
         "required": true,
         "schema": {
           "type": "object"

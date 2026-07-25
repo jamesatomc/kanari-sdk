@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use reqwest::StatusCode;
@@ -96,11 +98,11 @@ impl Sample {
 }
 
 fn request_body(id: usize, args: &Args) -> String {
-    if args.malformed_every > 0 && id % args.malformed_every == 0 {
+    if args.malformed_every > 0 && id.is_multiple_of(args.malformed_every) {
         return r#"{"jsonrpc":"2.0","method":"kanari_getStats","params":"#.to_string();
     }
 
-    if args.oversized_every > 0 && id % args.oversized_every == 0 {
+    if args.oversized_every > 0 && id.is_multiple_of(args.oversized_every) {
         let blob = "x".repeat(args.oversized_bytes);
         return json!({
             "jsonrpc": "2.0",
@@ -111,7 +113,7 @@ fn request_body(id: usize, args: &Args) -> String {
         .to_string();
     }
 
-    let method = if id % 2 == 0 {
+    let method = if id.is_multiple_of(2) {
         "kanari_health"
     } else {
         "kanari_getStats"
@@ -243,7 +245,7 @@ async fn main() -> Result<()> {
             let _permit = permit;
             let sample = send_one(client, endpoint_index, rpc_url, body).await;
             let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % 1_000 == 0 {
+            if done.is_multiple_of(1_000) {
                 println!("  completed={done}");
             }
             sample
