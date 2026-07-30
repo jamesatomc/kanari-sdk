@@ -66,6 +66,33 @@ class TransactionOperations {
       'gas_price': Bcs.u64(),
       _bcsWireNonceField: Bcs.u64(),
     }),
+    // Keep these variants even though the current Flutter facade does not
+    // expose upgrade calls yet. BCS enum indexes must match the Rust
+    // Transaction declaration exactly:
+    // PublishModule, PublishPackage, UpgradeModule, UpgradePackage,
+    // ExecuteFunction.
+    'UpgradeModule': Bcs.struct('UpgradeModule', {
+      'sender': Bcs.string(),
+      'module_bytes': Bcs.vector(Bcs.u8()),
+      'module_name': Bcs.string(),
+      'gas_payment': Bcs.option(_gasPaymentBcs),
+      'gas_limit': Bcs.u64(),
+      'gas_price': Bcs.u64(),
+      _bcsWireNonceField: Bcs.u64(),
+    }),
+    'UpgradePackage': Bcs.struct('UpgradePackage', {
+      'sender': Bcs.string(),
+      'modules': Bcs.vector(
+        Bcs.struct('PublishedModule', {
+          'module_name': Bcs.string(),
+          'module_bytes': Bcs.vector(Bcs.u8()),
+        }),
+      ),
+      'gas_payment': Bcs.option(_gasPaymentBcs),
+      'gas_limit': Bcs.u64(),
+      'gas_price': Bcs.u64(),
+      _bcsWireNonceField: Bcs.u64(),
+    }),
     'ExecuteFunction': Bcs.struct('ExecuteFunction', {
       'sender': Bcs.string(),
       'module': Bcs.string(),

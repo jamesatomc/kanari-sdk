@@ -56,6 +56,26 @@ fn access_versions_reject_stale_snapshot_and_survive_commit() -> Result<()> {
 }
 
 #[test]
+fn object_access_versions_survive_commit_and_reopen() -> Result<()> {
+    let mut state = StateManager::new_in_memory();
+    let key = b"object:0xabc".to_vec();
+    let mut access = StateAccessSet::default();
+    access.writes.insert(key.clone());
+
+    state.advance_access_versions(&access)?;
+    assert_eq!(state.capture_access_versions(&access).get(&key), Some(&1));
+
+    let store = state.store();
+    state.commit()?;
+    let reopened = StateManager::try_new(store)?;
+    assert_eq!(
+        reopened.capture_access_versions(&access).get(&key),
+        Some(&1)
+    );
+    Ok(())
+}
+
+#[test]
 fn access_versions_only_invalidate_keys_that_changed() -> Result<()> {
     let mut state = StateManager::new_in_memory();
     let snapshot = state.access_version_snapshot();
@@ -87,6 +107,38 @@ fn malformed_persisted_access_version_fails_startup_closed() -> Result<()> {
         error
             .to_string()
             .contains("Malformed per-key state access version")
+    );
+    Ok(())
+}
+
+#[test]
+fn owner_addresses_rejects_malformed_owner_index_entries() -> Result<()> {
+    let mut state = StateManager::new_in_memory();
+    state.save_internal(OWNER_INDEX_KEY, &vec!["not-an-address".to_string()])?;
+
+    let error = state.owner_addresses().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Owner index contains invalid address"),
+        "{error:#}"
+    );
+    Ok(())
+}
+
+#[test]
+fn query_objects_rejects_missing_object_index_entries() -> Result<()> {
+    let mut state = StateManager::new_in_memory();
+    state.save_internal(b"object_index", &vec!["0xdead".to_string()])?;
+
+    let error = state
+        .query_objects(None, None, None, None, None)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Object index references missing object"),
+        "{error:#}"
     );
     Ok(())
 }
@@ -394,6 +446,50 @@ fn native_supply_summary_prefers_cached_visible_supply_when_owner_index_is_stale
         base.wallet_visible_supply + 210
     );
     assert_eq!(summary.object_locked_supply, 0);
+    assert_eq!(summary.accounted_supply, summary.total_supply);
+    assert_eq!(summary.untracked_supply, 0);
+
+    Ok(())
+}
+
+#[test]
+fn native_supply_summary_counts_object_fanout_when_owner_ledger_is_stale_low() -> Result<()> {
+    let owner = AccountAddress::from_hex_literal("0x1111")?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(GAS_COIN)?;
+    set_native_supply_for_test(&mut state, base.total_supply + 51)?;
+
+    let coin_type = format!("0x2::coin::Coin<{}>", GAS_COIN);
+    for index in 0u8..51 {
+        let mut changeset = ChangeSet::new();
+        let mut coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+        coin_data[..UID_SIZE].copy_from_slice(&[index; UID_SIZE]);
+        coin_data[UID_SIZE..].copy_from_slice(&1u64.to_le_bytes());
+        changeset.created_objects.push((
+            format!("0x{}", hex::encode([index; UID_SIZE])),
+            CreatedObject {
+                owner,
+                owner_kind: address_owner(owner),
+                uid: None,
+                id: None,
+                type_: coin_type.clone(),
+                data: coin_data,
+                version: 1,
+            },
+        ));
+        state.apply_changeset(&changeset)?;
+    }
+
+    assert_eq!(state.resolve_owner_native_balance(owner)?, 51);
+    assert_eq!(
+        state.indexed_wallet_supply(GAS_COIN)?,
+        base.wallet_visible_supply + 51
+    );
+    let summary = state.token_supply_summary(GAS_COIN)?;
+    assert_eq!(
+        summary.wallet_visible_supply,
+        base.wallet_visible_supply + 51
+    );
     assert_eq!(summary.accounted_supply, summary.total_supply);
     assert_eq!(summary.untracked_supply, 0);
 

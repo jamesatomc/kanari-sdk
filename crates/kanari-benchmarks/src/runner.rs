@@ -1,7 +1,11 @@
 use crate::config::{DEFAULT_SENDER_COUNT, HarnessConfig, HarnessMode};
-use crate::execution::{execute_immediate, execute_production_path};
+use crate::execution::{
+    execute_admission_path, execute_immediate, execute_owned_fast_path, execute_production_path,
+};
 use crate::report::HarnessReport;
-use crate::workload::{build_signed_workload, prepare_engine};
+use crate::workload::{
+    build_funded_owned_fastpath_workload, build_signed_workload, prepare_engine,
+};
 use anyhow::{Result, bail};
 use std::time::Instant;
 
@@ -12,27 +16,60 @@ pub fn run_harness(config: &HarnessConfig) -> Result<HarnessReport> {
         config.mode.as_str()
     );
 
-    let engine = prepare_engine()?;
+    let use_persistent_state = use_persistent_state_backend(config);
+    let prepared = prepare_engine(use_persistent_state)?;
+    let engine = &prepared.engine;
+    eprintln!(
+        "State backend: {}",
+        if use_persistent_state {
+            "rocksdb-temp (production SMT incremental root)"
+        } else {
+            "in-memory (full state-root recompute fallback)"
+        }
+    );
 
     let sender_count = configured_sender_count(config);
     eprintln!("Deriving {sender_count} deterministic benchmark senders...");
-    eprintln!("Using zero-gas native benchmark workload; funding is not required.");
+    let use_funded_owned_workload = matches!(
+        config.mode,
+        HarnessMode::OwnedFastPath | HarnessMode::Production
+    );
+    if use_funded_owned_workload {
+        eprintln!("Using funded owned-object fanout workload for successful fastpath commits.");
+    } else {
+        eprintln!("Using zero-gas native benchmark workload; funding is not required.");
+    }
     eprintln!("Signing transactions...");
-    let signed_txs = build_signed_workload(config, sender_count)?;
+    let signed_txs = if use_funded_owned_workload {
+        build_funded_owned_fastpath_workload(engine, config, sender_count)?
+    } else {
+        build_signed_workload(config, sender_count)?
+    };
 
     eprintln!("Starting benchmark...");
     let mut submit_secs = None;
     let mut produce_secs = None;
     let start = Instant::now();
     let (block_info, duration_secs) = match config.mode {
-        HarnessMode::Production => {
-            let (block_info, submit, produce) = execute_production_path(&engine, signed_txs)?;
+        HarnessMode::Admission => {
+            let (block_info, submit) = execute_admission_path(engine, signed_txs)?;
+            submit_secs = Some(submit);
+            (block_info, submit)
+        }
+        HarnessMode::OwnedFastPath => {
+            let (block_info, submit, produce) = execute_owned_fast_path(engine, signed_txs)?;
             submit_secs = Some(submit);
             produce_secs = Some(produce);
-            (block_info, produce)
+            (block_info, submit + produce)
+        }
+        HarnessMode::Production => {
+            let (block_info, submit, produce) = execute_production_path(engine, signed_txs)?;
+            submit_secs = Some(submit);
+            produce_secs = Some(produce);
+            (block_info, submit + produce)
         }
         HarnessMode::Immediate => {
-            let block_info = execute_immediate(&engine, signed_txs)?;
+            let block_info = execute_immediate(engine, signed_txs)?;
             (block_info, start.elapsed().as_secs_f64())
         }
     };
@@ -143,6 +180,13 @@ fn configured_sender_count(config: &HarnessConfig) -> usize {
         })
         .unwrap_or(DEFAULT_SENDER_COUNT)
         .min(config.tx_count)
+}
+
+fn use_persistent_state_backend(_config: &HarnessConfig) -> bool {
+    std::env::var("KANARI_BENCH_STATE_BACKEND")
+        .ok()
+        .map(|value| matches!(value.as_str(), "rocksdb" | "rocksdb-temp" | "persistent"))
+        .unwrap_or(false)
 }
 
 fn tps_summary(reports: &[HarnessReport]) -> (f64, f64, f64) {

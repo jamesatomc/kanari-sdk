@@ -79,7 +79,7 @@ crossbeam-channel = "0.5.16"
 # Networking & Communication
 # ============================================================================
 ## P2P Networking
-libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub", "mdns", "kad", "identify", "macros", "tokio", "relay", "dcutr", "ping"] }
+libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub", "kad", "identify", "macros", "tokio", "relay", "dcutr", "ping"] }
 
 ## HTTP/Web APIs
 reqwest = { version = "0.13.4", features = ["json"] }
@@ -94,7 +94,7 @@ axum-client-ip = "1.3.1"                                                        
 serde = { version = "1.0.229", default-features = true, features = ["rc"] }
 serde_json = { version = "1.0.151", default-features = true }
 serde_yaml = { version = "0.9.34", default-features = true }
-toml = { version = "1.1.3", default-features = true }
+toml = { version = "1.1.4", default-features = true }
 
 ## Blockchain-specific serialization
 bcs = { version = "0.2.1" }
@@ -141,9 +141,9 @@ pqcrypto-traits = "0.3.5"                                                       
 # ============================================================================
 # Memory Security & Timing Attack Prevention
 # ============================================================================
-zeroize = { version = "1.8.2", features = ["derive"] }                              # Secure memory zeroing
+zeroize = { version = "1.9.0", features = ["derive"] }                              # Secure memory zeroing
 subtle = "2.6.1"                                                                    # Constant-time operations
-rpassword = "7.5.2"                                                                 # Secure password input
+rpassword = "7.5.4"                                                                 # Secure password input
 fs2 = "0.4.3"                                                                       # File locking for key files
 
 # ============================================================================
@@ -159,7 +159,7 @@ moka = { version = "0.12.15", features = ["sync"] }                             
 lru = "0.18.1"                                                                      # LRU cache
 dashmap = "6.2.1"                                                                   # Concurrent HashMap
 ahash = "0.8.12"                                                                    # Fast non-cryptographic hasher
-siphasher = "1.0.2"                                                                 # SipHash implementation
+siphasher = "1.0.3"                                                                 # SipHash implementation
 
 # ============================================================================
 # Error Handling & Result Types
@@ -171,10 +171,10 @@ better_any = { version = "0.2.1", features = ["derive"] }
 # ============================================================================
 # Logging, Tracing & Observability
 # ============================================================================
-log = { version = "0.4.30", default-features = true }
-tracing = "0.1.43"
+log = { version = "0.4.33", default-features = true }
+tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
-env_logger = "0.11.8"
+env_logger = "0.11.11"
 dotenvy = "0.15.7"
 prometheus = "0.14.0"
 
@@ -202,14 +202,14 @@ arbitrary = { version = "1.4.2", features = ["derive"] }                        
 # ============================================================================
 # Authentication & 2FA
 # ============================================================================
-totp-rs = { version = "5.7.1", features = ["gen_secret", "otpauth"] }               # TOTP for 2FA
+totp-rs = { version = "5.7.2", features = ["gen_secret", "otpauth"] }               # TOTP for 2FA
 qrcode = "0.14.1"                                                                   # QR code generation
 data-encoding = "2.11.0"                                                            # Data encoding utilities
 
 # ============================================================================
 # Time & Date Handling
 # ============================================================================
-chrono = { version = "0.4.44", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 
 # ============================================================================

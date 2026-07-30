@@ -51,7 +51,7 @@ impl Checkpoint {
         T: Into<Arc<[SignedTransaction]>>,
     {
         Self {
-            hash_version: 1,
+            hash_version: 2,
             sequence,
             vertices,
             transactions: transactions.into(),
@@ -101,7 +101,7 @@ impl Checkpoint {
                 &self.state_root,
                 &self.prev_checkpoint_hash,
             ))?
-        } else {
+        } else if self.hash_version == 1 {
             bcs::to_bytes(&(
                 self.hash_version,
                 self.sequence,
@@ -110,6 +110,17 @@ impl Checkpoint {
                 &self.transaction_effects,
                 &self.object_changes,
                 &self.object_graph_edges,
+                &self.state_root,
+                self.timestamp,
+                &self.prev_checkpoint_hash,
+            ))?
+        } else {
+            bcs::to_bytes(&(
+                self.hash_version,
+                self.sequence,
+                &self.vertices,
+                &tx_hashes,
+                &self.transaction_effects,
                 &self.state_root,
                 self.timestamp,
                 &self.prev_checkpoint_hash,

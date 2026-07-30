@@ -96,10 +96,6 @@ impl Blockchain {
         true
     }
 
-    pub fn has_executed_transactions(&self) -> bool {
-        !self.executed_tx_hashes.is_empty()
-    }
-
     fn retained_transaction_count(&self) -> usize {
         self.dag_checkpoints
             .iter()
@@ -215,14 +211,6 @@ impl Blockchain {
         self.total_transaction_count
             .max(self.tx_location_index.len())
             .max(self.retained_transaction_count())
-    }
-
-    pub fn get_transaction_location(
-        &self,
-        tx_hash: &[u8],
-    ) -> Option<(&SignedTransaction, u64, &[u8])> {
-        self.get_transaction_location_with_effect(tx_hash)
-            .map(|(tx, sequence, state_root, _)| (tx, sequence, state_root))
     }
 
     pub fn get_transaction_location_with_effect(

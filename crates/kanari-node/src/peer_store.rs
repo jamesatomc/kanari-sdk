@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use kanari_core::{read_json_file, write_json_pretty_atomically};
 use libp2p::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -50,8 +50,7 @@ impl PeerStore {
             return Ok(Self::new(file_path));
         }
 
-        let contents = fs::read_to_string(&file_path)?;
-        let mut store: PeerStore = serde_json::from_str(&contents)?;
+        let mut store: PeerStore = read_json_file(&file_path)?;
         store.file_path = file_path;
 
         let old_count = store.peers.len();
@@ -73,14 +72,7 @@ impl PeerStore {
 
     /// Save peer store to disk
     pub fn save(&self) -> Result<()> {
-        let json = serde_json::to_string_pretty(self)?;
-
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = self.file_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        fs::write(&self.file_path, json)?;
+        write_json_pretty_atomically(&self.file_path, self)?;
         info!("Saved {} peers to disk", self.peers.len());
         Ok(())
     }

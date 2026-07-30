@@ -45,7 +45,7 @@ fn is_vm_heavy_rpc(method: &str) -> bool {
             | methods::VIEW_FUNCTION
     )
 }
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::{
     balance::{
@@ -208,7 +208,7 @@ async fn handle_rpc(
     State(state): State<RpcServerState>,
     Json(request): Json<RpcRequest>,
 ) -> impl IntoResponse {
-    info!("RPC request: method={}, id={}", request.method, request.id);
+    debug!("RPC request: method={}, id={}", request.method, request.id);
 
     let _vm_permit = if is_vm_heavy_rpc(&request.method) {
         match VM_RPC_PERMIT.try_acquire() {

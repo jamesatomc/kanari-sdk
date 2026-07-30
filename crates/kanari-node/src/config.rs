@@ -21,7 +21,7 @@ impl NodeRuntimeConfig {
     }
 
     pub(crate) fn dag_vertices_per_response() -> usize {
-        env_usize_clamped("KANARI_DAG_VERTICES_PER_RESPONSE", 64, 1, 512)
+        env_usize_clamped("KANARI_DAG_VERTICES_PER_RESPONSE", 8, 1, 64)
     }
 
     pub(crate) fn p2p_max_inflight_chunked_payloads() -> usize {

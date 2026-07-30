@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 // Main entry point for Kanari blockchain node
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use kanari_core::{decode_hex_exact, write_file_atomically, write_json_pretty_atomically};
 use kanari_crypto::keys::{CurveType, KANARI_KEY_PREFIX, generate_keypair};
 use kanari_types::error::{KanariError, KanariUnwrapExt};
 use tracing::info;
@@ -236,7 +237,6 @@ fn write_consensus_key_files(
         anyhow::bail!("--node-count must be at least 1");
     }
 
-    std::fs::create_dir_all(output_dir)?;
     let public_keys_path = output_dir.join("consensus-public-keys.json");
     if public_keys_path.exists() && !force {
         anyhow::bail!(
@@ -284,14 +284,11 @@ fn write_consensus_key_files(
                 private_seed.to_string()
             }
         };
-        std::fs::write(private_key_path, key_file)?;
+        write_file_atomically(&private_key_path, key_file.as_bytes())?;
         public_keys.insert(authority, keypair.public_key);
     }
 
-    std::fs::write(
-        public_keys_path,
-        serde_json::to_string_pretty(&public_keys)?,
-    )?;
+    write_json_pretty_atomically(&public_keys_path, &public_keys)?;
 
     tracing::info!(
         "Generated {} consensus key(s) in {}",
@@ -314,13 +311,11 @@ fn encrypt_existing_consensus_key(
     }
     let private_seed = Zeroizing::new(std::fs::read_to_string(input)?);
     let private_seed = Zeroizing::new(private_seed.trim().to_string());
-    let decoded = Zeroizing::new(
-        hex::decode(private_seed.as_str())
-            .map_err(|error| anyhow::anyhow!("Invalid consensus seed hex: {error}"))?,
-    );
-    if decoded.len() != 32 {
-        anyhow::bail!("Consensus private key seed must be exactly 32 bytes");
-    }
+    let _decoded = Zeroizing::new(decode_hex_exact(
+        "consensus private key seed",
+        &private_seed,
+        32,
+    )?);
     let password =
         Zeroizing::new(std::env::var("KANARI_CONSENSUS_KEY_PASSWORD").map_err(|_| {
             anyhow::anyhow!("KANARI_CONSENSUS_KEY_PASSWORD is required to encrypt a consensus key")
@@ -330,15 +325,7 @@ fn encrypt_existing_consensus_key(
     }
     let encrypted = kanari_crypto::encrypt_string(&private_seed, &password)
         .map_err(|error| anyhow::anyhow!("Failed to encrypt consensus key: {error}"))?;
-    if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temporary = output.with_extension("tmp");
-    std::fs::write(&temporary, serde_json::to_vec_pretty(&encrypted)?)?;
-    if output.exists() {
-        std::fs::remove_file(output)?;
-    }
-    std::fs::rename(temporary, output)?;
+    write_json_pretty_atomically(output, &encrypted)?;
     Ok(())
 }
 

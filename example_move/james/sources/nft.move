@@ -48,7 +48,9 @@ module james::nft {
     public fun init(_otw: NFT, ctx: &mut TxContext): (collection::Collection, collection::NftCap) {
         let name = b"KariKid Collection";
         let description = b"The first official standardized NFT on Kanari Network.";
-        let banner = b"https://jamesatomc.kanari.site/art_james.png"; // 🌐 ใส่ URL แบนเนอร์ที่นี่
+        // Use a durable, directly-loadable image URL. A custom HTTPS, ipfs://,
+        // or data:image/jpeg;base64,... URI can be set after setup as well.
+        let banner = b"https://avatars.githubusercontent.com/u/127471673?s=800&v=4";
         let website = b"https://james-project.com";            // 🌐 ใส่ลิงก์เว็บที่นี่
         
         collection::create_collection(
@@ -68,6 +70,17 @@ module james::nft {
         let sender = tx_context::sender(ctx);
         transfer::public_transfer(issuer, sender);
         transfer::public_transfer(coll, sender);
+    }
+
+    /// Replaces collection artwork without recreating the collection. Only the
+    /// original collection creator is authorized by collection::update_metadata.
+    public entry fun update_collection_metadata(
+        coll: &mut collection::Collection,
+        banner: vector<u8>,
+        website: vector<u8>,
+        ctx: &mut TxContext,
+    ) {
+        collection::update_metadata(coll, banner, website, ctx);
     }
 
     /// ฟังก์ชัน Mint ตามมาตรฐานสากล

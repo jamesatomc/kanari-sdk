@@ -1,8 +1,11 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Result;
-use kanari_core::BlockchainEngine;
+use anyhow::{Context, Result};
+use kanari_core::{
+    BlockchainEngine, decode_hex_exact, read_json_file, write_file_atomically,
+    write_json_pretty_atomically,
+};
 use kanari_rpc_api::{CanonicalStateSnapshotResponse, CompareCanonicalStateSnapshotRequest};
 use kanari_rpc_server::start_server_with_transaction_broadcaster;
 use kanari_types::address::Address as KanariAddress;
@@ -10,7 +13,6 @@ use kanari_types::gas_coin::GasModule;
 use libp2p::identity::Keypair;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
@@ -79,34 +81,14 @@ fn sanitize_path_component(value: &str) -> String {
 }
 
 fn write_snapshot_dump(path: &Path, snapshot: &CanonicalStateSnapshotResponse) {
-    if let Some(parent) = path.parent()
-        && let Err(error) = fs::create_dir_all(parent)
-    {
+    if let Err(error) = write_json_pretty_atomically(path, snapshot) {
         tracing::warn!(
-            "Failed to create startup divergence snapshot directory {}: {}",
-            parent.display(),
-            error
-        );
-        return;
-    }
-
-    match serde_json::to_vec_pretty(snapshot) {
-        Ok(bytes) => {
-            if let Err(error) = fs::write(path, bytes) {
-                tracing::warn!(
-                    "Failed to write startup divergence snapshot {}: {}",
-                    path.display(),
-                    error
-                );
-            } else {
-                tracing::info!("Wrote startup divergence snapshot to {}", path.display());
-            }
-        }
-        Err(error) => tracing::warn!(
-            "Failed to serialize startup divergence snapshot {}: {}",
+            "Failed to write startup divergence snapshot {}: {}",
             path.display(),
             error
-        ),
+        );
+    } else {
+        tracing::info!("Wrote startup divergence snapshot to {}", path.display());
     }
 }
 
@@ -131,10 +113,7 @@ fn emit_startup_divergence_diagnostics(engine: &Arc<BlockchainEngine>, local_pee
     );
 
     if let Some(reference_path) = divergence_reference_snapshot_path() {
-        match fs::read(&reference_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<CanonicalStateSnapshotResponse>(&bytes).ok())
-        {
+        match read_json_file::<CanonicalStateSnapshotResponse>(&reference_path).ok() {
             Some(reference) => {
                 let diff = match engine.compare_canonical_state_snapshot(
                     &CompareCanonicalStateSnapshotRequest {
@@ -245,29 +224,6 @@ pub fn create_engine_with_genesis(
     Ok(engine)
 }
 
-fn normalize_authority_id(authority_id: String) -> String {
-    if authority_id.starts_with("0x") {
-        authority_id
-    } else {
-        format!("0x{}", authority_id)
-    }
-}
-
-fn decode_hex_bytes(label: &str, value: &str, expected_len: usize) -> Result<Vec<u8>> {
-    let trimmed = value.strip_prefix("0x").unwrap_or(value);
-    let bytes =
-        hex::decode(trimmed).map_err(|e| anyhow::anyhow!("Invalid {} hex: {}", label, e))?;
-    if bytes.len() != expected_len {
-        anyhow::bail!(
-            "Invalid {} length: expected {} bytes, got {}",
-            label,
-            expected_len,
-            bytes.len()
-        );
-    }
-    Ok(bytes)
-}
-
 pub fn configure_consensus_signing_key(
     engine: &mut BlockchainEngine,
     private_key_path: &std::path::Path,
@@ -314,7 +270,7 @@ pub fn configure_consensus_signing_key(
         );
         Zeroizing::new(trimmed.to_string())
     };
-    let private_key = Zeroizing::new(decode_hex_bytes(
+    let private_key = Zeroizing::new(decode_hex_exact(
         "consensus private key seed",
         &private_key_hex,
         32,
@@ -326,27 +282,19 @@ pub fn configure_consensus_signing_key(
     let private_key = Zeroizing::new(private_key);
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&private_key);
 
-    let public_keys_json = std::fs::read_to_string(public_keys_path).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to read consensus public keys file {}: {}",
-            public_keys_path.display(),
-            e
-        )
-    })?;
-    let public_key_hex_by_authority: BTreeMap<String, String> =
-        serde_json::from_str(&public_keys_json).map_err(|e| {
-            anyhow::anyhow!(
-                "Invalid consensus public keys JSON {}: {}",
-                public_keys_path.display(),
-                e
+    let public_key_hex_by_authority: BTreeMap<String, String> = read_json_file(public_keys_path)
+        .with_context(|| {
+            format!(
+                "Invalid consensus public keys JSON {}",
+                public_keys_path.display()
             )
         })?;
 
     let mut public_keys = BTreeMap::new();
     for (authority, key_hex) in public_key_hex_by_authority {
         public_keys.insert(
-            normalize_authority_id(authority),
-            decode_hex_bytes("consensus public key", &key_hex, 32)?,
+            authority,
+            decode_hex_exact("consensus public key", &key_hex, 32)?,
         );
     }
 
@@ -408,7 +356,6 @@ pub fn load_or_create_p2p_identity(data_dir: &std::path::Path, network: &str) ->
             .map_err(|error| anyhow::anyhow!("Invalid P2P identity {}: {error}", path.display()));
     }
 
-    std::fs::create_dir_all(data_dir)?;
     let keypair = Keypair::generate_ed25519();
     let encoded = Zeroizing::new(
         keypair
@@ -428,18 +375,16 @@ pub fn load_or_create_p2p_identity(data_dir: &std::path::Path, network: &str) ->
             encoded.to_vec()
         }
     };
-    let temporary = data_dir.join("p2p-identity.key.tmp");
-    std::fs::write(&temporary, stored)?;
-    std::fs::rename(&temporary, &path)?;
+    write_file_atomically(&path, &stored)?;
     Ok(keypair)
 }
 
 fn queue_network_message(
-    network_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
+    network_tx: &tokio::sync::mpsc::Sender<crate::p2p::QueuedP2PMessage>,
     msg: P2PMessage,
     failure_context: &str,
 ) -> bool {
-    match network_tx.try_send(msg) {
+    match network_tx.try_send(crate::p2p::QueuedP2PMessage::new(msg)) {
         Ok(_) => true,
         Err(e) => {
             tracing::warn!("{}: {}", failure_context, e);
@@ -449,7 +394,7 @@ fn queue_network_message(
 }
 
 fn serialize_and_queue_message<T: Serialize>(
-    network_tx: &tokio::sync::mpsc::Sender<P2PMessage>,
+    network_tx: &tokio::sync::mpsc::Sender<crate::p2p::QueuedP2PMessage>,
     value: &T,
     wrap: impl FnOnce(String) -> P2PMessage,
     serialize_context: &str,
@@ -550,7 +495,8 @@ pub async fn run_node(
     let p2p_channel_capacity = NodeRuntimeConfig::p2p_channel_capacity();
     let (p2p_msg_tx, mut p2p_msg_rx) =
         tokio::sync::mpsc::channel::<crate::p2p::AuthenticatedP2PMessage>(p2p_channel_capacity);
-    let (network_tx, network_rx) = tokio::sync::mpsc::channel::<P2PMessage>(p2p_channel_capacity);
+    let (network_tx, network_rx) =
+        tokio::sync::mpsc::channel::<crate::p2p::QueuedP2PMessage>(p2p_channel_capacity);
 
     let keypair = load_or_create_p2p_identity(&data_dir, &network)?;
     let peer_id = keypair.public().to_peer_id().to_string();
@@ -682,7 +628,8 @@ pub async fn run_node(
             &bind_addr_clone,
             move |signed_tx| {
                 let payload = serde_json::to_string(&signed_tx)?;
-                if let Err(error) = network_tx_for_rpc.try_send(P2PMessage::NewTransaction(payload))
+                if let Err(error) = network_tx_for_rpc
+                    .try_send(crate::p2p::QueuedP2PMessage::new(P2PMessage::NewTransaction(payload)))
                 {
                     tracing::warn!(
                         error = %error,
@@ -868,15 +815,15 @@ pub async fn run_node(
                         || error_text.contains("SYNC_WAITING")
                         || error_text.contains("Not enough parents for quorum")
                     {
-                        tracing::info!("Checkpoint production waiting: {}", error_text);
+                        tracing::debug!("Checkpoint production waiting: {}", error_text);
                         if stats.pending_transactions > 0 {
                             idle_delay = Duration::from_millis(50);
                         }
                         if last_dag_rebroadcast.elapsed() >= Duration::from_secs(1) {
                             last_dag_rebroadcast = Instant::now();
                             sync_manager
-                                .broadcast_latest_dag_vertices(16, "while waiting for quorum");
-                            sync_manager.request_dag_vertices_for_quorum().await;
+                                .broadcast_latest_dag_vertices(4, "while waiting for quorum");
+                            sync_manager.request_dag_vertices_for_quorum();
                         }
                     } else if should_drop_invalid_pending_transaction(&error_text) {
                         let failed_hash = extract_failed_tx_hash(&error_text).or_else(|| {

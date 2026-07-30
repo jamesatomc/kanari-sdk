@@ -202,10 +202,10 @@ impl ChangeSet {
                 ));
             }
         }
-        for owner in self.owner_deltas.keys() {
-            access.write(format!("owner:{}", owner.to_hex_literal()));
-        }
-        for owner in self.native_gas_credits.keys() {
+        for (owner, delta) in &self.owner_deltas {
+            if self.is_parallel_safe_native_owner_delta(owner, delta) {
+                continue;
+            }
             access.write(format!("owner:{}", owner.to_hex_literal()));
         }
         for (_owner, token_type, _) in &self.treasuries {
@@ -269,14 +269,31 @@ impl ChangeSet {
                 ));
             }
         }
-        let supply_delta = self
-            .owner_deltas
-            .values()
-            .fold(0i128, |sum, delta| sum.saturating_add(delta.balance_delta));
-        if supply_delta != 0 {
-            access.write("native_supply".to_string());
-        }
         access
+    }
+
+    fn is_parallel_safe_native_owner_delta(
+        &self,
+        owner: &AccountAddress,
+        delta: &OwnerDelta,
+    ) -> bool {
+        if !delta.modules_added.is_empty() {
+            return false;
+        }
+        if delta.balance_delta >= 0 {
+            return self.native_gas_credits.contains_key(owner);
+        }
+
+        let Some(payment) = &self.gas_payment else {
+            return false;
+        };
+        if payment.payment_objects.is_empty() {
+            return false;
+        }
+        let Ok(payment_owner) = AccountAddress::from_hex_literal(&payment.owner) else {
+            return false;
+        };
+        payment_owner == *owner
     }
 
     pub fn record_resolver_reads<I>(&mut self, reads: I)
@@ -468,6 +485,84 @@ impl ChangeSet {
         if !other.success {
             self.success = false;
             self.error_message = other.error_message;
+        }
+    }
+
+    /// Merge another ChangeSet by reference.
+    ///
+    /// This keeps high-throughput checkpoint preparation from cloning an entire
+    /// vector of transaction effects before the merged batch is actually built.
+    /// Later Move writes still replace earlier writes for the same canonical key,
+    /// matching `merge`.
+    pub fn merge_from(&mut self, other: &ChangeSet) {
+        self.events.reserve(other.events.len());
+        self.treasuries.reserve(other.treasuries.len());
+        self.nft_caps.reserve(other.nft_caps.len());
+        self.input_objects.reserve(other.input_objects.len());
+        self.shared_inputs.reserve(other.shared_inputs.len());
+        self.immutable_inputs.reserve(other.immutable_inputs.len());
+        self.gas_object_refs.reserve(other.gas_object_refs.len());
+        self.created_objects.reserve(other.created_objects.len());
+        self.deleted_objects.reserve(other.deleted_objects.len());
+        self.explicit_object_changes
+            .reserve(other.explicit_object_changes.len());
+        self.added_dynamic_fields
+            .reserve(other.added_dynamic_fields.len());
+        self.removed_dynamic_fields
+            .reserve(other.removed_dynamic_fields.len());
+
+        for (addr, other_change) in &other.owner_deltas {
+            let existing = self.get_or_create_owner_delta(*addr);
+            existing.balance_delta = existing
+                .balance_delta
+                .saturating_add(other_change.balance_delta);
+            existing
+                .modules_added
+                .extend(other_change.modules_added.iter().cloned());
+        }
+        for (collector, amount) in &other.native_gas_credits {
+            let collected = self.native_gas_credits.entry(*collector).or_insert(0);
+            *collected = collected.saturating_add(*amount);
+        }
+        self.events.extend(other.events.iter().cloned());
+        self.treasuries.extend(other.treasuries.iter().cloned());
+        self.nft_caps.extend(other.nft_caps.iter().cloned());
+        self.input_objects
+            .extend(other.input_objects.iter().cloned());
+        self.shared_inputs
+            .extend(other.shared_inputs.iter().cloned());
+        self.immutable_inputs
+            .extend(other.immutable_inputs.iter().cloned());
+        if self.gas_payment.is_none() {
+            self.gas_payment = other.gas_payment.clone();
+        }
+        self.gas_object_refs
+            .extend(other.gas_object_refs.iter().cloned());
+
+        for (owner, token_type, amount) in &other.token_balance_sets {
+            self.add_token_balance_set(*owner, token_type.clone(), amount.value());
+        }
+
+        self.created_objects
+            .extend(other.created_objects.iter().cloned());
+        self.deleted_objects
+            .extend(other.deleted_objects.iter().cloned());
+        self.explicit_object_changes
+            .extend(other.explicit_object_changes.iter().cloned());
+        self.added_dynamic_fields
+            .extend(other.added_dynamic_fields.iter().cloned());
+        self.removed_dynamic_fields
+            .extend(other.removed_dynamic_fields.iter().cloned());
+        for (key, value) in &other.move_writes {
+            self.move_writes.insert(key.clone(), value.clone());
+        }
+        self.resolver_reads
+            .extend(other.resolver_reads.iter().cloned());
+
+        self.gas_used = self.gas_used.saturating_add(other.gas_used);
+        if !other.success {
+            self.success = false;
+            self.error_message = other.error_message.clone();
         }
     }
 

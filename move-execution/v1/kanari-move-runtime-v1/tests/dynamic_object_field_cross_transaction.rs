@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::tempdir;
 
+#[path = "support/move_manifest.rs"]
+mod move_manifest;
+
 const TESTER_ADDR: &str = "0x43";
 const MODULE_NAME: &str = "dynamic_object_field_e2e";
 
@@ -169,12 +172,10 @@ fn create_test_package() -> Result<PathBuf> {
     let package_dir = dir.keep();
     fs::create_dir_all(package_dir.join("sources"))?;
 
-    let dependency_path =
-        Path::new("D:/kanari-sdk/crates/kanari-frameworks/packages/kanari-system");
+    let dependency_path = move_manifest::kanari_system_package_path()?;
     let manifest = format!(
         "[package]\nname = \"DynamicObjectFieldE2E\"\n\n[dependencies]\nKanariSystem = {{ local = \"{}\" }}\n\n[addresses]\ntester = \"{}\"\n",
-        dependency_path.display(),
-        TESTER_ADDR,
+        dependency_path, TESTER_ADDR,
     );
     fs::write(package_dir.join("Move.toml"), manifest)?;
 

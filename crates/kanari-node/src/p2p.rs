@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+#[cfg(feature = "p2p-mdns")]
+use libp2p::mdns;
 use libp2p::{
     PeerId, Swarm, Transport,
     core::upgrade,
@@ -11,7 +13,7 @@ use libp2p::{
     identify,
     identity::Keypair,
     kad::{self, store::MemoryStore},
-    mdns, noise, ping, relay,
+    noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux,
 };
@@ -68,6 +70,26 @@ pub struct AuthenticatedP2PMessage {
     pub message: P2PMessage,
 }
 
+/// Internal envelope for locally queued outbound P2P messages.
+///
+/// This is intentionally not part of the serialized P2P protocol; it lets the
+/// node measure local app/sync/RPC -> P2P publisher queue latency without
+/// changing wire compatibility.
+#[derive(Debug)]
+pub struct QueuedP2PMessage {
+    pub message: P2PMessage,
+    pub enqueued_at: Instant,
+}
+
+impl QueuedP2PMessage {
+    pub fn new(message: P2PMessage) -> Self {
+        Self {
+            message,
+            enqueued_at: Instant::now(),
+        }
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, bincode::Encode, bincode::Decode,
 )]
@@ -116,10 +138,6 @@ pub struct DagVertexMsg {
 pub struct DagVertexRequestMsg {
     pub requester_peer_id: String,
     pub parent_round: u64,
-    pub current_round: u64,
-    pub target_round: u64,
-    pub missing_authorities: Vec<String>,
-    pub requester_vertex_data: Vec<String>,
     pub timestamp: u64,
     pub limit: u64,
 }
@@ -163,6 +181,7 @@ pub struct CompressedCheckpointResponseMsg {
 #[derive(NetworkBehaviour)]
 pub struct KanariBehaviour {
     pub gossipsub: gossipsub::Behaviour,
+    #[cfg(feature = "p2p-mdns")]
     pub mdns: mdns::tokio::Behaviour,
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub dcutr: dcutr::Behaviour,
@@ -247,8 +266,10 @@ impl P2PNetwork {
             .heartbeat_initial_delay(Duration::from_millis(100))
             .max_transmit_size(MAX_GOSSIP_MESSAGE_SIZE)
             .do_px() // Enable peer exchange for better discovery
-            // Add flood publishing for critical messages (checkpoints, vertices)
-            .flood_publish(true)
+            // Mesh propagation already provides redundancy. Flood publishing
+            // multiplies large DAG/checkpoint messages by every connected peer
+            // and can exhaust libp2p's per-peer queues under sustained load.
+            .flood_publish(false)
             .build()
             .map_err(|e| anyhow::anyhow!("Gossipsub config error: {}", e))?;
 
@@ -269,8 +290,6 @@ impl P2PNetwork {
         gossipsub.subscribe(&tx_topic)?;
         gossipsub.subscribe(&peers_topic)?;
         gossipsub.subscribe(&dag_vertices_topic)?;
-
-        let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
 
         let mut kademlia = kad::Behaviour::new(local_peer_id, MemoryStore::new(local_peer_id));
 
@@ -299,7 +318,8 @@ impl P2PNetwork {
 
         let behaviour = KanariBehaviour {
             gossipsub,
-            mdns,
+            #[cfg(feature = "p2p-mdns")]
+            mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?,
             kademlia,
             dcutr,
             identify,
@@ -390,13 +410,16 @@ impl P2PNetwork {
     fn log_published_message(msg: &P2PMessage) {
         match msg {
             P2PMessage::PeerInfo(info) => {
-                info!(
+                debug!(
                     "[P2P] Publishing PeerInfo: height={}, peer_id={}",
                     info.height, info.peer_id
                 );
             }
             P2PMessage::NewCheckpoint(data) => {
-                info!("[P2P] Publishing NewCheckpoint (size: {})", data.len());
+                debug!("[P2P] Publishing NewCheckpoint (size: {})", data.len());
+            }
+            P2PMessage::NewTransaction(data) => {
+                debug!("[P2P] Publishing NewTransaction (size: {})", data.len());
             }
             P2PMessage::NewDagVertex(data) => {
                 debug!("[P2P] Publishing NewDagVertex (size: {})", data.len());
@@ -410,17 +433,13 @@ impl P2PNetwork {
                 );
             }
             P2PMessage::DagVertexRequest(req) => {
-                info!(
-                    "[P2P] Publishing DagVertexRequest: requester={}, parent_round={}, target_round={}, missing={:?}, limit={}",
-                    req.requester_peer_id,
-                    req.parent_round,
-                    req.target_round,
-                    req.missing_authorities,
-                    req.limit
+                debug!(
+                    "[P2P] Publishing DagVertexRequest: requester={}, parent_round={}, limit={}",
+                    req.requester_peer_id, req.parent_round, req.limit
                 );
             }
             P2PMessage::DagVertexResponse(resp) => {
-                info!(
+                debug!(
                     "[P2P] Publishing DagVertexResponse: responder={}, requester={}, parent_round={}, vertices={}",
                     resp.responder_peer_id,
                     resp.requester_peer_id,
@@ -640,7 +659,7 @@ pub fn decompress_payload(compressed_data: Vec<u8>) -> Result<String> {
 pub struct P2PEventHandler {
     pub network: P2PNetwork,
     pub message_tx: mpsc::Sender<AuthenticatedP2PMessage>,
-    pub outgoing_rx: Option<mpsc::Receiver<P2PMessage>>,
+    pub outgoing_rx: Option<mpsc::Receiver<QueuedP2PMessage>>,
     pub peer_store: Option<std::sync::Arc<tokio::sync::Mutex<crate::peer_store::PeerStore>>>,
     message_forwarding_closed: bool,
     chunk_assemblies: HashMap<(PeerId, [u8; 32]), ChunkAssembly>,
@@ -662,7 +681,7 @@ impl P2PEventHandler {
         }
     }
 
-    pub fn with_outgoing(mut self, outgoing_rx: mpsc::Receiver<P2PMessage>) -> Self {
+    pub fn with_outgoing(mut self, outgoing_rx: mpsc::Receiver<QueuedP2PMessage>) -> Self {
         self.outgoing_rx = Some(outgoing_rx);
         self
     }
@@ -683,13 +702,18 @@ impl P2PEventHandler {
                     self.handle_event(event).await;
                 }
                 // Handle outgoing messages to publish
-                Some(msg) = async {
+                Some(queued) = async {
                     match &mut self.outgoing_rx {
                         Some(rx) => rx.recv().await,
                         None => std::future::pending().await,
                     }
                 } => {
-                    if let Err(e) = self.network.publish_message(msg) {
+                    let queued_ms = queued.enqueued_at.elapsed().as_millis();
+                    info!(
+                        p2p_outbound_queue_latency_ms = queued_ms,
+                        "P2P outbound queue latency"
+                    );
+                    if let Err(e) = self.network.publish_message(queued.message) {
                         warn!("Failed to publish outgoing message: {}", e);
                     }
                 }
@@ -764,13 +788,13 @@ impl P2PEventHandler {
     fn log_received_message(source: &PeerId, msg: &P2PMessage) {
         match msg {
             P2PMessage::PeerInfo(info) => {
-                info!(
+                debug!(
                     "[P2P] Received PeerInfo from {}: height={}, peer_id={}",
                     source, info.height, info.peer_id
                 );
             }
             P2PMessage::NewCheckpoint(data) => {
-                info!(
+                debug!(
                     "[P2P] Received NewCheckpoint from {} (size: {})",
                     source,
                     data.len()
@@ -857,17 +881,13 @@ impl P2PEventHandler {
                 );
             }
             P2PMessage::DagVertexRequest(req) => {
-                info!(
-                    "[P2P] Received DagVertexRequest from {}: requester={}, parent_round={}, target_round={}, missing={:?}",
-                    source,
-                    req.requester_peer_id,
-                    req.parent_round,
-                    req.target_round,
-                    req.missing_authorities
+                debug!(
+                    "[P2P] Received DagVertexRequest from {}: requester={}, parent_round={}",
+                    source, req.requester_peer_id, req.parent_round
                 );
             }
             P2PMessage::DagVertexResponse(resp) => {
-                info!(
+                debug!(
                     "[P2P] Received DagVertexResponse from {}: responder={}, requester={}, parent_round={}, vertices={}",
                     source,
                     resp.responder_peer_id,
@@ -876,8 +896,22 @@ impl P2PEventHandler {
                     resp.vertex_data.len()
                 );
             }
-            _ => {
-                info!("[P2P] Received message {:?} from {}", msg, source);
+            P2PMessage::NewTransaction(data) => {
+                debug!(
+                    "[P2P] Received NewTransaction from {} (size: {})",
+                    source,
+                    data.len()
+                );
+            }
+            P2PMessage::Chunk(chunk) => {
+                debug!(
+                    "[P2P] Received {:?} chunk from {} ({}/{}, size: {})",
+                    chunk.topic,
+                    source,
+                    chunk.index.saturating_add(1),
+                    chunk.total,
+                    chunk.data.len()
+                );
             }
         }
     }
@@ -1060,6 +1094,7 @@ impl P2PEventHandler {
                     }
                 }
             }
+            #[cfg(feature = "p2p-mdns")]
             SwarmEvent::Behaviour(KanariBehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
                 for (peer_id, multiaddr) in peers {
                     info!("Discovered peer: {} at {}", peer_id, multiaddr);
@@ -1119,6 +1154,7 @@ impl P2PEventHandler {
                     warn!("Outgoing connection error: {}", error);
                 }
             }
+            #[cfg(feature = "p2p-mdns")]
             SwarmEvent::Behaviour(KanariBehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {
                 for (peer_id, _) in peers {
                     // mDNS expiry only means the discovery record timed out; it

@@ -4,8 +4,8 @@
 //! Gas v3: integer-priced gas with a tenfold discount versus gas v1.
 //!
 //! Gas prices are denominated in Mist (`u64`), so the discount is applied with
-//! integer division. Requests below ten Mist per unit therefore round down to
-//! zero; callers that need a non-zero charge should submit at least 10 Mist.
+//! integer division. Any non-zero requested price floors to at least one Mist
+//! per gas unit so valid priced transactions are never charged as zero.
 
 pub use super::gas_v1::{GasConfig, GasError, GasEstimate, GasMeter, GasOperation, TransactionGas};
 
@@ -14,7 +14,10 @@ pub const V3_PRICE_DISCOUNT: u64 = 10;
 pub const GAS_MODEL: &str = "v3";
 
 pub fn effective_gas_price(requested: u64) -> u64 {
-    requested / V3_PRICE_DISCOUNT
+    if requested == 0 {
+        return 0;
+    }
+    (requested / V3_PRICE_DISCOUNT).max(1)
 }
 
 pub fn gas_price_is_valid(requested: u64) -> bool {
@@ -29,7 +32,9 @@ mod tests {
     fn applies_tenfold_discount() {
         assert_eq!(effective_gas_price(10), 1);
         assert_eq!(effective_gas_price(100), 10);
-        assert_eq!(effective_gas_price(9), 0);
+        assert_eq!(effective_gas_price(9), 1);
+        assert_eq!(effective_gas_price(1), 1);
+        assert_eq!(effective_gas_price(0), 0);
         assert!(gas_price_is_valid(1));
         assert!(!gas_price_is_valid(0));
     }

@@ -213,6 +213,56 @@ fn dynamic_field_write_conflicts_with_conservative_read_fence() {
 }
 
 #[test]
+fn object_backed_native_gas_debits_do_not_lock_entire_owner() {
+    let owner = AccountAddress::from_hex_literal("0x42").unwrap();
+    let mut left = ChangeSet::new();
+    left.burn(owner, 10);
+    left.gas_payment = Some(GasPayment {
+        payment_objects: vec![ObjectRef::new("0x100".to_string(), Some(1), None)],
+        owner: owner.to_hex_literal(),
+        budget: 10,
+        price: 1,
+    });
+    left.gas_object_refs
+        .push(ObjectRef::new("0x100".to_string(), Some(1), None));
+
+    let mut right = ChangeSet::new();
+    right.burn(owner, 10);
+    right.gas_payment = Some(GasPayment {
+        payment_objects: vec![ObjectRef::new("0x101".to_string(), Some(1), None)],
+        owner: owner.to_hex_literal(),
+        budget: 10,
+        price: 1,
+    });
+    right
+        .gas_object_refs
+        .push(ObjectRef::new("0x101".to_string(), Some(1), None));
+
+    let left_access = left.deterministic_access_set();
+    let right_access = right.deterministic_access_set();
+    assert!(
+        !left_access
+            .writes
+            .contains(&format!("owner:{}", owner.to_hex_literal()).into_bytes())
+    );
+    assert!(!left_access.conflicts_with(&right_access));
+}
+
+#[test]
+fn non_gas_owner_debits_still_lock_owner() {
+    let owner = AccountAddress::from_hex_literal("0x42").unwrap();
+    let mut left = ChangeSet::new();
+    left.burn(owner, 10);
+    let mut right = ChangeSet::new();
+    right.burn(owner, 10);
+
+    assert!(
+        left.deterministic_access_set()
+            .conflicts_with(&right.deterministic_access_set())
+    );
+}
+
+#[test]
 fn access_conflict_detection_matches_reference_model_for_generated_sets() {
     let mut seed = 0x9e37_79b9_7f4a_7c15u64;
     let mut next = || {

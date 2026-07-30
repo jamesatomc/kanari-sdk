@@ -61,6 +61,26 @@ pub fn all_natives(move_addr: AccountAddress, gas_params: GasParameters) -> Nati
     add_module_natives!("ecdsa_k1", crypto::make_ecdsa_k1(gas_params.crypto.clone()));
     add_module_natives!("ecdsa_r1", crypto::make_ecdsa_r1(gas_params.crypto.clone()));
     add_module_natives!("ed25519", crypto::make_ed25519(gas_params.crypto.clone()));
+    add_module_natives!(
+        "dilithium2",
+        crypto::make_dilithium2(gas_params.crypto.clone())
+    );
+    add_module_natives!(
+        "dilithium3",
+        crypto::make_dilithium3(gas_params.crypto.clone())
+    );
+    add_module_natives!(
+        "dilithium5",
+        crypto::make_dilithium5(gas_params.crypto.clone())
+    );
+    add_module_natives!(
+        "ed25519_dilithium3",
+        crypto::make_ed25519_dilithium3(gas_params.crypto.clone())
+    );
+    add_module_natives!(
+        "k256_dilithium3",
+        crypto::make_k256_dilithium3(gas_params.crypto.clone())
+    );
     add_module_natives!("rs256", crypto::make_rs256(gas_params.crypto));
 
     add_module_natives!("event", event::make_all(gas_params.event));

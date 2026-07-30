@@ -20,3 +20,4 @@ anyhow = { workspace = true }
 ed25519-dalek = { workspace = true }
 hex = { workspace = true }
 tikv-jemallocator = { workspace = true }
+tempfile = { workspace = true }

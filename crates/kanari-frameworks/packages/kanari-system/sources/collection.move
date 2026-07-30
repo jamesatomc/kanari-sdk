@@ -38,6 +38,7 @@ module kanari_system::collection {
     }
 
     const E_NO_SUPPLY: u64 = 1;
+    const E_NOT_COLLECTION_CREATOR: u64 = 2;
 
     /// Create a collection and its corresponding `NftCap`.
     /// Returns `(Collection, NftCap)` so callers can persist one or both.
@@ -97,6 +98,20 @@ module kanari_system::collection {
 
     public fun max_supply(c: &Collection): u64 {
         c.max_supply
+    }
+
+    /// Updates collection display metadata. Only the original collection creator
+    /// may perform this mutation; supply and ownership are intentionally unchanged.
+    public fun update_metadata(
+        c: &mut Collection,
+        banner_url: vector<u8>,
+        website_url: vector<u8>,
+        ctx: &TxContext,
+    ) {
+        assert!(tx_context::sender(ctx) == c.creator, E_NOT_COLLECTION_CREATOR);
+        c.banner_url = kanari_system::url::new_unsafe_from_bytes(banner_url);
+        c.website_url = kanari_system::url::new_unsafe_from_bytes(website_url);
+        object::save_object(c);
     }
 
     public fun remaining(cap: &NftCap): u64 {

@@ -8,8 +8,10 @@ param(
     [ValidateRange(0, 1000)]
     [int]$TempWalletCount = 0,
 
-    [ValidateRange(1, 256)]
+    [ValidateRange(1, 1000000)]
     [int]$FaucetCoinsPerSender = 16,
+
+    [switch]$AutoCoinFanout,
 
     [ValidateRange(16, 65536)]
     [int]$P2pChannelCapacity = 8192,
@@ -19,6 +21,32 @@ param(
 
     [ValidateRange(0, 20)]
     [int]$ChaosRounds = 0,
+
+    [ValidateRange(0, 20)]
+    [int]$CrashDuringLoadRounds = 0,
+
+    [ValidateSet('follower', 'leader', 'two-node', 'round-robin', 'client-ingress')]
+    [string]$CrashDuringLoadPattern = 'follower',
+
+    [ValidateRange(1, 3600)]
+    [int]$CrashDuringLoadFirstDelaySec = 10,
+
+    [ValidateRange(1, 3600)]
+    [int]$CrashDuringLoadRestartDelaySec = 0,
+
+    [ValidateRange(0, 20)]
+    [int]$RecoveryAuditRounds = 0,
+
+    [ValidateRange(0, 3600)]
+    [int]$ProfileIntervalSec = 0,
+
+    [switch]$StartLinuxPerfRecorders,
+
+    [ValidateRange(1, 10000)]
+    [int]$PerfSampleHz = 99,
+
+    [ValidateRange(1, 3600)]
+    [int]$PerfDurationSec = 30,
 
     [switch]$SelfRecipient,
 
@@ -56,11 +84,21 @@ $loadScript = Join-Path $repoRoot 'scripts\run-local-four-node-parallel-tx-chaos
     -FundSenders `
     -FaucetAmount 1 `
     -FaucetCoinsPerSender $FaucetCoinsPerSender `
+    -AutoCoinFanout:$AutoCoinFanout `
     -P2pChannelCapacity $P2pChannelCapacity `
     -MaxConcurrentSyncMessages $MaxConcurrentSyncMessages `
     -CountPerSender $CountPerSender `
     -Amount $Amount `
     -ChaosRounds $ChaosRounds `
+    -CrashDuringLoadRounds $CrashDuringLoadRounds `
+    -CrashDuringLoadPattern $CrashDuringLoadPattern `
+    -CrashDuringLoadFirstDelaySec $CrashDuringLoadFirstDelaySec `
+    -CrashDuringLoadRestartDelaySec $CrashDuringLoadRestartDelaySec `
+    -RecoveryAuditRounds $RecoveryAuditRounds `
+    -ProfileIntervalSec $ProfileIntervalSec `
+    -StartLinuxPerfRecorders:$StartLinuxPerfRecorders `
+    -PerfSampleHz $PerfSampleHz `
+    -PerfDurationSec $PerfDurationSec `
     -RootSyncTimeoutSec $RootSyncTimeoutSec `
     -BaseP2pPort $BaseP2pPort `
     -BaseRpcPort $BaseRpcPort `

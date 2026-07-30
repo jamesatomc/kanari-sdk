@@ -207,6 +207,37 @@ async fn test_divergent_peer_is_released_only_after_matching_again() {
 }
 
 #[tokio::test]
+async fn test_divergent_peer_is_released_when_its_tip_becomes_canonical_history() {
+    let sync = new_sync_manager();
+    let historical_height = sync.engine.get_stats().height;
+    let historical_root = sync.engine.latest_checkpoint_state_root_hex();
+
+    sync.divergent_peers_guard().insert(
+        "peer-1".to_string(),
+        DivergentPeerInfo {
+            height: historical_height,
+            latest_checkpoint_hash: "equivalent-dag-checkpoint-hash".to_string(),
+            latest_state_root: historical_root,
+        },
+    );
+    apply_empty_checkpoint(&sync.engine, historical_height + 1);
+
+    let mut recovered = peer_info(
+        historical_height + 2,
+        "future-checkpoint",
+        "future-state-root",
+    );
+    recovered.peer_id = "peer-1".to_string();
+    sync.handle_peer_info(recovered).await;
+
+    assert!(!sync.is_peer_divergent("peer-1"));
+    assert_eq!(
+        sync.best_peer_for_height(historical_height + 2),
+        Some("peer-1".to_string())
+    );
+}
+
+#[tokio::test]
 async fn test_checkpoint_hash_mismatch_with_same_state_root_is_eligible() {
     let sync = new_sync_manager();
     let stats = sync.engine.get_stats();

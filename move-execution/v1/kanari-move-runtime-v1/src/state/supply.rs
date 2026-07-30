@@ -1,13 +1,15 @@
 use super::*;
 
 impl StateManager {
+    fn dao_account_address() -> Result<AccountAddress> {
+        AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS)
+            .context("DAO_ADDRESS constant is not a valid Move account address")
+    }
+
     fn compute_wallet_supply_index(&self) -> Result<BTreeMap<String, u64>> {
         let mut object_balances = BTreeMap::<(AccountAddress, String), u64>::new();
         let mut owners = self.owner_addresses()?.into_iter().collect::<BTreeSet<_>>();
-        owners.insert(
-            AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS)
-                .expect("DAO_ADDRESS constant is valid"),
-        );
+        owners.insert(Self::dao_account_address()?);
 
         for (_, object) in self.query_objects(None, None, None, None, None)? {
             let Ok(struct_tag) = StructTag::from_str(&object.type_) else {
@@ -239,10 +241,7 @@ impl StateManager {
         // a normal account-index entry, so include it explicitly when
         // calculating the native token's wallet-visible supply.
         if token_type == GAS_COIN {
-            owners.insert(
-                AccountAddress::from_hex_literal(kanari_types::address::Address::DAO_ADDRESS)
-                    .expect("DAO_ADDRESS constant is valid"),
-            );
+            owners.insert(Self::dao_account_address()?);
         }
         // Aggregate matching objects during the canonical object pass. Previously this
         // pass only discovered owners and then `resolve_owner_token_balance` rescanned
@@ -382,6 +381,21 @@ impl StateManager {
         Ok(true)
     }
 
+    pub fn repair_cached_native_wallet_overcount(&mut self) -> Result<bool> {
+        let cached_visible = self
+            .global_token_supplies
+            .get(GAS_COIN)
+            .copied()
+            .unwrap_or(0);
+        let ledger_locked_supply = self.object_locked_supply_for_token(GAS_COIN)?;
+        let max_wallet_visible = self.total_supply.saturating_sub(ledger_locked_supply);
+        if cached_visible <= max_wallet_visible {
+            return Ok(false);
+        }
+
+        self.repair_legacy_native_wallet_overcount()
+    }
+
     pub(super) fn load_object_locked_coin_records(&self) -> Result<Vec<ObjectLockedCoinRecord>> {
         Ok(self
             .load_internal(OBJECT_LOCKED_COIN_RECORDS_KEY)?
@@ -418,7 +432,14 @@ impl StateManager {
         let index_version = self
             .load_internal::<u32>(WALLET_SUPPLY_INDEX_VERSION_KEY)?
             .unwrap_or(0);
-        let wallet_visible_supply = if index_version == WALLET_SUPPLY_INDEX_VERSION {
+        let wallet_visible_supply = if token_type == GAS_COIN {
+            // Native KANARI has legacy and fastpath writers. A stale-low cache
+            // must not show fees or transferred coins as "untracked" when the
+            // canonical owner/object index can still account for them. Keep
+            // overcounts visible: do not clamp to total_supply here.
+            let indexed = self.indexed_wallet_supply(&token_type)?;
+            cached_visible.max(indexed)
+        } else if index_version == WALLET_SUPPLY_INDEX_VERSION {
             cached_visible
         } else {
             let indexed = self.indexed_wallet_supply(&token_type)?;
@@ -659,6 +680,7 @@ impl StateManager {
 
         self.capture_supply_changed(&owner_state, &old_balances)
     }
+
     /// Get token decimals for a specific token type
     pub fn get_token_decimals(&self, token_type: &str) -> Result<Option<u8>> {
         self.load_token_metadata_field(b"metadata_decimals:", token_type)
@@ -744,7 +766,7 @@ impl StateManager {
     /// Fast transaction-path validation after the wallet-visible cache has been
     /// reconciled. Full checkpoint/RPC validation still derives balances from
     /// canonical owner/object indexes via `validate_supply_invariants`.
-    pub(super) fn validate_cached_supply_invariants(&self) -> Result<()> {
+    pub fn validate_cached_supply_invariants(&self) -> Result<()> {
         let supply_key = Self::supply_key(GAS_COIN);
         let persisted_native_supply =
             if let Some(cap) = self.load_internal::<TreasuryCap>(&supply_key)? {

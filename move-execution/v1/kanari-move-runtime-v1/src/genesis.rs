@@ -172,6 +172,10 @@ pub fn init_genesis(state: &mut StateManager) -> Result<()> {
     }
 
     log::info!("✓ All framework modules published");
+    runtime
+        .ensure_system_clock(state)
+        .context("Failed to initialize system clock during genesis")?;
+    log::info!("System clock initialized");
     log::info!("=== Genesis initialization complete ===");
 
     // Commit the accumulated genesis overlay to persistent storage.

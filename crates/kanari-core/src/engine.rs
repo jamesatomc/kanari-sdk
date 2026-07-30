@@ -3,9 +3,10 @@
 
 use crate::blockchain::Blockchain;
 use crate::consensus::Checkpoint;
+use crate::file_io::{read_json_file, write_json_pretty_atomically};
 use ahash::AHashMap;
 use anyhow::{Context, Result, ensure};
-use kanari_move_runtime_v1::changeset::{ChangeSet, CreatedObject};
+use kanari_move_runtime_v1::changeset::{ChangeSet, CreatedObject, StateAccessSet};
 use kanari_move_runtime_v1::move_runtime::{EntryFunctionObjectContext, MoveRuntime};
 use kanari_move_runtime_v1::state::StateManager;
 use kanari_move_runtime_v1::storage::persistent_store::PersistentStore;
@@ -16,8 +17,8 @@ use kanari_types::error::KanariUnwrapExt;
 use kanari_types::gas_coin::GAS_COIN;
 
 use kanari_types::transaction::{
-    ObjectChange, ObjectChangeKind, ObjectGraphEdge, ObjectOwnerKind, ObjectRef, SignedTransaction,
-    Transaction, TransactionEffects,
+    ObjectChange, ObjectChangeKind, ObjectOwnerKind, ObjectRef, SignedTransaction, Transaction,
+    TransactionEffects,
 };
 use kanari_types::{GasMeter, GasOperation, effective_gas_price, gas_price_is_valid};
 use log::{error, info};
@@ -29,13 +30,15 @@ use move_core_types::{
 };
 use num_cpus;
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 type ProofCache = LruCache<(u64, usize), (String, Vec<Vec<u8>>)>;
+type RawCheckpointUpdates = Vec<(Vec<u8>, Vec<u8>)>;
+type RawCheckpointDeletes = Vec<Vec<u8>>;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct LegacyCheckpointMetadata {
@@ -78,6 +81,35 @@ fn compatible_protocol_version(manifest: &str, local: &str) -> bool {
 pub const GENESIS_MANIFEST_FORMAT_VERSION: u32 = 1;
 pub const STATE_SCHEMA_VERSION: &str = "canonical-state-root-v1";
 
+/// Returns the canonical representation used for a consensus authority ID.
+///
+/// Configuration files and command-line inputs may omit the `0x` prefix, but
+/// the engine stores and compares authority IDs with it. Keeping this rule in
+/// core means every caller uses the same identity when configuring consensus.
+pub fn normalize_consensus_authority_id(authority_id: impl AsRef<str>) -> String {
+    let authority_id = authority_id.as_ref();
+    if authority_id.starts_with("0x") {
+        authority_id.to_owned()
+    } else {
+        format!("0x{authority_id}")
+    }
+}
+
+/// Decodes a hexadecimal value, accepting an optional `0x` prefix, and
+/// verifies its byte length before the value is used as key material.
+pub fn decode_hex_exact(label: &str, value: &str, expected_len: usize) -> Result<Vec<u8>> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    let bytes =
+        hex::decode(value).map_err(|error| anyhow::anyhow!("Invalid {label} hex: {error}"))?;
+    if bytes.len() != expected_len {
+        anyhow::bail!(
+            "Invalid {label} length: expected {expected_len} bytes, got {}",
+            bytes.len()
+        );
+    }
+    Ok(bytes)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SnapshotEntry {
     pub key: String,
@@ -105,6 +137,8 @@ pub const STATE_SNAPSHOT_FORMAT_VERSION: u32 = 2;
 pub const MAX_DAG_VERTEX_TRANSACTIONS: usize = 512;
 // Vertex JSON/hex encoding can approach 2x the BCS transaction bytes.
 pub const MAX_DAG_VERTEX_TRANSACTION_BYTES: usize = 350 * 1024;
+const DEFAULT_MAX_DAG_VERTEX_TXS_PER_HOT_OBJECT: usize = 64;
+const DEFAULT_MAX_OWNED_FAST_CHECKPOINT_TRANSACTIONS: usize = 65_536;
 pub const MAX_TRANSACTION_BYTES: usize = 256 * 1024;
 pub const MAX_TRANSACTION_GAS_LIMIT: u64 = 10_000_000;
 
@@ -114,7 +148,9 @@ mod mempool;
 mod produce_dag_vertex;
 mod queries;
 mod runtime_guards;
-pub use produce_dag_vertex::{CheckpointProductionInfo, DagEngine, DagProductionPolicy, DagVertex};
+pub use produce_dag_vertex::{
+    CheckpointInfo, CheckpointProductionInfo, DagEngine, DagProductionPolicy, DagVertex,
+};
 pub use runtime_guards::{RuntimeGuardConfig, RuntimeHealthReport};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -147,6 +183,12 @@ pub struct PendingTransactionMetadata {
 pub struct PendingTransactionRecord {
     pub signed_tx: SignedTransaction,
     pub metadata: PendingTransactionMetadata,
+    tx_hash: Vec<u8>,
+    normalized_sender: String,
+    primary_access_key: String,
+    congestion_access_key: String,
+    access_keys: Vec<String>,
+    size_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -157,6 +199,7 @@ pub(crate) struct MempoolState {
     pending_sender_counts: AHashMap<String, u64>,
     pending_access_counts: AHashMap<String, u64>,
     pending_primary_access_counts: AHashMap<String, u64>,
+    pending_congestion_access_counts: AHashMap<String, u64>,
 }
 
 /// Complete blockchain engine with Move VM integration
@@ -346,24 +389,13 @@ impl BlockchainEngine {
             entries_hash: Self::snapshot_entries_hash(&entries)?,
             entries,
         };
-        let bytes = serde_json::to_vec_pretty(&snapshot)?;
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create snapshot directory {}", parent.display())
-            })?;
-        }
-        std::fs::write(path, bytes)
+        write_json_pretty_atomically(path, &snapshot)
             .with_context(|| format!("Failed to write state snapshot {}", path.display()))?;
         Ok(snapshot)
     }
 
     pub fn read_state_snapshot(path: &std::path::Path) -> Result<StateSnapshot> {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("Failed to read state snapshot {}", path.display()))?;
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("Invalid state snapshot {}", path.display()))
+        read_json_file(path).with_context(|| format!("Invalid state snapshot {}", path.display()))
     }
 
     pub fn import_state_snapshot(
@@ -544,41 +576,17 @@ impl BlockchainEngine {
         network: impl Into<String>,
     ) -> Result<()> {
         let manifest = self.genesis_manifest(network)?;
-        let bytes = serde_json::to_vec_pretty(&manifest)?;
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "Failed to create genesis manifest directory {}",
-                    parent.display()
-                )
-            })?;
-        }
-        std::fs::write(path, bytes)
+        write_json_pretty_atomically(path, &manifest)
             .with_context(|| format!("Failed to write genesis manifest {}", path.display()))?;
         Ok(())
     }
 
     pub fn read_genesis_manifest(path: &std::path::Path) -> Result<GenesisManifest> {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("Failed to read genesis manifest {}", path.display()))?;
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("Invalid genesis manifest {}", path.display()))
+        read_json_file(path).with_context(|| format!("Invalid genesis manifest {}", path.display()))
     }
 
     fn is_native_gas_coin_type(object_type: &str) -> bool {
         CoinModule::is_coin_type_for(object_type, GAS_COIN)
-    }
-
-    fn read_coin_balance(data: &[u8]) -> Option<u64> {
-        if data.len() < 40 {
-            return None;
-        }
-
-        let mut amount_bytes = [0u8; 8];
-        amount_bytes.copy_from_slice(&data[32..40]);
-        Some(u64::from_le_bytes(amount_bytes))
     }
 
     fn execute_backend_native_burn(
@@ -619,7 +627,7 @@ impl BlockchainEngine {
             sender_addr.to_hex_literal()
         );
 
-        let object_balance = Self::read_coin_balance(&gas_object.data).with_context(|| {
+        let object_balance = CoinModule::read_balance(&gas_object.data).with_context(|| {
             format!(
                 "Native burn gas object {} has invalid coin bytes",
                 gas_object_ref.object_id
@@ -712,6 +720,31 @@ impl BlockchainEngine {
             .filter(|value| *value > 0)
     }
 
+    fn persist_transaction_hash_index_enabled(store: &PersistentStore) -> bool {
+        if let Ok(value) = std::env::var("KANARI_PERSIST_TX_HASH_INDEX") {
+            return matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
+        }
+
+        // Retention/pruning deletes checkpoint transaction payloads, so keep the
+        // permanent hash index when pruning is configured. In-memory tests also
+        // retain the old behavior. RocksDB production without pruning can use
+        // checkpoint transaction batches plus the in-memory blockchain index on
+        // restart, avoiding 1 write per transaction in the checkpoint critical path.
+        Self::history_retention_checkpoints().is_some() || store.get_db().is_none()
+    }
+
+    fn persist_blockchain_json_snapshot_enabled(store: &PersistentStore) -> bool {
+        if let Ok(value) = std::env::var("KANARI_PERSIST_BLOCKCHAIN_JSON") {
+            return matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
+        }
+
+        // RocksDB production already persists per-checkpoint metadata and tx
+        // batches. Rewriting the whole retained chain snapshot every checkpoint
+        // duplicates large effect/object metadata on the hot path. In-memory
+        // stores keep the legacy behavior for unit tests and simple embedding.
+        store.get_db().is_none()
+    }
+
     fn checkpoint_without_transactions(checkpoint: &Checkpoint) -> Checkpoint {
         let mut stripped = Checkpoint::new(
             checkpoint.sequence,
@@ -728,61 +761,58 @@ impl BlockchainEngine {
         stripped
     }
 
-    pub(crate) fn aggregate_checkpoint_object_changes(
-        transaction_effects: &[TransactionEffects],
-    ) -> Vec<ObjectChange> {
-        transaction_effects
-            .iter()
-            .flat_map(|effects| effects.object_changes.iter().cloned())
-            .collect()
-    }
-
-    pub(crate) fn aggregate_checkpoint_object_graph_edges(
-        transaction_effects: &[TransactionEffects],
-    ) -> Vec<ObjectGraphEdge> {
-        transaction_effects
-            .iter()
-            .flat_map(|effects| effects.causal_edges.iter().cloned())
-            .collect()
-    }
-
     fn persist_checkpoint_transactions(
         store: &PersistentStore,
         checkpoint: &Checkpoint,
     ) -> Result<()> {
-        let metadata_json = serde_json::to_vec(&Self::checkpoint_without_transactions(checkpoint))
-            .context("Failed to encode checkpoint metadata as JSON")?;
+        let (updates, deletes) =
+            Self::checkpoint_persistence_raw_changes(store, checkpoint, false)?;
         store
-            .save(
-                &Self::checkpoint_metadata_json_key(checkpoint.sequence),
-                &metadata_json,
-            )
-            .context("Failed to persist checkpoint metadata")?;
+            .apply_raw_changes(&updates, &deletes)
+            .context("Failed to persist checkpoint transaction metadata")?;
+        Ok(())
+    }
+
+    pub(crate) fn checkpoint_persistence_raw_changes(
+        store: &PersistentStore,
+        checkpoint: &Checkpoint,
+        mark_history_persisted: bool,
+    ) -> Result<(RawCheckpointUpdates, RawCheckpointDeletes)> {
+        let mut updates = RawCheckpointUpdates::new();
+        updates.push((
+            Self::checkpoint_metadata_key(checkpoint.sequence),
+            bcs::to_bytes(&Self::checkpoint_without_transactions(checkpoint))
+                .context("Failed to encode checkpoint metadata")?,
+        ));
+        let deletes = vec![Self::checkpoint_metadata_json_key(checkpoint.sequence)];
 
         if checkpoint.transactions.is_empty() || checkpoint.sequence == 0 {
-            return Ok(());
+            if mark_history_persisted {
+                updates.push((
+                    Self::history_persisted_through_key().to_vec(),
+                    bcs::to_bytes(&checkpoint.sequence)
+                        .context("Failed to encode history persisted marker")?,
+                ));
+            }
+            return Ok((updates, deletes));
         }
 
-        let mut recent_hashes = store
-            .load::<Vec<Vec<u8>>>(Self::recent_transaction_hashes_key())
-            .unwrap_or_default()
-            .unwrap_or_default();
+        let mut recent_hashes = Self::load_recent_transaction_hashes_for_update(store)?;
         let mut recent_set: HashSet<Vec<u8>> = recent_hashes.iter().cloned().collect();
+        let persist_hash_index = Self::persist_transaction_hash_index_enabled(store);
 
         for tx in checkpoint.transactions.iter() {
             let tx_hash = tx.transaction_hash().to_vec();
-            store
-                .save(&Self::transaction_payload_key(&tx_hash), tx)
-                .context("Failed to persist transaction payload")?;
-            store
-                .save(
-                    &Self::transaction_index_key(&tx_hash),
-                    &PersistedTransactionLocation {
+            if persist_hash_index {
+                updates.push((
+                    Self::transaction_index_key(&tx_hash),
+                    bcs::to_bytes(&PersistedTransactionLocation {
                         checkpoint_sequence: checkpoint.sequence,
                         state_root: checkpoint.state_root.clone(),
-                    },
-                )
-                .context("Failed to persist transaction hash index")?;
+                    })
+                    .context("Failed to encode transaction hash index")?,
+                ));
+            }
 
             if recent_set.insert(tx_hash.clone()) {
                 recent_hashes.push(tx_hash);
@@ -793,17 +823,45 @@ impl BlockchainEngine {
             let trim = recent_hashes.len() - MAX_PERSISTED_RECENT_TX_HASHES;
             recent_hashes.drain(0..trim);
         }
-        store
-            .save(Self::recent_transaction_hashes_key(), &recent_hashes)
-            .context("Failed to persist recent transaction index")?;
+        updates.push((
+            Self::recent_transaction_hashes_key().to_vec(),
+            bcs::to_bytes(&recent_hashes).context("Failed to encode recent transaction index")?,
+        ));
+        updates.push((
+            Self::checkpoint_transactions_key(checkpoint.sequence),
+            bcs::to_bytes(&checkpoint.transactions)
+                .context("Failed to encode checkpoint transaction payload")?,
+        ));
+        if mark_history_persisted {
+            updates.push((
+                Self::history_persisted_through_key().to_vec(),
+                bcs::to_bytes(&checkpoint.sequence)
+                    .context("Failed to encode history persisted marker")?,
+            ));
+        }
 
+        Ok((updates, deletes))
+    }
+
+    fn load_recent_transaction_hashes_for_update(store: &PersistentStore) -> Result<Vec<Vec<u8>>> {
         store
-            .save(
-                &Self::checkpoint_transactions_key(checkpoint.sequence),
-                &checkpoint.transactions,
-            )
-            .context("Failed to persist checkpoint transaction payload")?;
-        Ok(())
+            .load::<Vec<Vec<u8>>>(Self::recent_transaction_hashes_key())
+            .context("Failed to load recent transaction index")?
+            .map(|hashes| {
+                hashes
+                    .into_iter()
+                    .map(|hash| {
+                        anyhow::ensure!(
+                            hash.len() == 32,
+                            "Recent transaction index contains invalid hash length {}",
+                            hash.len()
+                        );
+                        Ok(hash)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()
+            .map(|hashes| hashes.unwrap_or_default())
     }
 
     fn load_checkpoint_metadata(store: &PersistentStore, sequence: u64) -> Option<Checkpoint> {
@@ -897,7 +955,17 @@ impl BlockchainEngine {
                 e
             })
             .ok()
-            .flatten()?;
+            .flatten()
+            .or_else(|| {
+                Self::load_checkpoint_transactions(store, location.checkpoint_sequence).and_then(
+                    |transactions| {
+                        transactions
+                            .iter()
+                            .find(|tx| tx.transaction_hash() == tx_hash)
+                            .cloned()
+                    },
+                )
+            })?;
         Some((tx, location))
     }
 
@@ -916,17 +984,23 @@ impl BlockchainEngine {
 
         store.save(Self::history_persisted_through_key(), &chain.height())?;
 
-        let mut slim = chain.clone();
-        for checkpoint in &mut slim.dag_checkpoints {
-            if !checkpoint.transactions.is_empty() {
-                *checkpoint = Self::checkpoint_without_transactions(checkpoint);
+        if Self::persist_blockchain_json_snapshot_enabled(store) {
+            let mut slim = chain.clone();
+            for checkpoint in &mut slim.dag_checkpoints {
+                if !checkpoint.transactions.is_empty() {
+                    *checkpoint = Self::checkpoint_without_transactions(checkpoint);
+                }
             }
+            let blockchain_json = serde_json::to_vec(&slim)
+                .context("Failed to encode blockchain metadata as JSON")?;
+            store
+                .save(Self::blockchain_json_key(), &blockchain_json)
+                .context("Failed to persist blockchain metadata")?;
+        } else {
+            store
+                .delete(Self::blockchain_json_key())
+                .context("Failed to clear stale blockchain JSON snapshot")?;
         }
-        let blockchain_json =
-            serde_json::to_vec(&slim).context("Failed to encode blockchain metadata as JSON")?;
-        store
-            .save(Self::blockchain_json_key(), &blockchain_json)
-            .context("Failed to persist blockchain metadata")?;
         if let Some(retention) = Self::history_retention_checkpoints() {
             Self::prune_transaction_payloads(store, chain.height().saturating_sub(retention))?;
         }
@@ -960,9 +1034,7 @@ impl BlockchainEngine {
         }
 
         if !pruned_hashes.is_empty() {
-            let recent = store
-                .load::<Vec<Vec<u8>>>(Self::recent_transaction_hashes_key())?
-                .unwrap_or_default()
+            let recent = Self::load_recent_transaction_hashes_for_update(store)?
                 .into_iter()
                 .filter(|hash| !pruned_hashes.contains(hash))
                 .collect::<Vec<_>>();
@@ -1060,22 +1132,27 @@ impl BlockchainEngine {
             .and_then(|(_, _, _, effect)| effect.cloned())
     }
 
-    pub(crate) fn is_transaction_committed(&self, tx_hash: &[u8]) -> bool {
+    pub(crate) fn try_is_transaction_committed(&self, tx_hash: &[u8]) -> Result<bool> {
         if self
             .blockchain
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .is_transaction_hash_executed(tx_hash)
         {
-            return true;
+            return Ok(true);
         }
-        self.persistent_store.as_ref().is_some_and(|store| {
-            store
-                .load::<PersistedTransactionLocation>(&Self::transaction_index_key(tx_hash))
-                .ok()
-                .flatten()
-                .is_some()
-        })
+        let Some(store) = self.persistent_store.as_ref() else {
+            return Ok(false);
+        };
+        Ok(store
+            .load::<PersistedTransactionLocation>(&Self::transaction_index_key(tx_hash))
+            .with_context(|| {
+                format!(
+                    "Failed to load committed transaction index for {}",
+                    hex::encode(tx_hash)
+                )
+            })?
+            .is_some())
     }
 
     pub fn list_committed_transactions_from_history<F>(
@@ -1203,10 +1280,6 @@ impl BlockchainEngine {
         })
     }
 
-    pub fn pending_transaction_records_snapshot(&self) -> Vec<PendingTransactionRecord> {
-        self.mempool_read().pending_txs.clone()
-    }
-
     pub fn find_pending_transaction(
         &self,
         transaction_hash: &[u8],
@@ -1237,6 +1310,10 @@ impl BlockchainEngine {
     }
 
     pub fn pending_transactions_snapshot(&self) -> Vec<SignedTransaction> {
+        self.pending_signed_transactions()
+    }
+
+    fn pending_signed_transactions(&self) -> Vec<SignedTransaction> {
         self.mempool_read()
             .pending_txs
             .iter()
@@ -1269,18 +1346,101 @@ impl BlockchainEngine {
         selected
     }
 
-    pub fn pending_conflict_free_transactions_snapshot(&self) -> Vec<SignedTransaction> {
-        let mut transactions = {
-            let mempool = self.mempool_read();
-            if mempool.pending_txs.is_empty() {
-                return Vec::new();
-            }
-            mempool
-                .pending_txs
-                .iter()
-                .map(|record| record.signed_tx.clone())
-                .collect::<Vec<_>>()
-        };
+    fn transaction_lane_rank(tx: &SignedTransaction) -> u8 {
+        let object_inputs = tx.transaction.object_inputs();
+        if object_inputs
+            .iter()
+            .any(|input| matches!(input.owner, Some(ObjectOwnerKind::Shared)))
+        {
+            return 2;
+        }
+        if object_inputs.is_empty() {
+            return 0;
+        }
+        1
+    }
+
+    pub(crate) fn congestion_access_key(tx: &Transaction) -> String {
+        if let Some(input) = tx.object_inputs().into_iter().find(|input| input.mutable) {
+            return format!("object:{}", input.object_ref.object_id);
+        }
+
+        if let Some(input) = tx.object_inputs().into_iter().next() {
+            return format!("object:{}", input.object_ref.object_id);
+        }
+
+        if let Some(payment) = tx
+            .gas_payment()
+            .and_then(|gas_payment| gas_payment.payment_objects.into_iter().next())
+        {
+            return format!("object:{}", payment.object_id);
+        }
+
+        format!("owner:{}", tx.sender())
+    }
+
+    fn dag_hot_object_tx_cap() -> usize {
+        std::env::var("KANARI_DAG_HOT_OBJECT_TX_CAP")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_DAG_VERTEX_TXS_PER_HOT_OBJECT)
+    }
+
+    fn pending_sort_key(tx: &SignedTransaction) -> (u8, String, String, u64, Vec<u8>) {
+        (
+            Self::transaction_lane_rank(tx),
+            tx.transaction.primary_access_key(),
+            tx.transaction.sender_address().to_string(),
+            tx.transaction.nonce(),
+            tx.transaction_hash().to_vec(),
+        )
+    }
+
+    fn dag_lane_aware_selection_enabled() -> bool {
+        !matches!(
+            std::env::var("KANARI_DAG_LANE_AWARE").as_deref(),
+            Ok("0") | Ok("false") | Ok("FALSE") | Ok("no") | Ok("NO")
+        )
+    }
+
+    fn owned_fast_checkpoint_tx_cap() -> usize {
+        std::env::var("KANARI_OWNED_FAST_CHECKPOINT_MAX_TXS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_OWNED_FAST_CHECKPOINT_TRANSACTIONS)
+    }
+
+    fn owned_fastpath_audit_interval() -> Option<u64> {
+        std::env::var("KANARI_OWNED_FASTPATH_AUDIT_INTERVAL")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+    }
+
+    fn owned_fastpath_smt_audit_enabled() -> bool {
+        std::env::var("KANARI_OWNED_FASTPATH_AUDIT_SMT")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    }
+
+    fn is_owned_fast_path_eligible(tx: &SignedTransaction) -> bool {
+        tx.transaction
+            .object_inputs()
+            .iter()
+            .all(|input| !matches!(input.owner, Some(ObjectOwnerKind::Shared)))
+    }
+
+    pub fn pending_owned_fast_path_transactions_snapshot(&self) -> Vec<SignedTransaction> {
+        let mut transactions = self
+            .pending_signed_transactions()
+            .into_iter()
+            .filter(Self::is_owned_fast_path_eligible)
+            .collect::<Vec<_>>();
+        if transactions.is_empty() {
+            return Vec::new();
+        }
         transactions.sort_by(|a, b| {
             a.transaction
                 .primary_access_key()
@@ -1293,25 +1453,65 @@ impl BlockchainEngine {
                 .then_with(|| a.transaction.nonce().cmp(&b.transaction.nonce()))
                 .then_with(|| a.transaction_hash().cmp(b.transaction_hash()))
         });
-        let selected = Self::select_conflict_free_transactions(transactions);
-        let mut total_bytes = 0usize;
-        selected
+        Self::select_conflict_free_transactions(transactions)
             .into_iter()
-            .take(MAX_DAG_VERTEX_TRANSACTIONS)
-            .take_while(|signed_tx| {
-                let Ok(size) = bcs::serialized_size(signed_tx) else {
-                    return false;
-                };
-                let Some(next_total) = total_bytes.checked_add(size) else {
-                    return false;
-                };
-                if next_total > MAX_DAG_VERTEX_TRANSACTION_BYTES {
-                    return false;
-                }
-                total_bytes = next_total;
-                true
-            })
+            .take(Self::owned_fast_checkpoint_tx_cap())
             .collect()
+    }
+
+    pub fn pending_conflict_free_transactions_snapshot(&self) -> Vec<SignedTransaction> {
+        let mut transactions = self.pending_signed_transactions();
+        if transactions.is_empty() {
+            return Vec::new();
+        }
+        if Self::dag_lane_aware_selection_enabled() {
+            transactions.sort_by_cached_key(Self::pending_sort_key);
+        } else {
+            transactions.sort_by(|a, b| {
+                a.transaction
+                    .primary_access_key()
+                    .cmp(&b.transaction.primary_access_key())
+                    .then_with(|| {
+                        a.transaction
+                            .sender_address()
+                            .cmp(b.transaction.sender_address())
+                    })
+                    .then_with(|| a.transaction.nonce().cmp(&b.transaction.nonce()))
+                    .then_with(|| a.transaction_hash().cmp(b.transaction_hash()))
+            });
+        }
+        let selected = Self::select_conflict_free_transactions(transactions);
+        let hot_object_tx_cap = Self::dag_hot_object_tx_cap();
+        let mut hot_object_counts = AHashMap::<String, usize>::new();
+        let mut total_bytes = 0usize;
+        let mut ready = Vec::with_capacity(selected.len().min(MAX_DAG_VERTEX_TRANSACTIONS));
+        for signed_tx in selected {
+            if ready.len() >= MAX_DAG_VERTEX_TRANSACTIONS {
+                break;
+            }
+            let primary_access_key = signed_tx.transaction.primary_access_key();
+            if hot_object_counts
+                .get(&primary_access_key)
+                .copied()
+                .unwrap_or(0)
+                >= hot_object_tx_cap
+            {
+                continue;
+            }
+            let Ok(size) = bcs::serialized_size(&signed_tx) else {
+                break;
+            };
+            let Some(next_total) = total_bytes.checked_add(size) else {
+                break;
+            };
+            if next_total > MAX_DAG_VERTEX_TRANSACTION_BYTES {
+                break;
+            }
+            total_bytes = next_total;
+            *hot_object_counts.entry(primary_access_key).or_insert(0) += 1;
+            ready.push(signed_tx);
+        }
+        ready
     }
 
     pub fn pending_transaction_len(&self) -> usize {
@@ -1328,8 +1528,10 @@ impl BlockchainEngine {
         &self,
         state: &StateManager,
         owner_addr: &AccountAddress,
-    ) -> Vec<ObjectInfo> {
-        let mut unique_ids = state.get_owned_objects(owner_addr).unwrap_or_default();
+    ) -> Result<Vec<ObjectInfo>> {
+        let mut unique_ids = state
+            .get_owned_objects(owner_addr)
+            .with_context(|| format!("Failed to load owned-object index for {owner_addr:#x}"))?;
         unique_ids.sort();
         unique_ids.dedup();
 
@@ -1337,38 +1539,37 @@ impl BlockchainEngine {
         let mut others = Vec::new();
 
         for id in unique_ids {
-            if let Ok(Some(obj)) = state.get_object(&id) {
-                let digest = format!("0x{}", hex::encode(blake3::hash(&obj.data).as_bytes()));
-                let info = ObjectInfo {
-                    id: id.clone(),
-                    owner: format!("{:#x}", obj.owner),
-                    owner_kind: obj.owner_kind.clone(),
-                    type_: obj.type_.clone(),
-                    data: obj.data.clone(),
-                    version: obj.version,
-                    digest: Some(digest),
-                };
+            let obj = state
+                .get_object(&id)
+                .with_context(|| format!("Failed to load indexed object {id}"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Owned-object index references missing object {id}")
+                })?;
+            let coin_amount = if obj.type_.contains("::coin::Coin<") && obj.data.len() >= 40 {
+                let mut arr = [0u8; 8];
+                arr.copy_from_slice(&obj.data[32..40]);
+                Some(u64::from_le_bytes(arr))
+            } else {
+                None
+            };
+            let info = Self::object_info_from_created_object(id.clone(), obj);
 
-                if obj.type_.contains("::coin::Coin<") && obj.data.len() >= 40 {
-                    let mut arr = [0u8; 8];
-                    arr.copy_from_slice(&obj.data[32..40]);
-                    let amount = u64::from_le_bytes(arr);
-                    if amount > 0 {
-                        coins.push((amount, info));
-                        continue;
-                    }
-                }
-                others.push(info);
+            if let Some(amount) = coin_amount
+                && amount > 0
+            {
+                coins.push((amount, info));
+                continue;
             }
+            others.push(info);
         }
 
         coins.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
         others.sort_by(|a, b| a.id.cmp(&b.id));
-        coins
+        Ok(coins
             .into_iter()
             .map(|(_, info)| info)
             .chain(others)
-            .collect()
+            .collect())
     }
 
     #[cfg(test)]
@@ -1408,6 +1609,364 @@ impl BlockchainEngine {
         )
     }
 
+    fn can_trust_owned_native_conflict_keys(
+        transactions: &[SignedTransaction],
+        changesets: &[ChangeSet],
+    ) -> bool {
+        if transactions.len() != changesets.len() {
+            return false;
+        }
+
+        let mut reserved_keys = HashSet::new();
+        for signed_tx in transactions {
+            if !Self::is_owned_fast_path_eligible(signed_tx) {
+                return false;
+            }
+
+            let mut conflict_keys = signed_tx.transaction.get_conflict_keys();
+            conflict_keys.sort();
+            conflict_keys.dedup();
+            if conflict_keys.is_empty()
+                || conflict_keys
+                    .iter()
+                    .any(|conflict_key| !reserved_keys.insert(conflict_key.clone()))
+            {
+                return false;
+            }
+        }
+
+        changesets.iter().all(|changeset| {
+            changeset.success
+                && changeset.events.is_empty()
+                && changeset.treasuries.is_empty()
+                && changeset.nft_caps.is_empty()
+                && changeset.token_balance_sets.is_empty()
+                && changeset.shared_inputs.is_empty()
+                && changeset.immutable_inputs.is_empty()
+                && changeset.deleted_objects.is_empty()
+                && changeset.added_dynamic_fields.is_empty()
+                && changeset.removed_dynamic_fields.is_empty()
+                && changeset.move_writes.is_empty()
+                && changeset.resolver_reads.is_empty()
+        })
+    }
+
+    fn dependency_apply_batch_cap() -> usize {
+        std::env::var("KANARI_DEPENDENCY_APPLY_BATCH_CAP")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            // Keep the default above the current owned-fastpath checkpoint cap.
+            // Splitting a purely disjoint owned-object workload too eagerly can
+            // force repeated state-index and balance reconciliation passes. The
+            // scheduler still cuts a new batch on real dependencies, and ops can
+            // lower this cap explicitly for memory-bound workloads.
+            .unwrap_or(65_536)
+    }
+
+    fn dependency_apply_scheduler_enabled() -> bool {
+        !matches!(
+            std::env::var("KANARI_DEPENDENCY_APPLY_SCHEDULER").as_deref(),
+            Ok("0") | Ok("false") | Ok("FALSE") | Ok("no") | Ok("NO")
+        )
+    }
+
+    fn extend_access_set(target: &mut StateAccessSet, source: &StateAccessSet) {
+        target.reads.extend(source.reads.iter().cloned());
+        target.writes.extend(source.writes.iter().cloned());
+    }
+
+    fn schedule_dependency_aware_apply_batches(changesets: &[ChangeSet]) -> Vec<Vec<usize>> {
+        if changesets.is_empty() {
+            return Vec::new();
+        }
+        if !Self::dependency_apply_scheduler_enabled() {
+            return vec![(0..changesets.len()).collect()];
+        }
+
+        let batch_cap = Self::dependency_apply_batch_cap();
+        let mut batches = Vec::new();
+        let mut current = Vec::with_capacity(batch_cap.min(changesets.len()));
+        let mut current_access = StateAccessSet::default();
+
+        for (index, changeset) in changesets.iter().enumerate() {
+            let access = changeset.deterministic_access_set();
+            let batch_full = current.len() >= batch_cap;
+            let has_dependency = !current.is_empty() && access.conflicts_with(&current_access);
+            if !current.is_empty() && (batch_full || has_dependency) {
+                batches.push(std::mem::take(&mut current));
+                current_access = StateAccessSet::default();
+            }
+
+            Self::extend_access_set(&mut current_access, &access);
+            current.push(index);
+        }
+
+        if !current.is_empty() {
+            batches.push(current);
+        }
+        batches
+    }
+
+    fn apply_changeset_batch_without_supply_validation(
+        state: &mut StateManager,
+        changesets: &[ChangeSet],
+        indices: &[usize],
+    ) -> Result<()> {
+        let profile = matches!(
+            std::env::var("KANARI_DEPENDENCY_APPLY_PROFILE").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
+        let started_at = std::time::Instant::now();
+        match indices {
+            [] => Ok(()),
+            [index] => state.apply_changeset_without_supply_validation(&changesets[*index]),
+            _ => {
+                let mut merged = ChangeSet::new();
+                for index in indices {
+                    merged.merge_from(&changesets[*index]);
+                }
+                let merged_at = std::time::Instant::now();
+                let result = state.apply_changeset_without_supply_validation(&merged);
+                let applied_at = std::time::Instant::now();
+                if profile {
+                    eprintln!(
+                        "dependency apply batch profile: txs={} merge={:.6}s state_apply={:.6}s total={:.6}s",
+                        indices.len(),
+                        merged_at.duration_since(started_at).as_secs_f64(),
+                        applied_at.duration_since(merged_at).as_secs_f64(),
+                        applied_at.duration_since(started_at).as_secs_f64(),
+                    );
+                }
+                result
+            }
+        }
+    }
+
+    fn apply_dependency_aware_changesets_without_supply_validation(
+        state: &mut StateManager,
+        changesets: &[ChangeSet],
+    ) -> Result<(usize, usize)> {
+        let profile = matches!(
+            std::env::var("KANARI_DEPENDENCY_APPLY_PROFILE").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
+        let started_at = std::time::Instant::now();
+        let batches = Self::schedule_dependency_aware_apply_batches(changesets);
+        let scheduled_at = std::time::Instant::now();
+        let batch_count = batches.len();
+        for batch in &batches {
+            Self::apply_changeset_batch_without_supply_validation(state, changesets, batch)?;
+        }
+        let applied_at = std::time::Instant::now();
+        if profile {
+            eprintln!(
+                "dependency apply profile: changesets={} batches={} schedule={:.6}s apply_batches={:.6}s total={:.6}s",
+                changesets.len(),
+                batch_count,
+                scheduled_at.duration_since(started_at).as_secs_f64(),
+                applied_at.duration_since(scheduled_at).as_secs_f64(),
+                applied_at.duration_since(started_at).as_secs_f64(),
+            );
+        }
+        Ok((batch_count, changesets.len()))
+    }
+
+    fn apply_single_changeset_batch_without_supply_validation(
+        state: &mut StateManager,
+        changesets: &[ChangeSet],
+    ) -> Result<(usize, usize)> {
+        let indices = (0..changesets.len()).collect::<Vec<_>>();
+        Self::apply_changeset_batch_without_supply_validation(state, changesets, &indices)?;
+        Ok((usize::from(!changesets.is_empty()), changesets.len()))
+    }
+
+    pub(crate) fn execute_conflict_free_transactions_parallel_with_effects(
+        &self,
+        transactions: Vec<SignedTransaction>,
+        state_arc: &Arc<RwLock<StateManager>>,
+        timestamp: Option<u64>,
+        persist_objects: bool,
+    ) -> Result<(usize, usize, Vec<TransactionEffects>)> {
+        let profile = matches!(
+            std::env::var("KANARI_CONFLICT_FREE_EXECUTOR_PROFILE").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
+        let started_at = std::time::Instant::now();
+        if transactions.is_empty() {
+            return Ok((0, 0, Vec::new()));
+        }
+        let (access_epoch, state_overlay) = {
+            let state = state_arc
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (
+                state.access_epoch(),
+                (!state.overlay.is_empty()).then(|| Arc::new(state.overlay.clone())),
+            )
+        };
+        let results = transactions
+            .par_iter()
+            .enumerate()
+            .map(|(i, signed_tx)| {
+                let runtime = &self.runtime_pool[i % self.runtime_pool.len()];
+                self.execute_transaction_with_runtime_overlay(
+                    &signed_tx.transaction,
+                    runtime,
+                    state_arc,
+                    false,
+                    timestamp,
+                    persist_objects,
+                    state_overlay.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let executed_at = std::time::Instant::now();
+
+        if results.iter().any(Result::is_err) {
+            return self.execute_tx_waves_deterministic_parallel_with_effects(
+                transactions,
+                state_arc,
+                timestamp,
+                persist_objects,
+            );
+        }
+
+        let changesets = results
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .context("Failed to collect conflict-free execution results")?;
+        let trusted_owned_native_conflict_keys =
+            Self::can_trust_owned_native_conflict_keys(&transactions, &changesets);
+        if !trusted_owned_native_conflict_keys {
+            let mut reserved_reads = BTreeSet::new();
+            let mut reserved_writes = BTreeSet::new();
+            for changeset in &changesets {
+                let access_set = changeset.deterministic_access_set();
+                let has_conflict = access_set
+                    .writes
+                    .iter()
+                    .any(|key| reserved_reads.contains(key) || reserved_writes.contains(key))
+                    || access_set
+                        .reads
+                        .iter()
+                        .any(|key| reserved_writes.contains(key));
+                if has_conflict {
+                    return self.execute_tx_waves_deterministic_parallel_with_effects(
+                        transactions,
+                        state_arc,
+                        timestamp,
+                        persist_objects,
+                    );
+                }
+                reserved_reads.extend(access_set.reads);
+                reserved_writes.extend(access_set.writes);
+            }
+        }
+        let access_checked_at = std::time::Instant::now();
+
+        let mut state_write = state_arc
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state_write.access_epoch() != access_epoch {
+            return self.execute_tx_waves_deterministic_parallel_with_effects(
+                transactions,
+                state_arc,
+                timestamp,
+                persist_objects,
+            );
+        }
+
+        let apply_started_at = std::time::Instant::now();
+        let mut candidate = state_write.clone();
+        let candidate_cloned_at = std::time::Instant::now();
+        let apply_result = if trusted_owned_native_conflict_keys {
+            match candidate.try_apply_owned_native_burn_batch_without_supply_validation(&changesets)
+            {
+                Ok(true) => Ok((usize::from(!changesets.is_empty()), changesets.len())),
+                Ok(false) => Self::apply_single_changeset_batch_without_supply_validation(
+                    &mut candidate,
+                    &changesets,
+                ),
+                Err(error) => Err(error),
+            }
+        } else {
+            Self::apply_dependency_aware_changesets_without_supply_validation(
+                &mut candidate,
+                &changesets,
+            )
+        };
+        let merged_applied_at = std::time::Instant::now();
+        let apply_batches = apply_result
+            .as_ref()
+            .map(|(batches, _)| *batches)
+            .unwrap_or(0);
+        let validate_result = if trusted_owned_native_conflict_keys {
+            let validate_owned_fastpath = std::env::var("KANARI_VALIDATE_OWNED_FASTPATH_SUPPLY")
+                .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+                .unwrap_or(false);
+            if validate_owned_fastpath {
+                apply_result
+                    .map(|_| ())
+                    .and_then(|_| candidate.repair_cached_native_wallet_overcount())
+                    .map(|_| ())
+                    .and_then(|_| candidate.validate_cached_supply_invariants())
+            } else {
+                apply_result.map(|_| ())
+            }
+        } else {
+            apply_result
+                .map(|_| ())
+                .and_then(|_| candidate.repair_legacy_native_wallet_overcount())
+                .and_then(|_| candidate.validate_supply_invariants())
+        };
+        let validated_at = std::time::Instant::now();
+        if validate_result.is_err() {
+            drop(state_write);
+            return self.execute_tx_waves_deterministic_parallel_with_effects(
+                transactions,
+                state_arc,
+                timestamp,
+                persist_objects,
+            );
+        }
+        *state_write = candidate;
+        drop(state_write);
+        let applied_at = std::time::Instant::now();
+
+        let mut executed = 0usize;
+        let mut failed = 0usize;
+        let mut effects = Vec::with_capacity(changesets.len());
+        for (signed_tx, changeset) in transactions.iter().zip(changesets) {
+            if changeset.success {
+                executed += 1;
+            } else {
+                failed += 1;
+            }
+            effects.push(changeset.effects(signed_tx.transaction.gas_payment()));
+        }
+        let effects_at = std::time::Instant::now();
+        if profile {
+            eprintln!(
+                "conflict-free executor profile: txs={} apply_batches={} execute_parallel={:.6}s access={:.6}s clone_state={:.6}s apply={:.6}s validate={:.6}s effects={:.6}s total={:.6}s",
+                transactions.len(),
+                apply_batches,
+                executed_at.duration_since(started_at).as_secs_f64(),
+                access_checked_at.duration_since(executed_at).as_secs_f64(),
+                candidate_cloned_at
+                    .duration_since(apply_started_at)
+                    .as_secs_f64(),
+                merged_applied_at
+                    .duration_since(candidate_cloned_at)
+                    .as_secs_f64(),
+                validated_at.duration_since(merged_applied_at).as_secs_f64(),
+                effects_at.duration_since(applied_at).as_secs_f64(),
+                effects_at.duration_since(started_at).as_secs_f64(),
+            );
+        }
+        Ok((executed, failed, effects))
+    }
+
     fn execute_tx_waves_parallel_inner(
         &self,
         transactions: Vec<SignedTransaction>,
@@ -1417,6 +1976,11 @@ impl BlockchainEngine {
         serial_execution: bool,
         fail_hard: bool,
     ) -> Result<(usize, usize, Vec<TransactionEffects>)> {
+        let profile = matches!(
+            std::env::var("KANARI_EXECUTION_WAVES_PROFILE").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
+        let execution_started_at = std::time::Instant::now();
         let mut executed_count = 0;
         let mut failed_count = 0;
         let mut transaction_effects = Vec::with_capacity(transactions.len());
@@ -1527,6 +2091,10 @@ impl BlockchainEngine {
         let mut retry_epoch_txs = 0usize;
         let mut retry_apply_txs = 0usize;
         let mut retry_supply_txs = 0usize;
+        let mut result_secs = 0.0f64;
+        let mut conflict_secs = 0.0f64;
+        let mut apply_secs = 0.0f64;
+        let mut effects_secs = 0.0f64;
 
         if has_module_publish {
             // Keep speculative publish execution deterministic across authorities.
@@ -1537,6 +2105,7 @@ impl BlockchainEngine {
         }
 
         for wave in waves {
+            let wave_started_at = std::time::Instant::now();
             let (access_epoch, wave_overlay) = match state_arc.read() {
                 Ok(state) => (
                     state.access_epoch(),
@@ -1581,6 +2150,8 @@ impl BlockchainEngine {
                     })
                     .collect()
             };
+            let results_at = std::time::Instant::now();
+            result_secs += results_at.duration_since(wave_started_at).as_secs_f64();
 
             let access_sets = results
                 .iter()
@@ -1610,6 +2181,8 @@ impl BlockchainEngine {
                     break;
                 }
             }
+            let conflicts_at = std::time::Instant::now();
+            conflict_secs += conflicts_at.duration_since(results_at).as_secs_f64();
 
             if !retry_serial {
                 let mut state_write = match state_arc.write() {
@@ -1622,22 +2195,34 @@ impl BlockchainEngine {
                 }
 
                 if !retry_serial {
-                    // Apply the whole conflict-free wave to a candidate. The live state
-                    // changes exactly once, so a partial wave is never observable.
+                    // Apply the conflict-free wave to a candidate through deterministic
+                    // dependency-aware batches. The live state changes exactly once, so
+                    // a partial wave is never observable, while large owned-object waves
+                    // avoid constructing one giant ChangeSet clone.
                     let mut candidate = state_write.clone();
-                    for result in &results {
-                        let cs = result
-                            .as_ref()
-                            .expect("checked successful speculative result");
-                        if let Err(error) = candidate.apply_changeset_without_supply_validation(cs)
-                        {
+                    let mut wave_changesets = Vec::with_capacity(results.len());
+                    for result in results.iter() {
+                        let Ok(cs) = result else {
                             log::warn!(
-                                "Speculative wave apply rejected; retrying serially: {error}"
+                                "Speculative wave had an unexpected failed result; retrying serially"
                             );
-                            retry_reason = Some("apply_rejected");
+                            retry_reason = Some("execution_error");
                             retry_serial = true;
                             break;
-                        }
+                        };
+                        wave_changesets.push(cs.clone());
+                    }
+                    if !retry_serial
+                        && let Err(error) =
+                            Self::apply_dependency_aware_changesets_without_supply_validation(
+                                &mut candidate,
+                                &wave_changesets,
+                            )
+                            .map(|_| ())
+                    {
+                        log::warn!("Speculative wave apply rejected; retrying serially: {error}");
+                        retry_reason = Some("apply_rejected");
+                        retry_serial = true;
                     }
                     if !retry_serial {
                         if let Err(error) = candidate
@@ -1655,15 +2240,24 @@ impl BlockchainEngine {
                     }
                 }
             }
+            let applied_at = std::time::Instant::now();
+            apply_secs += applied_at.duration_since(conflicts_at).as_secs_f64();
 
             if !retry_serial {
                 speculative_committed_waves += 1;
                 speculative_committed_txs += wave.len();
                 for (signed_tx, result) in wave.iter().zip(&results) {
-                    let cs = result.as_ref().expect("validated speculative result");
+                    let cs = result.as_ref().map_err(|error| {
+                        anyhow::anyhow!(
+                            "Speculative wave committed with an unexpected failed result: {error}"
+                        )
+                    })?;
                     transaction_effects.push(cs.effects(signed_tx.transaction.gas_payment()));
                     executed_count += 1;
                 }
+                effects_secs += std::time::Instant::now()
+                    .duration_since(applied_at)
+                    .as_secs_f64();
                 continue;
             }
 
@@ -1755,6 +2349,21 @@ impl BlockchainEngine {
                 retry_supply_txs,
                 executed_count,
                 failed_count
+            );
+        }
+        if profile {
+            let total_secs = execution_started_at.elapsed().as_secs_f64();
+            eprintln!(
+                "execution waves profile: waves={} txs={} results={:.6}s conflicts={:.6}s apply_validate={:.6}s effects={:.6}s total={:.6}s speculative_txs={} serial_retry_txs={}",
+                wave_count,
+                executed_count + failed_count,
+                result_secs,
+                conflict_secs,
+                apply_secs,
+                effects_secs,
+                total_secs,
+                speculative_committed_txs,
+                serial_retry_txs,
             );
         }
 
@@ -2549,8 +3158,145 @@ impl BlockchainEngine {
     }
 
     pub fn produce_checkpoint(&self) -> Result<CheckpointProductionInfo> {
+        if self.authorities.len() <= 1 {
+            let started_at = std::time::Instant::now();
+            let transactions = self.pending_owned_fast_path_transactions_snapshot();
+            let selected_at = std::time::Instant::now();
+            if !transactions.is_empty() {
+                return self.produce_owned_fast_checkpoint_from_selection(
+                    transactions,
+                    started_at,
+                    selected_at,
+                );
+            }
+        }
         let dag_engine = self.dag_engine_instance()?;
         dag_engine.produce_vertex()
+    }
+
+    pub fn produce_owned_fast_checkpoint(&self) -> Result<CheckpointProductionInfo> {
+        let started_at = std::time::Instant::now();
+        let transactions = self.pending_owned_fast_path_transactions_snapshot();
+        let selected_at = std::time::Instant::now();
+        self.produce_owned_fast_checkpoint_from_selection(transactions, started_at, selected_at)
+    }
+
+    fn produce_owned_fast_checkpoint_from_selection(
+        &self,
+        transactions: Vec<SignedTransaction>,
+        started_at: std::time::Instant,
+        selected_at: std::time::Instant,
+    ) -> Result<CheckpointProductionInfo> {
+        let profile = matches!(
+            std::env::var("KANARI_OWNED_FASTPATH_PROFILE").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+        );
+        if transactions.is_empty() {
+            return Ok(CheckpointProductionInfo {
+                vertex_id: "owned-fastpath-empty".to_string(),
+                round: 0,
+                tx_count: 0,
+                executed: 0,
+                failed: 0,
+                events: Vec::new(),
+                checkpoint: None,
+                vertex: None,
+            });
+        }
+
+        let (sequence, prev_hash, timestamp) = {
+            let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
+            (
+                chain.latest_checkpoint().sequence.saturating_add(1),
+                chain.latest_checkpoint().hash()?,
+                chain
+                    .latest_checkpoint()
+                    .timestamp
+                    .saturating_add(1)
+                    .max(chain.height().saturating_add(1)),
+            )
+        };
+        let mut checkpoint = Checkpoint::new(
+            sequence,
+            Vec::new(),
+            transactions,
+            Vec::new(),
+            timestamp,
+            prev_hash,
+        );
+        let prepared = self.prepare_conflict_free_checkpoint_state(&checkpoint)?;
+        let prepared_at = std::time::Instant::now();
+        checkpoint.state_root = prepared.state_root;
+        checkpoint.transaction_effects = prepared.effects.into();
+        let aggregated_at = std::time::Instant::now();
+
+        let executed = checkpoint
+            .transaction_effects
+            .iter()
+            .filter(|effects| effects.status == "success")
+            .count();
+        let failed = checkpoint
+            .transaction_effects
+            .len()
+            .saturating_sub(executed);
+        let tx_count = checkpoint.transactions.len();
+        let checkpoint_info = CheckpointInfo {
+            sequence: checkpoint.sequence,
+            vertex_count: checkpoint.vertices.len(),
+            tx_count,
+        };
+
+        self.apply_prepared_checkpoint(
+            checkpoint,
+            prepared.state,
+            prepared.smt_changes,
+            prepared.transactions,
+            false,
+        )?;
+        self.maybe_audit_owned_fastpath_checkpoint(checkpoint_info.sequence)?;
+        let applied_at = std::time::Instant::now();
+        if profile {
+            eprintln!(
+                "owned-fastpath profile: txs={} select={:.6}s prepare={:.6}s aggregate={:.6}s apply={:.6}s total={:.6}s",
+                tx_count,
+                selected_at.duration_since(started_at).as_secs_f64(),
+                prepared_at.duration_since(selected_at).as_secs_f64(),
+                aggregated_at.duration_since(prepared_at).as_secs_f64(),
+                applied_at.duration_since(aggregated_at).as_secs_f64(),
+                applied_at.duration_since(started_at).as_secs_f64(),
+            );
+        }
+
+        Ok(CheckpointProductionInfo {
+            vertex_id: format!("owned-fastpath:{}", checkpoint_info.sequence),
+            round: checkpoint_info.sequence,
+            tx_count,
+            executed,
+            failed,
+            events: Vec::new(),
+            checkpoint: Some(checkpoint_info),
+            vertex: None,
+        })
+    }
+
+    fn maybe_audit_owned_fastpath_checkpoint(&self, sequence: u64) -> Result<()> {
+        let Some(interval) = Self::owned_fastpath_audit_interval() else {
+            return Ok(());
+        };
+        if !sequence.is_multiple_of(interval) {
+            return Ok(());
+        }
+
+        let state = self.state_read();
+        state
+            .validate_cached_supply_invariants()
+            .context("Owned-fastpath periodic cached supply audit failed")?;
+        if Self::owned_fastpath_smt_audit_enabled() {
+            state
+                .validate_smt_consistency()
+                .context("Owned-fastpath periodic SMT audit failed")?;
+        }
+        Ok(())
     }
 
     pub fn dag_production_policy(&self) -> Result<DagProductionPolicy> {
@@ -2560,6 +3306,21 @@ impl BlockchainEngine {
 
     pub fn latest_own_dag_vertices(&self, limit: usize) -> Result<Vec<DagVertex>> {
         self.dag_engine_instance()?.latest_own_vertices(limit)
+    }
+
+    pub fn dag_vertices_through_round_for_sync(
+        &self,
+        target_round: u64,
+        limit: usize,
+    ) -> Result<Vec<DagVertex>> {
+        self.dag_engine_instance()?
+            .vertices_through_round_for_sync(target_round, limit)
+    }
+
+    pub fn dag_missing_parent_rounds_for_sync(&self, vertices: &[DagVertex]) -> Result<Vec<u64>> {
+        Ok(self
+            .dag_engine_instance()?
+            .missing_parent_rounds_for_sync(vertices))
     }
 
     pub fn dag_vertices_for_checkpoint_sync(
@@ -2593,15 +3354,11 @@ impl BlockchainEngine {
     }
 
     pub fn set_authorities(&mut self, authority_id: String, authorities: Vec<String>) {
-        fn normalize(s: String) -> String {
-            if s.starts_with("0x") {
-                s
-            } else {
-                format!("0x{}", s)
-            }
-        }
-        self.authority_id = normalize(authority_id);
-        self.authorities = authorities.into_iter().map(normalize).collect();
+        self.authority_id = normalize_consensus_authority_id(authority_id);
+        self.authorities = authorities
+            .into_iter()
+            .map(normalize_consensus_authority_id)
+            .collect();
         self.consensus_signing_key = None;
         self.consensus_public_keys.clear();
         match self.dag_engine.write() {
@@ -2626,6 +3383,10 @@ impl BlockchainEngine {
         local_signing_key: ed25519_dalek::SigningKey,
         authority_public_keys: BTreeMap<String, Vec<u8>>,
     ) -> Result<()> {
+        let authority_public_keys: BTreeMap<String, Vec<u8>> = authority_public_keys
+            .into_iter()
+            .map(|(authority, key)| (normalize_consensus_authority_id(authority), key))
+            .collect();
         let local_public_key = local_signing_key.verifying_key().to_bytes().to_vec();
         let expected_public_key =
             authority_public_keys

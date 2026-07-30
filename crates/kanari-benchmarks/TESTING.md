@@ -85,10 +85,11 @@ Important fields:
 - `executed`: transactions that completed successfully
 - `failed`: transactions that failed in the selected mode
 - `tx_count`: transactions included in the measured path
-- `duration_secs`: measured benchmark window
-- In `production` mode, this is checkpoint production time. `submit_secs` is reported separately.
-- `submit_secs`: time spent in batch mempool submission
-- `produce_secs`: time spent in block/DAG production
+- `duration_secs`: measured benchmark window. In `production` and `owned-fastpath`
+  mode this is `submit_secs + produce_secs` so long chunked runs report honest
+  wall-clock throughput.
+- `submit_secs`: total time spent submitting every chunk into the mempool
+- `produce_secs`: time spent in block/DAG/checkpoint production, excluding submit time
 - `tps`: `tx_count / duration_secs`
 - `target_tps`: configured TPS threshold, when set
 - `target_status`: `pass` or `fail`, when a threshold is set

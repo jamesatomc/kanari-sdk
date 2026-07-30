@@ -199,9 +199,7 @@ pub enum ObjectOwnerKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectRef {
     pub object_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
 }
 
@@ -222,7 +220,6 @@ impl ObjectRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectInput {
     pub object_ref: ObjectRef,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<ObjectOwnerKind>,
     pub mutable: bool,
 }
@@ -284,15 +281,10 @@ pub struct ObjectGraphEdge {
 pub struct ObjectChange {
     pub change_type: ObjectChangeKind,
     pub object_ref: ObjectRef,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_object_ref: Option<ObjectRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<ObjectOwnerKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_owner: Option<ObjectOwnerKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_version: Option<u64>,
 }
 
@@ -300,28 +292,26 @@ pub struct ObjectChange {
 pub struct TransactionEffects {
     pub status: String,
     pub gas_used: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub gas_payment: Option<GasPayment>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub input_objects: Vec<ObjectRef>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub shared_inputs: Vec<ObjectRef>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub immutable_inputs: Vec<ObjectRef>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub gas_object_refs: Vec<ObjectRef>,
     pub object_changes: Vec<ObjectChange>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub created: Vec<ObjectChange>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub mutated: Vec<ObjectChange>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub deleted: Vec<ObjectChange>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub transferred: Vec<ObjectChange>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[serde(default)]
     pub causal_edges: Vec<ObjectGraphEdge>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
 }
 
@@ -1100,5 +1090,37 @@ mod tests {
         };
 
         assert_eq!(tx.object_access_keys(), vec!["object:0x42".to_string()]);
+    }
+
+    #[test]
+    fn bcs_round_trips_optional_object_metadata() {
+        let object_ref = ObjectRef::new("0x42", None, None);
+        let bytes = bcs::to_bytes(&object_ref).unwrap();
+        assert_eq!(bcs::from_bytes::<ObjectRef>(&bytes).unwrap(), object_ref);
+    }
+
+    #[test]
+    fn bcs_round_trips_sparse_transaction_effects() {
+        let effects = TransactionEffects {
+            status: "success".to_string(),
+            gas_used: 0,
+            gas_payment: None,
+            input_objects: Vec::new(),
+            shared_inputs: Vec::new(),
+            immutable_inputs: Vec::new(),
+            gas_object_refs: Vec::new(),
+            object_changes: Vec::new(),
+            created: Vec::new(),
+            mutated: Vec::new(),
+            deleted: Vec::new(),
+            transferred: Vec::new(),
+            causal_edges: Vec::new(),
+            error_message: None,
+        };
+        let bytes = bcs::to_bytes(&effects).unwrap();
+        assert_eq!(
+            bcs::from_bytes::<TransactionEffects>(&bytes).unwrap(),
+            effects
+        );
     }
 }

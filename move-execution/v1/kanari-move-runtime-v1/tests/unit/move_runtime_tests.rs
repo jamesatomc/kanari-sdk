@@ -519,16 +519,35 @@ fn create_test_package(
     let package_dir = dir.keep();
     fs::create_dir_all(package_dir.join("sources"))?;
 
-    let dependency_path =
-        Path::new("D:/kanari-sdk/crates/kanari-frameworks/packages/kanari-system");
+    let dependency_path = kanari_system_package_path()?;
     let manifest = format!(
         "[package]\nname = \"{package_name}\"\n\n[dependencies]\nKanariSystem = {{ local = \"{}\" }}\n\n[addresses]\ntester = \"{tester_addr}\"\n",
-        dependency_path.display(),
+        dependency_path,
     );
     fs::write(package_dir.join("Move.toml"), manifest)?;
     fs::write(package_dir.join("sources").join(module_filename), source)?;
 
     Ok(package_dir)
+}
+
+fn kanari_system_package_path() -> Result<String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let package = manifest_dir.join("../../../crates/kanari-frameworks/packages/kanari-system");
+    let canonical = package.canonicalize().with_context(|| {
+        format!(
+            "resolve KanariSystem package path from {}",
+            package.display()
+        )
+    })?;
+    Ok(move_manifest_local_path(&canonical))
+}
+
+fn move_manifest_local_path(path: &Path) -> String {
+    let normalized = path.display().to_string().replace('\\', "/");
+    normalized
+        .strip_prefix("//?/")
+        .unwrap_or(&normalized)
+        .to_string()
 }
 
 fn compile_test_module(package_dir: &Path) -> Result<(ModuleId, Vec<u8>)> {

@@ -160,23 +160,6 @@ fn normalize_addr(s: &str) -> String {
         .unwrap_or_else(|_| s.trim_start_matches("0x").to_lowercase())
 }
 
-fn read_coin_balance(data: &[u8]) -> Option<u64> {
-    if data.len() < 40 {
-        return None;
-    }
-
-    let mut amount_bytes = [0u8; 8];
-    amount_bytes.copy_from_slice(&data[32..40]);
-    Some(u64::from_le_bytes(amount_bytes))
-}
-
-fn normalize_token_type(token: &str) -> String {
-    if let Ok(TypeTag::Struct(st)) = TypeTag::from_str(token) {
-        return format!("{}", st);
-    }
-    token.to_string()
-}
-
 fn fresh_nonce(request_id: u64, nonce: Option<u64>) -> anyhow::Result<u64> {
     if let Some(nonce) = nonce {
         anyhow::ensure!(nonce != 0, "nonce must be non-zero");
@@ -211,7 +194,9 @@ fn coin_token_type_from_object_type(object_type: &str) -> Option<String> {
     {
         let outer = &object_type[..start];
         if outer.ends_with("::coin::Coin") || outer.ends_with("::coin::coin::Coin") {
-            return Some(normalize_token_type(&object_type[start + 1..end]));
+            return Some(CoinModule::normalize_token_type(
+                &object_type[start + 1..end],
+            ));
         }
     }
 
@@ -323,7 +308,7 @@ fn select_native_gas_payment(
         if object.type_ != CoinModule::coin_type(GAS_COIN) {
             continue;
         }
-        let Some(balance) = read_coin_balance(&object.data) else {
+        let Some(balance) = CoinModule::read_balance(&object.data) else {
             continue;
         };
         if balance < required_amount {
@@ -391,7 +376,7 @@ fn select_native_transfer_and_gas_payment(
         .filter(|object| !pending_access_keys.contains(&format!("mut:object:{}", object.id)))
         .filter(|object| !pending_access_keys.contains(&format!("mut:gas:{}", object.id)))
         .filter_map(|object| {
-            read_coin_balance(&object.data).map(|balance| {
+            CoinModule::read_balance(&object.data).map(|balance| {
                 (
                     ObjectRef::new(
                         object.id.clone(),
@@ -498,7 +483,7 @@ fn select_native_coin_consolidation_step(
         .iter()
         .filter(|object| object.type_ == native_coin_type)
         .filter_map(|object| {
-            read_coin_balance(&object.data).map(|balance| (object.clone(), balance))
+            CoinModule::read_balance(&object.data).map(|balance| (object.clone(), balance))
         })
         .filter(|(_, balance)| *balance > 0)
         .collect();
@@ -564,7 +549,7 @@ fn select_coin_object_for_token(
     token_type: &str,
     required_amount: u64,
 ) -> anyhow::Result<ObjectRef> {
-    let wanted_token = normalize_token_type(token_type);
+    let wanted_token = CoinModule::normalize_token_type(token_type);
     let mut best: Option<(ObjectRef, u64)> = None;
     let mut largest: Option<(ObjectRef, u64)> = None;
 
@@ -575,7 +560,7 @@ fn select_coin_object_for_token(
         if obj_token != wanted_token {
             continue;
         }
-        let Some(balance) = read_coin_balance(&object.data) else {
+        let Some(balance) = CoinModule::read_balance(&object.data) else {
             continue;
         };
         let object_ref = ObjectRef::new(
@@ -626,7 +611,7 @@ fn tx_matches_owner(tx: &Transaction, owner_norm: Option<&str>) -> bool {
 }
 
 fn token_module_path(token_type: &str) -> Option<String> {
-    let token_type = normalize_token_type(token_type);
+    let token_type = CoinModule::normalize_token_type(token_type);
     let mut parts = token_type.split("::");
     let address = parts.next()?;
     let module = parts.next()?;
@@ -635,7 +620,7 @@ fn token_module_path(token_type: &str) -> Option<String> {
 }
 
 fn tx_mentions_token_type(tx: &Transaction, token_type: &str) -> bool {
-    let token_type = normalize_token_type(token_type);
+    let token_type = CoinModule::normalize_token_type(token_type);
     let target_module = token_module_path(&token_type);
 
     match tx {
@@ -657,7 +642,7 @@ fn tx_mentions_token_type(tx: &Transaction, token_type: &str) -> bool {
 
             if type_args
                 .iter()
-                .any(|arg| normalize_token_type(arg) == token_type)
+                .any(|arg| CoinModule::normalize_token_type(arg) == token_type)
             {
                 return true;
             }
@@ -696,6 +681,19 @@ fn parse_hex_address(id: u64, raw: &str, field: &str) -> Result<Address, Box<Rpc
         Box::new(invalid_params_response(
             id,
             format!("Invalid {}: {}", field, e),
+        ))
+    })
+}
+
+fn serialize_move_arg<T: serde::Serialize>(
+    id: u64,
+    value: &T,
+    field: &str,
+) -> Result<Vec<u8>, Box<RpcResponse>> {
+    bcs::to_bytes(value).map_err(|error| {
+        Box::new(internal_error_response(
+            id,
+            format!("Failed to serialize {field}: {error}"),
         ))
     })
 }
@@ -1387,6 +1385,50 @@ async fn execute_or_submit_response(
     }
 }
 
+fn select_build_gas_and_nonce(
+    state: &RpcServerState,
+    request_id: u64,
+    sender: &str,
+    gas_limit: u64,
+    gas_price: u64,
+    nonce: Option<u64>,
+) -> Result<(GasPayment, u64), Box<RpcResponse>> {
+    parse_hex_address(request_id, sender, "sender address")?;
+
+    let owner_info = state
+        .engine
+        .get_owner_info(sender)
+        .ok_or_else(|| Box::new(internal_error_response(request_id, "Owner not found")))?;
+    let owned_objects = owner_info.owned_objects.ok_or_else(|| {
+        Box::new(internal_error_response(
+            request_id,
+            "Owner has no owned object list",
+        ))
+    })?;
+    let pending_access_keys = state.engine.pending_access_keys_snapshot();
+    let gas_payment = select_native_gas_payment(
+        &owned_objects,
+        sender,
+        gas_limit.saturating_mul(effective_gas_price(gas_price)),
+        gas_limit,
+        gas_price,
+        &[],
+        &pending_access_keys,
+    )
+    .map_err(|error| {
+        Box::new(RpcResponse {
+            jsonrpc: "2.0".into(),
+            result: None,
+            error: Some(transaction_error_with_reason(error.to_string())),
+            id: request_id,
+        })
+    })?;
+    let nonce = fresh_nonce(request_id, nonce)
+        .map_err(|error| Box::new(internal_error_response(request_id, error.to_string())))?;
+
+    Ok((gas_payment, nonce))
+}
+
 // =========================================================================
 // HANDLERS
 // =========================================================================
@@ -1401,42 +1443,16 @@ pub async fn handle_build_publish_module(
             Err(response) => return *response,
         };
 
-    if let Err(response) = parse_hex_address(request.id, &build_data.sender, "sender address") {
-        return *response;
-    }
-
-    let Some(owner_info) = state.engine.get_owner_info(&build_data.sender) else {
-        return internal_error_response(request.id, "Owner not found");
-    };
-    let Some(owned_objects) = owner_info.owned_objects else {
-        return internal_error_response(request.id, "Owner has no owned object list");
-    };
-
-    let pending_access_keys = state.engine.pending_access_keys_snapshot();
-    let gas_payment = match select_native_gas_payment(
-        &owned_objects,
+    let (gas_payment, nonce) = match select_build_gas_and_nonce(
+        state,
+        request.id,
         &build_data.sender,
-        build_data
-            .gas_limit
-            .saturating_mul(effective_gas_price(build_data.gas_price)),
         build_data.gas_limit,
         build_data.gas_price,
-        &[],
-        &pending_access_keys,
+        build_data.nonce,
     ) {
-        Ok(payment) => payment,
-        Err(e) => {
-            return RpcResponse {
-                jsonrpc: "2.0".into(),
-                result: None,
-                error: Some(transaction_error_with_reason(e.to_string())),
-                id: request.id,
-            };
-        }
-    };
-    let nonce = match fresh_nonce(request.id, build_data.nonce) {
-        Ok(nonce) => nonce,
-        Err(e) => return internal_error_response(request.id, e.to_string()),
+        Ok(prepared) => prepared,
+        Err(response) => return *response,
     };
 
     respond_with_serialize(
@@ -1465,45 +1481,20 @@ pub async fn handle_build_publish_package(
             Err(response) => return *response,
         };
 
-    if let Err(response) = parse_hex_address(request.id, &build_data.sender, "sender address") {
-        return *response;
-    }
     if build_data.modules.is_empty() {
         return invalid_params_response(request.id, "Package publish requires at least one module");
     }
 
-    let Some(owner_info) = state.engine.get_owner_info(&build_data.sender) else {
-        return internal_error_response(request.id, "Owner not found");
-    };
-    let Some(owned_objects) = owner_info.owned_objects else {
-        return internal_error_response(request.id, "Owner has no owned object list");
-    };
-
-    let pending_access_keys = state.engine.pending_access_keys_snapshot();
-    let gas_payment = match select_native_gas_payment(
-        &owned_objects,
+    let (gas_payment, nonce) = match select_build_gas_and_nonce(
+        state,
+        request.id,
         &build_data.sender,
-        build_data
-            .gas_limit
-            .saturating_mul(effective_gas_price(build_data.gas_price)),
         build_data.gas_limit,
         build_data.gas_price,
-        &[],
-        &pending_access_keys,
+        build_data.nonce,
     ) {
-        Ok(payment) => payment,
-        Err(e) => {
-            return RpcResponse {
-                jsonrpc: "2.0".into(),
-                result: None,
-                error: Some(transaction_error_with_reason(e.to_string())),
-                id: request.id,
-            };
-        }
-    };
-    let nonce = match fresh_nonce(request.id, build_data.nonce) {
-        Ok(nonce) => nonce,
-        Err(e) => return internal_error_response(request.id, e.to_string()),
+        Ok(prepared) => prepared,
+        Err(response) => return *response,
     };
 
     respond_with_serialize(
@@ -1576,7 +1567,6 @@ pub async fn handle_build_native_transfer(
         Ok(nonce) => nonce,
         Err(e) => return internal_error_response(request.id, e.to_string()),
     };
-
     respond_with_serialize(
         request.id,
         ObjectTransferData {
@@ -1663,6 +1653,14 @@ pub async fn handle_build_native_coin_consolidation(
         Ok(nonce) => nonce,
         Err(e) => return internal_error_response(request.id, e.to_string()),
     };
+    let primary_id = match parse_hex_address(request.id, &primary_object.id, "primary object id") {
+        Ok(address) => address.to_vec(),
+        Err(response) => return *response,
+    };
+    let merge_id = match parse_hex_address(request.id, &merge_object.id, "merge object id") {
+        Ok(address) => address.to_vec(),
+        Err(response) => return *response,
+    };
 
     respond_with_serialize(
         request.id,
@@ -1672,14 +1670,7 @@ pub async fn handle_build_native_coin_consolidation(
             module: CoinModule::COIN_MODULE.to_string(),
             function: CoinModule::function_names().join_entry.to_string(),
             type_args: vec![GAS_COIN.to_string()],
-            args: vec![
-                Address::from_hex_literal(&primary_object.id)
-                    .map(|addr| addr.to_vec())
-                    .unwrap_or_default(),
-                Address::from_hex_literal(&merge_object.id)
-                    .map(|addr| addr.to_vec())
-                    .unwrap_or_default(),
-            ],
+            args: vec![primary_id, merge_id],
             object_inputs: Some(vec![primary_input, merge_input]),
             gas_limit: build_data.gas_limit,
             gas_price: build_data.gas_price,
@@ -1811,9 +1802,10 @@ pub async fn handle_build_token_transfer(
     if let Err(response) = parse_hex_address(request.id, &build_data.sender, "sender address") {
         return *response;
     }
-    if let Err(response) = parse_hex_address(request.id, &build_data.recipient, "recipient") {
-        return *response;
-    }
+    let recipient = match parse_hex_address(request.id, &build_data.recipient, "recipient") {
+        Ok(address) => address,
+        Err(response) => return *response,
+    };
 
     let Some(owner_info) = state.engine.get_owner_info(&build_data.sender) else {
         return internal_error_response(request.id, "Owner not found");
@@ -1886,6 +1878,23 @@ pub async fn handle_build_token_transfer(
         Ok(nonce) => nonce,
         Err(e) => return internal_error_response(request.id, e.to_string()),
     };
+    let coin_object_id =
+        match parse_hex_address(request.id, &coin_object_ref.object_id, "coin object id") {
+            Ok(address) => address.to_vec(),
+            Err(response) => return *response,
+        };
+    let amount = match serialize_move_arg(request.id, &build_data.amount, "transfer amount") {
+        Ok(amount) => amount,
+        Err(response) => return *response,
+    };
+    let recipient = match serialize_move_arg(
+        request.id,
+        &recipient.to_account_address(),
+        "recipient address",
+    ) {
+        Ok(recipient) => recipient,
+        Err(response) => return *response,
+    };
 
     respond_with_serialize(
         request.id,
@@ -1898,19 +1907,7 @@ pub async fn handle_build_token_transfer(
             // passing only the canonical Move call to the client.
             function: "transfer_amount".to_string(),
             type_args: vec![],
-            args: vec![
-                move_core_types::account_address::AccountAddress::from_hex_literal(
-                    &coin_object_ref.object_id,
-                )
-                .map(|addr| addr.to_vec())
-                .unwrap_or_default(),
-                bcs::to_bytes(&build_data.amount).unwrap_or_default(),
-                move_core_types::account_address::AccountAddress::from_hex_literal(
-                    &build_data.recipient,
-                )
-                .map(|addr| bcs::to_bytes(&addr).unwrap_or_default())
-                .unwrap_or_default(),
-            ],
+            args: vec![coin_object_id, amount, recipient],
             object_inputs: Some(vec![object_input]),
             gas_limit: build_data.gas_limit,
             gas_price: build_data.gas_price,
@@ -2084,6 +2081,97 @@ pub async fn handle_get_transaction(state: &RpcServerState, request: &RpcRequest
     internal_error_response(request.id, "Transaction not found")
 }
 
+fn collect_transaction_details<F>(
+    state: &RpcServerState,
+    limit: usize,
+    matches: F,
+    lock_context: &str,
+) -> Vec<TransactionDetails>
+where
+    F: Fn(&Transaction) -> bool,
+{
+    let mut results: Vec<TransactionDetails> = Vec::new();
+    let mut seen_hashes = HashSet::new();
+    let pending = state
+        .engine
+        .filter_pending_transaction_records(limit, |tx| matches(&tx.signed_tx.transaction));
+
+    for tx in &pending {
+        if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, {
+            let mut details = map_transaction_to_details(
+                state,
+                &tx.signed_tx.transaction,
+                &hex::encode(tx.signed_tx.transaction_hash()),
+                pending_status(tx),
+                None,
+                None,
+            );
+            apply_pending_preview_metadata(tx, &mut details);
+            details
+        }) {
+            break;
+        }
+    }
+
+    if results.len() < limit {
+        let chain = state.engine.blockchain.read().unwrap_or_else(|p| {
+            error!("blockchain lock poisoned while {lock_context}; recovering");
+            p.into_inner()
+        });
+
+        for checkpoint in chain.dag_checkpoints.iter().rev() {
+            if results.len() >= limit {
+                break;
+            }
+
+            for (index, tx) in checkpoint.transactions.iter().enumerate().rev() {
+                if !matches(&tx.transaction) {
+                    continue;
+                }
+
+                let mut details = map_transaction_to_details(
+                    state,
+                    &tx.transaction,
+                    &hex::encode(tx.transaction_hash()),
+                    "committed",
+                    Some(checkpoint.sequence),
+                    Some(hex::encode(&checkpoint.state_root)),
+                );
+                apply_committed_effect(&mut details, checkpoint.transaction_effects.get(index));
+                if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, details) {
+                    break;
+                }
+            }
+        }
+    }
+
+    if results.len() < limit {
+        for (tx, height, state_root) in state
+            .engine
+            .list_committed_transactions_from_history(limit, &matches)
+        {
+            let tx_hash = tx.transaction_hash().to_vec();
+            let effect = state
+                .engine
+                .get_committed_transaction_effect_from_history(&tx_hash);
+            let mut details = map_transaction_to_details(
+                state,
+                &tx.transaction,
+                &hex::encode(&tx_hash),
+                "committed",
+                Some(height),
+                Some(hex::encode(state_root)),
+            );
+            apply_committed_effect(&mut details, effect.as_ref());
+            if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, details) {
+                break;
+            }
+        }
+    }
+
+    results
+}
+
 /// Handle request to list all transactions (committed + pending)
 /// Optimized: Fetches latest transactions first and implements pagination (Limit)
 pub async fn handle_get_all_transactions(
@@ -2108,89 +2196,12 @@ pub async fn handle_get_all_transactions(
         })
         .map(|a| a.trim_start_matches("0x").to_lowercase());
 
-    let mut results: Vec<TransactionDetails> = Vec::new();
-    let mut seen_hashes = HashSet::new();
-    let pending = state
-        .engine
-        .filter_pending_transaction_records(limit, |tx| {
-            tx_matches_owner(&tx.signed_tx.transaction, owner_norm.as_deref())
-        });
-
-    for tx in &pending {
-        if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, {
-            let mut details = map_transaction_to_details(
-                state,
-                &tx.signed_tx.transaction,
-                &hex::encode(tx.signed_tx.transaction_hash()),
-                pending_status(tx),
-                None,
-                None,
-            );
-            apply_pending_preview_metadata(tx, &mut details);
-            details
-        }) {
-            break;
-        }
-    }
-
-    if results.len() < limit {
-        let chain = state.engine.blockchain.read().unwrap_or_else(|p| {
-            error!("blockchain lock poisoned while listing transactions; recovering");
-            p.into_inner()
-        });
-
-        for checkpoint in chain.dag_checkpoints.iter().rev() {
-            if results.len() >= limit {
-                break;
-            }
-
-            for (index, tx) in checkpoint.transactions.iter().enumerate().rev() {
-                if !tx_matches_owner(&tx.transaction, owner_norm.as_deref()) {
-                    continue;
-                }
-
-                let mut details = map_transaction_to_details(
-                    state,
-                    &tx.transaction,
-                    &hex::encode(tx.transaction_hash()),
-                    "committed",
-                    Some(checkpoint.sequence),
-                    Some(hex::encode(&checkpoint.state_root)),
-                );
-                apply_committed_effect(&mut details, checkpoint.transaction_effects.get(index));
-                if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, details) {
-                    break;
-                }
-            }
-        }
-    }
-
-    if results.len() < limit {
-        for (tx, height, state_root) in state
-            .engine
-            .list_committed_transactions_from_history(limit, |tx| {
-                tx_matches_owner(tx, owner_norm.as_deref())
-            })
-        {
-            let tx_hash = tx.transaction_hash().to_vec();
-            let effect = state
-                .engine
-                .get_committed_transaction_effect_from_history(&tx_hash);
-            let mut details = map_transaction_to_details(
-                state,
-                &tx.transaction,
-                &hex::encode(&tx_hash),
-                "committed",
-                Some(height),
-                Some(hex::encode(state_root)),
-            );
-            apply_committed_effect(&mut details, effect.as_ref());
-            if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, details) {
-                break;
-            }
-        }
-    }
-
+    let results = collect_transaction_details(
+        state,
+        limit,
+        |tx| tx_matches_owner(tx, owner_norm.as_deref()),
+        "listing transactions",
+    );
     respond_with_serialize(request.id, results)
 }
 
@@ -2207,100 +2218,19 @@ pub async fn handle_get_fungible_asset_transactions(
         Err(response) => return *response,
     };
 
-    let token_type = normalize_token_type(&req_data.token_type);
+    let token_type = CoinModule::normalize_token_type(&req_data.token_type);
     let limit = req_data.limit.unwrap_or(50).min(500);
     let owner_norm = req_data
         .owner
         .as_deref()
         .map(|owner| owner.trim_start_matches("0x").to_lowercase());
 
-    let mut results: Vec<TransactionDetails> = Vec::new();
-    let mut seen_hashes = HashSet::new();
-    let pending = state
-        .engine
-        .filter_pending_transaction_records(limit, |tx| {
-            tx_mentions_token_type(&tx.signed_tx.transaction, &token_type)
-                && tx_matches_owner(&tx.signed_tx.transaction, owner_norm.as_deref())
-        });
-
-    for tx in &pending {
-        if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, {
-            let mut details = map_transaction_to_details(
-                state,
-                &tx.signed_tx.transaction,
-                &hex::encode(tx.signed_tx.transaction_hash()),
-                pending_status(tx),
-                None,
-                None,
-            );
-            apply_pending_preview_metadata(tx, &mut details);
-            details
-        }) {
-            break;
-        }
-    }
-
-    if results.len() < limit {
-        let chain = state.engine.blockchain.read().unwrap_or_else(|p| {
-            error!("blockchain lock poisoned while listing asset transactions; recovering");
-            p.into_inner()
-        });
-
-        for checkpoint in chain.dag_checkpoints.iter().rev() {
-            if results.len() >= limit {
-                break;
-            }
-
-            for (index, tx) in checkpoint.transactions.iter().enumerate().rev() {
-                if !tx_mentions_token_type(&tx.transaction, &token_type)
-                    || !tx_matches_owner(&tx.transaction, owner_norm.as_deref())
-                {
-                    continue;
-                }
-
-                let mut details = map_transaction_to_details(
-                    state,
-                    &tx.transaction,
-                    &hex::encode(tx.transaction_hash()),
-                    "committed",
-                    Some(checkpoint.sequence),
-                    Some(hex::encode(&checkpoint.state_root)),
-                );
-                apply_committed_effect(&mut details, checkpoint.transaction_effects.get(index));
-                if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, details) {
-                    break;
-                }
-            }
-        }
-    }
-
-    if results.len() < limit {
-        for (tx, height, state_root) in
-            state
-                .engine
-                .list_committed_transactions_from_history(limit, |tx| {
-                    tx_mentions_token_type(tx, &token_type)
-                        && tx_matches_owner(tx, owner_norm.as_deref())
-                })
-        {
-            let tx_hash = tx.transaction_hash().to_vec();
-            let effect = state
-                .engine
-                .get_committed_transaction_effect_from_history(&tx_hash);
-            let mut details = map_transaction_to_details(
-                state,
-                &tx.transaction,
-                &hex::encode(&tx_hash),
-                "committed",
-                Some(height),
-                Some(hex::encode(state_root)),
-            );
-            apply_committed_effect(&mut details, effect.as_ref());
-            if !push_unique_tx_details(&mut results, &mut seen_hashes, limit, details) {
-                break;
-            }
-        }
-    }
+    let results = collect_transaction_details(
+        state,
+        limit,
+        |tx| tx_mentions_token_type(tx, &token_type) && tx_matches_owner(tx, owner_norm.as_deref()),
+        "listing asset transactions",
+    );
 
     respond_with_serialize(
         request.id,

@@ -35,5 +35,9 @@ flate2 = { workspace = true }
 zeroize = { workspace = true }
 sha3 = { workspace = true }
 
+[features]
+default = []
+p2p-mdns = ["libp2p/mdns"]
+
 [dev-dependencies]
 proptest = { workspace = true }

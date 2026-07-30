@@ -5,7 +5,7 @@ use crate::{
     config::NodeRuntimeConfig,
     p2p::{
         AuthenticatedP2PMessage, CheckpointRequestMsg, CheckpointResponseMsg, DagVertexMsg,
-        DagVertexRequestMsg, DagVertexResponseMsg, P2PMessage, PeerInfoMsg,
+        DagVertexRequestMsg, DagVertexResponseMsg, P2PMessage, PeerInfoMsg, QueuedP2PMessage,
     },
 };
 use kanari_core::{BlockchainEngine, CheckpointSyncData, DagVertex};
@@ -23,6 +23,8 @@ const DAG_VERTEX_REQUEST_RETRY_COOLDOWN_MS: u64 = 1_000;
 const MAX_CHECKPOINTS_PER_REQUEST: u64 = 200;
 const MAX_TRACKED_PEERS: usize = 2_048;
 const MAX_PENDING_REQUEST_TRACKING: usize = 4_096;
+const DAG_REBROADCAST_COOLDOWN_MS: u64 = 5_000;
+const MAX_TRACKED_DAG_REBROADCASTS: usize = 4_096;
 
 #[derive(Clone)]
 struct BufferedCheckpointCandidate {
@@ -39,7 +41,7 @@ struct DivergentPeerInfo {
 
 pub struct SyncManager {
     engine: Arc<BlockchainEngine>,
-    network_tx: mpsc::Sender<P2PMessage>,
+    network_tx: mpsc::Sender<QueuedP2PMessage>,
     local_peer_id: String,
     /// Optional indexer for blockchain data indexing
     indexer: Option<Arc<Mutex<kanari_indexer::Indexer>>>,
@@ -56,12 +58,21 @@ pub struct SyncManager {
     /// DAG vertices that arrived before their parents. Gossip delivery is unordered,
     /// so retry these after each successful vertex import.
     dag_vertex_buffer: Mutex<VecDeque<DagVertex>>,
+    /// Last rebroadcast attempt per vertex. Record attempts (not only success)
+    /// so a full outbound queue cannot trigger a retry storm every node tick.
+    dag_vertex_rebroadcasts: Mutex<BTreeMap<[u8; 32], u64>>,
     /// Maximum number of checkpoints to keep in buffer to prevent memory exhaustion
     max_buffer_size: usize,
     max_dag_vertex_buffer_size: usize,
 }
 
 impl SyncManager {
+    fn local_checkpoint_identity(&self, sequence: u64) -> Option<(String, String)> {
+        self.engine
+            .get_block(sequence)
+            .map(|block| (block.hash, block.state_root))
+    }
+
     fn divergence_kind(
         local_checkpoint_hash: &str,
         local_state_root: &str,
@@ -117,9 +128,36 @@ impl SyncManager {
             .unwrap_or_else(|e| e.into_inner())
     }
 
+    fn should_rebroadcast_dag_vertex(&self, id: [u8; 32], now: u64) -> bool {
+        let mut attempts = self
+            .dag_vertex_rebroadcasts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if attempts
+            .get(&id)
+            .is_some_and(|last| now.saturating_sub(*last) < DAG_REBROADCAST_COOLDOWN_MS)
+        {
+            return false;
+        }
+        if attempts.len() >= MAX_TRACKED_DAG_REBROADCASTS {
+            let cutoff = now.saturating_sub(DAG_REBROADCAST_COOLDOWN_MS);
+            attempts.retain(|_, timestamp| *timestamp >= cutoff);
+            if attempts.len() >= MAX_TRACKED_DAG_REBROADCASTS
+                && let Some(oldest) = attempts
+                    .iter()
+                    .min_by_key(|(_, timestamp)| **timestamp)
+                    .map(|(id, _)| *id)
+            {
+                attempts.remove(&oldest);
+            }
+        }
+        attempts.insert(id, now);
+        true
+    }
+
     pub fn new(
         engine: Arc<BlockchainEngine>,
-        network_tx: mpsc::Sender<P2PMessage>,
+        network_tx: mpsc::Sender<QueuedP2PMessage>,
         local_peer_id: String,
         indexer: Option<Arc<Mutex<kanari_indexer::Indexer>>>,
     ) -> Self {
@@ -134,6 +172,7 @@ impl SyncManager {
             pending_checkpoint_requests: Mutex::new(BTreeMap::new()),
             pending_dag_vertex_requests: Mutex::new(BTreeMap::new()),
             dag_vertex_buffer: Mutex::new(VecDeque::new()),
+            dag_vertex_rebroadcasts: Mutex::new(BTreeMap::new()),
             max_buffer_size: 1000, // Limit buffer to 1000 checkpoints for 200-node networks
             max_dag_vertex_buffer_size: 2048,
         }
@@ -158,7 +197,7 @@ impl SyncManager {
         // Fallback to P2P sync if we are behind
         if stats.height < max_seen {
             let target_peer = self.best_peer_for_height(stats.height + 1);
-            info!(
+            debug!(
                 "[SYNC] Behind network P2P (current: {}, max seen: {}, target: {:?}). Requesting checkpoints via P2P...",
                 stats.height, max_seen, target_peer
             );
@@ -182,7 +221,7 @@ impl SyncManager {
             }
             P2PMessage::NewDagVertex(vertex_data) => {
                 debug!("[P2P] Received NewDagVertex");
-                self.handle_new_dag_vertex(vertex_data).await;
+                self.handle_new_dag_vertex(vertex_data);
             }
             P2PMessage::DagVertexRebroadcast(msg) => {
                 if msg.sender_peer_id != authenticated_peer_id {
@@ -196,7 +235,7 @@ impl SyncManager {
                     "[P2P] Received DagVertexRebroadcast from {}",
                     msg.sender_peer_id
                 );
-                self.handle_new_dag_vertex(msg.vertex_data).await;
+                self.handle_new_dag_vertex(msg.vertex_data);
             }
             P2PMessage::DagVertexRequest(req) => {
                 if req.requester_peer_id != authenticated_peer_id {
@@ -210,7 +249,7 @@ impl SyncManager {
                     "[P2P] Received DagVertexRequest for parent round {} from {}",
                     req.parent_round, req.requester_peer_id
                 );
-                self.handle_dag_vertex_request(req).await;
+                self.handle_dag_vertex_request(req);
             }
             P2PMessage::DagVertexResponse(resp) => {
                 if resp.responder_peer_id != authenticated_peer_id {
@@ -225,7 +264,7 @@ impl SyncManager {
                     resp.responder_peer_id,
                     resp.vertex_data.len()
                 );
-                self.handle_dag_vertex_response(resp).await;
+                self.handle_dag_vertex_response(resp);
             }
             P2PMessage::CheckpointRequest(sequence, timestamp) => {
                 info!("[P2P] Received CheckpointRequest for sequence {}", sequence);
@@ -282,7 +321,7 @@ impl SyncManager {
                     warn!("[P2P] Rejected PeerInfo with spoofed peer identity");
                     return;
                 }
-                info!("[P2P] Received PeerInfo from {}", peer_info.peer_id);
+                debug!("[P2P] Received PeerInfo from {}", peer_info.peer_id);
                 self.handle_peer_info(peer_info).await;
             }
             P2PMessage::CompressedCheckpoint(_)
@@ -308,10 +347,17 @@ impl SyncManager {
     }
 
     fn send_network_message(&self, msg: P2PMessage, context: &str) -> bool {
-        match self.network_tx.try_send(msg) {
+        match self.network_tx.try_send(QueuedP2PMessage::new(msg)) {
             Ok(_) => true,
-            Err(e) => {
-                error!("{}: {}", context, e);
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                debug!(
+                    "{}: outbound queue is full; bounded retry will handle it",
+                    context
+                );
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                error!("{}: outbound network task is closed", context);
                 false
             }
         }
@@ -333,6 +379,22 @@ impl SyncManager {
         vertex_data
     }
 
+    fn queue_dag_vertex_request(&self, parent_round: u64, timestamp: u64, context: &str) -> bool {
+        if !self.should_request_dag_vertices_for_round(parent_round, timestamp) {
+            return false;
+        }
+
+        self.send_network_message(
+            P2PMessage::DagVertexRequest(DagVertexRequestMsg {
+                requester_peer_id: self.local_peer_id.clone(),
+                parent_round,
+                timestamp,
+                limit: NodeRuntimeConfig::dag_vertices_per_response() as u64,
+            }),
+            context,
+        )
+    }
+
     pub fn broadcast_latest_dag_vertices(&self, limit: usize, reason: &str) {
         let vertices = match self.engine.latest_own_dag_vertices(limit) {
             Ok(vertices) => vertices,
@@ -346,12 +408,12 @@ impl SyncManager {
             return;
         }
 
-        let nonce_base = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        let now = Self::current_timestamp();
 
         for vertex in vertices {
+            if !self.should_rebroadcast_dag_vertex(vertex.id, now) {
+                continue;
+            }
             let Ok(vertex_data) = serde_json::to_string(&vertex) else {
                 warn!(
                     "Failed to serialize DAG vertex {} for rebroadcast",
@@ -362,7 +424,7 @@ impl SyncManager {
 
             let msg = P2PMessage::DagVertexRebroadcast(DagVertexMsg {
                 vertex_data,
-                nonce: nonce_base ^ vertex.round,
+                nonce: now ^ vertex.round,
                 sender_peer_id: self.local_peer_id.clone(),
             });
             if self.send_network_message(msg, "Failed to queue DAG vertex rebroadcast") {
@@ -376,7 +438,7 @@ impl SyncManager {
         }
     }
 
-    pub async fn request_dag_vertices_for_quorum(&self) {
+    pub fn request_dag_vertices_for_quorum(&self) {
         let policy = match self.engine.dag_production_policy() {
             Ok(policy) => policy,
             Err(e) => {
@@ -393,36 +455,9 @@ impl SyncManager {
         }
 
         let timestamp = Self::current_timestamp();
-        if !self.should_request_dag_vertices_for_round(policy.parent_round, timestamp) {
-            return;
-        }
-
-        let requester_vertex_data = match self.engine.latest_own_dag_vertices(8) {
-            Ok(vertices) => {
-                Self::serialize_dag_vertices(vertices, "[DAG SYNC] Preparing request context")
-            }
-            Err(e) => {
-                warn!(
-                    "[DAG SYNC] Failed to load requester vertices for vertex request: {}",
-                    e
-                );
-                Vec::new()
-            }
-        };
-
-        let request = DagVertexRequestMsg {
-            requester_peer_id: self.local_peer_id.clone(),
-            parent_round: policy.parent_round,
-            current_round: policy.current_round,
-            target_round: policy.target_round,
-            missing_authorities: policy.missing_parent_authors.clone(),
-            requester_vertex_data,
+        if self.queue_dag_vertex_request(
+            policy.parent_round,
             timestamp,
-            limit: NodeRuntimeConfig::dag_vertices_per_response() as u64,
-        };
-
-        if self.send_network_message(
-            P2PMessage::DagVertexRequest(request),
             "[DAG SYNC] Failed to queue DAG vertex request",
         ) {
             info!(
@@ -432,14 +467,13 @@ impl SyncManager {
         }
     }
 
-    async fn handle_dag_vertex_request(&self, request: DagVertexRequestMsg) {
-        for vertex_data in &request.requester_vertex_data {
-            self.handle_new_dag_vertex(vertex_data.clone()).await;
-        }
-
+    fn handle_dag_vertex_request(&self, request: DagVertexRequestMsg) {
         let limit =
             (request.limit as usize).clamp(1, NodeRuntimeConfig::dag_vertices_per_response());
-        let vertices = match self.engine.latest_own_dag_vertices(limit) {
+        let vertices = match self
+            .engine
+            .dag_vertices_through_round_for_sync(request.parent_round, limit)
+        {
             Ok(vertices) => vertices,
             Err(e) => {
                 warn!(
@@ -474,9 +508,51 @@ impl SyncManager {
         );
     }
 
-    async fn handle_dag_vertex_response(&self, response: DagVertexResponseMsg) {
-        for vertex_data in response.vertex_data {
-            self.handle_new_dag_vertex(vertex_data).await;
+    fn handle_dag_vertex_response(&self, response: DagVertexResponseMsg) {
+        let mut vertices = response
+            .vertex_data
+            .into_iter()
+            .filter_map(|data| Self::parse_message::<DagVertex>(&data, "DAG vertex response"))
+            .collect::<Vec<_>>();
+        vertices.sort_by(|left, right| {
+            left.round
+                .cmp(&right.round)
+                .then_with(|| left.author.cmp(&right.author))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        for vertex in vertices {
+            self.handle_dag_vertex(vertex);
+        }
+        self.request_missing_buffered_dag_parents();
+    }
+
+    fn request_missing_buffered_dag_parents(&self) {
+        let buffered = self
+            .dag_vertex_buffer_guard()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let missing_rounds = match self.engine.dag_missing_parent_rounds_for_sync(&buffered) {
+            Ok(rounds) => rounds,
+            Err(error) => {
+                debug!("[DAG SYNC] Cannot inspect buffered parent gaps: {}", error);
+                return;
+            }
+        };
+        let Some(parent_round) = missing_rounds.into_iter().max() else {
+            return;
+        };
+
+        let timestamp = Self::current_timestamp();
+        if self.queue_dag_vertex_request(
+            parent_round,
+            timestamp,
+            "[DAG SYNC] Failed to queue ancestry repair request",
+        ) {
+            debug!(
+                "[DAG SYNC] Requested next missing checkpoint ancestry page through round {}",
+                parent_round
+            );
         }
     }
 
@@ -625,10 +701,26 @@ impl SyncManager {
         local_checkpoint_hash: &str,
         local_state_root: &str,
     ) {
-        if peer_info.height != local_height
-            || peer_info.latest_checkpoint_hash != local_checkpoint_hash
-            || peer_info.latest_state_root != local_state_root
-        {
+        let recorded = self
+            .divergent_peers_guard()
+            .get(&peer_info.peer_id)
+            .cloned();
+        let exact_tip_match = peer_info.height == local_height
+            && peer_info.latest_checkpoint_hash == local_checkpoint_hash
+            && peer_info.latest_state_root == local_state_root;
+        let advertised_root_is_canonical = peer_info.height <= local_height
+            && self
+                .engine
+                .get_block(peer_info.height)
+                .is_some_and(|block| block.state_root == peer_info.latest_state_root);
+        let recorded_root_is_canonical = recorded.as_ref().is_some_and(|divergence| {
+            divergence.height <= local_height
+                && self
+                    .engine
+                    .get_block(divergence.height)
+                    .is_some_and(|block| block.state_root == divergence.latest_state_root)
+        });
+        if !exact_tip_match && !advertised_root_is_canonical && !recorded_root_is_canonical {
             return;
         }
 
@@ -690,11 +782,6 @@ impl SyncManager {
         pending.retain(|pending_sequence, _| *pending_sequence > sequence);
     }
 
-    fn clear_pending_checkpoint_request(&self, sequence: u64) {
-        let mut pending = self.pending_checkpoint_requests_guard();
-        pending.remove(&sequence);
-    }
-
     fn should_buffer_dag_vertex_error(error_text: &str) -> bool {
         error_text.contains("Parent vertex not found")
             || error_text.contains("Missing parent")
@@ -705,7 +792,6 @@ impl SyncManager {
 
     fn buffer_dag_vertex(&self, vertex: DagVertex, reason: &str) {
         let vertex_id = vertex.id;
-        let vertex_id_hex = hex::encode(vertex_id);
         let mut buffer = self.dag_vertex_buffer_guard();
 
         if buffer.iter().any(|buffered| buffered.id == vertex_id) {
@@ -725,7 +811,9 @@ impl SyncManager {
 
         info!(
             "[DAG SYNC] Buffering DAG vertex {} (round {}) for retry: {}",
-            vertex_id_hex, vertex.round, reason
+            hex::encode(vertex_id),
+            vertex.round,
+            reason
         );
         buffer.push_back(vertex);
     }
@@ -807,6 +895,7 @@ impl SyncManager {
             }
         }
         self.retry_buffered_dag_vertices();
+        self.request_missing_buffered_dag_parents();
         let stats = self.engine.get_stats();
         let checkpoint = &checkpoint_data.checkpoint;
         info!(
@@ -888,7 +977,7 @@ impl SyncManager {
                 .submit_transactions_batch(vec![signed_tx.clone()])
             {
                 Ok(tx_hashes) => {
-                    info!(
+                    debug!(
                         "Received transaction from network: 0x{}",
                         hex::encode(&tx_hashes[0])
                     );
@@ -985,8 +1074,6 @@ impl SyncManager {
                             "[SYNC] Failed to sync checkpoint #{} candidate: {}. Requesting replacement.",
                             checkpoint.checkpoint.sequence, e
                         );
-                        // Allow the replacement request to bypass the short retry cooldown.
-                        self.clear_pending_checkpoint_request(checkpoint.checkpoint.sequence);
                         let target_peer = self
                             .best_peer_for_height_excluding(
                                 checkpoint.checkpoint.sequence,
@@ -1039,33 +1126,37 @@ impl SyncManager {
         }
     }
 
-    async fn handle_new_dag_vertex(&self, vertex_data: String) {
+    fn handle_new_dag_vertex(&self, vertex_data: String) {
         // DAG vertices are serialized as kanari_core::DagVertex,
         // not as the higher-level block metadata wrapper.
 
         if let Some(vertex) = Self::parse_message::<DagVertex>(&vertex_data, "DAG vertex") {
-            debug!(
-                "Received DAG vertex {} (round {}) from network with {} transactions",
-                hex::encode(vertex.id),
-                vertex.round,
-                vertex.transactions.len()
-            );
+            self.handle_dag_vertex(vertex);
+        }
+    }
 
-            match self.engine.add_network_dag_vertex(vertex.clone()) {
-                Ok(()) => {
-                    debug!(
-                        "Successfully added DAG vertex {} to local consensus",
-                        hex::encode(vertex.id)
-                    );
-                    self.retry_buffered_dag_vertices();
-                }
-                Err(e) => {
-                    let error_text = e.to_string();
-                    if Self::should_buffer_dag_vertex_error(&error_text) {
-                        self.buffer_dag_vertex(vertex, &error_text);
-                    } else {
-                        warn!("Failed to add DAG vertex to consensus: {}", error_text);
-                    }
+    fn handle_dag_vertex(&self, vertex: DagVertex) {
+        debug!(
+            "Received DAG vertex {} (round {}) from network with {} transactions",
+            hex::encode(vertex.id),
+            vertex.round,
+            vertex.transactions.len()
+        );
+
+        match self.engine.add_network_dag_vertex(vertex.clone()) {
+            Ok(()) => {
+                debug!(
+                    "Successfully added DAG vertex {} to local consensus",
+                    hex::encode(vertex.id)
+                );
+                self.retry_buffered_dag_vertices();
+            }
+            Err(e) => {
+                let error_text = e.to_string();
+                if Self::should_buffer_dag_vertex_error(&error_text) {
+                    self.buffer_dag_vertex(vertex, &error_text);
+                } else {
+                    warn!("Failed to add DAG vertex to consensus: {}", error_text);
                 }
             }
         }
@@ -1141,9 +1232,15 @@ impl SyncManager {
 
     async fn handle_peer_info(&self, peer_info: PeerInfoMsg) {
         let stats = self.engine.get_stats();
-        let local_checkpoint_hash = self.engine.latest_checkpoint_hash_hex();
-        let local_state_root = self.engine.latest_checkpoint_state_root_hex();
-        info!(
+        let (local_checkpoint_hash, local_state_root) = self
+            .local_checkpoint_identity(stats.height)
+            .unwrap_or_else(|| {
+                (
+                    self.engine.latest_checkpoint_hash_hex(),
+                    self.engine.latest_checkpoint_state_root_hex(),
+                )
+            });
+        debug!(
             "[SYNC] Received PeerInfo from {}: height={}, txs={}, our_height={}, our_txs={}",
             peer_info.peer_id,
             peer_info.height,
@@ -1228,11 +1325,6 @@ impl SyncManager {
             return;
         }
 
-        let stats = self.engine.get_stats();
-        info!(
-            "[SYNC] Requesting checkpoints from {} to {} (our current height: {}, target: {:?})",
-            from, to, stats.height, target_peer_id
-        );
         let timestamp = Self::current_timestamp();
 
         // Limit the number of checkpoints requested at once to avoid network congestion.
@@ -1274,10 +1366,14 @@ impl SyncManager {
             }
             sent += 1;
         }
-        info!(
-            "[SYNC] Sent {} checkpoint requests starting from {}",
-            sent, from
-        );
+        if sent > 0 {
+            info!(
+                "[SYNC] Requested checkpoints {}..={} from {:?}",
+                from, actual_to, target_peer_id
+            );
+        } else {
+            debug!("[SYNC] Checkpoint request {} is still in cooldown", from);
+        }
     }
 
     /// Broadcast local chain height to peers

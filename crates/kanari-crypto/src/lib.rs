@@ -144,8 +144,9 @@ pub use signatures::{SignatureError, verify_signature};
 
 // Re-export encryption functionality - now using actual functions from the module
 pub use encryption::{
-    EncryptedData, EncryptionError, decrypt_data, decrypt_string, encrypt_data, encrypt_string,
-    secure_erase,
+    DEFAULT_STREAM_CHUNK_SIZE, EncryptedData, EncryptionError, StreamDecryptingReader,
+    StreamEncryptingWriter, StreamEncryptionHeader, decrypt_data, decrypt_stream, decrypt_string,
+    encrypt_data, encrypt_stream, encrypt_string, secure_erase, stream_encrypting_writer,
 };
 
 // Re-export wallet functionality

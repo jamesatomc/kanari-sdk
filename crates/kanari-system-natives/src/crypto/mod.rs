@@ -4,6 +4,7 @@
 mod ecdsa_k1;
 mod ecdsa_r1;
 mod ed25519;
+mod pqc;
 mod rs256;
 
 #[cfg(test)]
@@ -45,6 +46,11 @@ pub struct GasParameters {
     pub verify_k1: InternalGas,
     pub verify_r1: InternalGas,
     pub ed25519_verify: InternalGas,
+    pub dilithium2_verify: InternalGas,
+    pub dilithium3_verify: InternalGas,
+    pub dilithium5_verify: InternalGas,
+    pub ed25519_dilithium3_verify: InternalGas,
+    pub k256_dilithium3_verify: InternalGas,
     pub rs256_verify: InternalGas,
 }
 
@@ -56,6 +62,11 @@ impl GasParameters {
             verify_k1: 0.into(),
             verify_r1: 0.into(),
             ed25519_verify: 0.into(),
+            dilithium2_verify: 0.into(),
+            dilithium3_verify: 0.into(),
+            dilithium5_verify: 0.into(),
+            ed25519_dilithium3_verify: 0.into(),
+            k256_dilithium3_verify: 0.into(),
             rs256_verify: 0.into(),
         }
     }
@@ -92,6 +103,36 @@ pub fn make_ed25519(
     gas_params: GasParameters,
 ) -> impl Iterator<Item = (String, move_vm_runtime::native_functions::NativeFunction)> {
     ed25519::make_ed25519_natives(gas_params.ed25519_verify)
+}
+
+pub fn make_dilithium2(
+    gas_params: GasParameters,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_dilithium2(gas_params.dilithium2_verify)
+}
+
+pub fn make_dilithium3(
+    gas_params: GasParameters,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_dilithium3(gas_params.dilithium3_verify)
+}
+
+pub fn make_dilithium5(
+    gas_params: GasParameters,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_dilithium5(gas_params.dilithium5_verify)
+}
+
+pub fn make_ed25519_dilithium3(
+    gas_params: GasParameters,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_ed25519_dilithium3(gas_params.ed25519_dilithium3_verify)
+}
+
+pub fn make_k256_dilithium3(
+    gas_params: GasParameters,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_k256_dilithium3(gas_params.k256_dilithium3_verify)
 }
 
 pub fn make_rs256(

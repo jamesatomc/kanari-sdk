@@ -34,4 +34,47 @@ macro_rules! select_gas_impl {
     };
 }
 
-select_gas_impl!(v2);
+select_gas_impl!(v3_1);
+
+#[cfg(test)]
+mod tests {
+    use super::{gas_v1, gas_v2, gas_v3, gas_v3_1};
+
+    #[test]
+    fn priced_gas_models_never_turn_valid_nonzero_price_into_zero_cost() {
+        let priced_models: &[(&str, fn(u64) -> u64, fn(u64) -> bool)] = &[
+            (
+                gas_v1::GAS_MODEL,
+                gas_v1::effective_gas_price,
+                gas_v1::gas_price_is_valid,
+            ),
+            (
+                gas_v3::GAS_MODEL,
+                gas_v3::effective_gas_price,
+                gas_v3::gas_price_is_valid,
+            ),
+            (
+                gas_v3_1::GAS_MODEL,
+                gas_v3_1::effective_gas_price,
+                gas_v3_1::gas_price_is_valid,
+            ),
+        ];
+
+        for (model, effective_gas_price, gas_price_is_valid) in priced_models {
+            for requested in 1..=10 {
+                assert!(
+                    !gas_price_is_valid(requested) || effective_gas_price(requested) > 0,
+                    "{model} accepted gas price {requested} but mapped it to zero cost"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zero_fee_model_explicitly_maps_every_price_to_zero_cost() {
+        assert!(gas_v2::gas_price_is_valid(0));
+        assert_eq!(gas_v2::effective_gas_price(0), 0);
+        assert_eq!(gas_v2::effective_gas_price(1), 0);
+        assert_eq!(gas_v2::GAS_MODEL, "v2");
+    }
+}

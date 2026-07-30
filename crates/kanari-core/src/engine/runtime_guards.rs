@@ -3,6 +3,19 @@
 
 use super::*;
 
+pub(crate) fn strict_guard_required(network: &str, override_value: Option<&str>) -> bool {
+    override_value
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or_else(|| {
+            !(network.eq_ignore_ascii_case("local") || network.eq_ignore_ascii_case("test"))
+        })
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeGuardConfig {
     pub network: String,
@@ -35,31 +48,19 @@ impl BlockchainEngine {
     }
 
     pub fn strict_persistence_required() -> bool {
-        env::var("KANARI_REQUIRE_PERSISTENT_STORAGE")
-            .map(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or_else(|_| {
-                let network = Self::network_name();
-                !(network.eq_ignore_ascii_case("local") || network.eq_ignore_ascii_case("test"))
-            })
+        strict_guard_required(
+            &Self::network_name(),
+            env::var("KANARI_REQUIRE_PERSISTENT_STORAGE")
+                .ok()
+                .as_deref(),
+        )
     }
 
     pub fn strict_checkpoint_roots_required() -> bool {
-        env::var("KANARI_STRICT_CHECKPOINT_ROOTS")
-            .map(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or_else(|_| {
-                let network = Self::network_name();
-                !(network.eq_ignore_ascii_case("local") || network.eq_ignore_ascii_case("test"))
-            })
+        strict_guard_required(
+            &Self::network_name(),
+            env::var("KANARI_STRICT_CHECKPOINT_ROOTS").ok().as_deref(),
+        )
     }
 
     pub fn fail_fast_supply_enabled() -> bool {

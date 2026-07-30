@@ -13,12 +13,18 @@ use log::info;
 
 use super::*;
 use crate::{BlockchainEngine, Checkpoint, CheckpointSyncData};
+use std::sync::RwLockReadGuard;
 
 impl BlockchainEngine {
-    const MAX_DAG_VERTICES_PER_CHECKPOINT_SYNC: usize = 512;
+    // Checkpoint sync is sequential, so the receiver normally already has the
+    // previous round. Keep only a small root-first evidence slice here; missing
+    // ancestry is recovered by the round-targeted DAG repair protocol. Large
+    // closures duplicate transaction payloads and turn one checkpoint into a
+    // multi-megabyte P2P response.
+    const MAX_DAG_VERTICES_PER_CHECKPOINT_SYNC: usize = 16;
     pub fn smt_status(&self, audit: bool) -> Result<SmtStatusResponse> {
         let diagnostics = self.state_read().smt_diagnostics(audit)?;
-        let stats = self.get_stats();
+        let stats = self.try_get_stats()?;
         Ok(SmtStatusResponse {
             height: stats.height,
             checkpoint_state_root: stats.state_root,
@@ -72,7 +78,7 @@ impl BlockchainEngine {
     ) -> Result<CanonicalStateSnapshotResponse> {
         let entries = self.canonical_state_snapshot_entries(limit, prefix)?;
         Ok(CanonicalStateSnapshotResponse {
-            height: self.get_stats().height,
+            height: self.try_get_stats()?.height,
             state_root: self.latest_checkpoint_state_root_hex(),
             entry_count: entries.len(),
             entries,
@@ -117,7 +123,7 @@ impl BlockchainEngine {
         }
 
         Ok(CanonicalStateDiffResponse {
-            height: self.get_stats().height,
+            height: self.try_get_stats()?.height,
             state_root: self.latest_checkpoint_state_root_hex(),
             local_entry_count: local_map.len(),
             remote_entry_count: remote_map.len(),
@@ -202,6 +208,25 @@ impl BlockchainEngine {
     }
 
     pub fn get_stats(&self) -> BlockchainStats {
+        match self.try_get_stats() {
+            Ok(stats) => stats,
+            Err(error) => {
+                log::error!("Failed to compute blockchain stats: {error:#}");
+                let chain = self.blockchain.read().unwrap_or_else(|e| e.into_inner());
+                BlockchainStats {
+                    height: chain.height(),
+                    total_blocks: chain.dag_checkpoints.len(),
+                    total_transactions: chain.get_transaction_count(),
+                    pending_transactions: self.pending_transaction_len(),
+                    total_owners: 0,
+                    total_supply: self.state_read().total_supply,
+                    state_root: hex::encode(&chain.latest_checkpoint().state_root),
+                }
+            }
+        }
+    }
+
+    pub fn try_get_stats(&self) -> Result<BlockchainStats> {
         let state = self.state_read();
         let chain = match self.blockchain.read() {
             Ok(guard) => guard,
@@ -212,45 +237,62 @@ impl BlockchainEngine {
         };
         let pending_transactions = self.pending_transaction_len();
 
-        BlockchainStats {
+        Ok(BlockchainStats {
             height: chain.height(),
             total_blocks: chain.dag_checkpoints.len(),
             total_transactions: chain.get_transaction_count(),
             pending_transactions,
-            total_owners: state.owner_count(),
+            total_owners: state.try_owner_count()?,
             total_supply: state.total_supply,
             state_root: hex::encode(&chain.latest_checkpoint().state_root),
-        }
+        })
     }
 
     pub fn get_owner_info(&self, owner: &str) -> Option<OwnerInfo> {
-        let state = self.state_read();
-
-        state.get_owner_state_by_hex(owner).map(|acc| {
-            let final_owned_objects = self.resolve_account_objects(&state, &acc.address);
-            let nonce = self.get_expected_nonce(owner);
-            let balances = state
-                .resolve_owner_token_balances(acc.address)
-                .unwrap_or_else(|_| {
-                    acc.token_balances
-                        .iter()
-                        .map(|(token_type, balance)| (token_type.clone(), balance.value()))
-                        .collect()
-                });
-
-            OwnerInfo {
-                owner: format!("{:#x}", acc.owner_address()),
-                nonce: Some(nonce),
-                modules: acc.modules.iter().cloned().collect(),
-                balances,
-                owned_object_count: Some(final_owned_objects.len()),
-                owned_objects: Some(final_owned_objects),
+        match self.try_get_owner_info(owner) {
+            Ok(info) => info,
+            Err(error) => {
+                log::error!("Failed to query owner info for {owner}: {error:#}");
+                None
             }
-        })
+        }
+    }
+
+    pub fn try_get_owner_info(&self, owner: &str) -> Result<Option<OwnerInfo>> {
+        let state = self.state_read();
+        let Some(acc) = state.try_get_owner_state_by_hex(owner)? else {
+            return Ok(None);
+        };
+        let final_owned_objects = self.resolve_account_objects(&state, &acc.address)?;
+        let balances = state
+            .resolve_owner_token_balances(acc.address)
+            .with_context(|| format!("Failed to resolve token balances for owner {owner}"))?;
+
+        Ok(Some(OwnerInfo {
+            owner: format!("{:#x}", acc.owner_address()),
+            nonce: Some(self.get_expected_nonce(owner)),
+            modules: acc.modules.iter().cloned().collect(),
+            balances,
+            owned_object_count: Some(final_owned_objects.len()),
+            owned_objects: Some(final_owned_objects),
+        }))
     }
 
     pub fn get_objects_by_type(&self, object_type: &str) -> Result<Vec<ObjectInfo>> {
         self.query_objects(None, None, Some(object_type), None, None)
+    }
+
+    pub(crate) fn object_info_from_created_object(id: String, obj: CreatedObject) -> ObjectInfo {
+        let digest = obj.digest();
+        ObjectInfo {
+            id,
+            owner: format!("{:#x}", obj.owner),
+            owner_kind: obj.owner_kind,
+            type_: obj.type_,
+            data: obj.data,
+            version: obj.version,
+            digest: Some(digest),
+        }
     }
 
     pub fn query_objects(
@@ -279,18 +321,7 @@ impl BlockchainEngine {
                 max_version,
             )?
             .into_iter()
-            .map(|(id, obj)| {
-                let digest = obj.digest();
-                ObjectInfo {
-                    id,
-                    owner: format!("{:#x}", obj.owner),
-                    owner_kind: obj.owner_kind,
-                    type_: obj.type_,
-                    data: obj.data,
-                    version: obj.version,
-                    digest: Some(digest),
-                }
-            })
+            .map(|(id, obj)| Self::object_info_from_created_object(id, obj))
             .collect())
     }
 
@@ -309,16 +340,10 @@ impl BlockchainEngine {
         {
             return Ok(None);
         }
-        let digest = obj.digest();
-        Ok(Some(ObjectInfo {
-            id: object_ref.object_id.clone(),
-            owner: format!("{:#x}", obj.owner),
-            owner_kind: obj.owner_kind,
-            type_: obj.type_,
-            data: obj.data,
-            version: obj.version,
-            digest: Some(digest),
-        }))
+        Ok(Some(Self::object_info_from_created_object(
+            object_ref.object_id.clone(),
+            obj,
+        )))
     }
 
     pub fn get_module_bytecode(&self, address: &str, module_name: &str) -> Option<Vec<u8>> {
@@ -357,7 +382,16 @@ impl BlockchainEngine {
         checkpoint.hash().map(hex::encode).unwrap_or_default()
     }
 
+    fn blockchain_read_for_query(&self, context: &str) -> RwLockReadGuard<'_, Blockchain> {
+        self.blockchain.read().unwrap_or_else(|poisoned| {
+            log::error!("Blockchain lock poisoned in {context}, recovering...");
+            poisoned.into_inner()
+        })
+    }
+
     fn block_data_from_checkpoint(checkpoint: &Checkpoint) -> BlockData {
+        let (transaction_effects, object_changes, object_graph_edges) =
+            Self::checkpoint_detail_collections(checkpoint);
         BlockData {
             height: checkpoint.sequence,
             timestamp: checkpoint.timestamp,
@@ -366,13 +400,15 @@ impl BlockchainEngine {
             state_root: hex::encode(&checkpoint.state_root),
             tx_count: checkpoint.transactions.len(),
             events: Vec::new(),
-            transaction_effects: checkpoint.transaction_effects.iter().cloned().collect(),
-            object_changes: checkpoint.object_changes.iter().cloned().collect(),
-            object_graph_edges: checkpoint.object_graph_edges.iter().cloned().collect(),
+            transaction_effects,
+            object_changes,
+            object_graph_edges,
         }
     }
 
     fn full_block_data_from_checkpoint(checkpoint: &Checkpoint) -> FullBlockData {
+        let (transaction_effects, object_changes, object_graph_edges) =
+            Self::checkpoint_detail_collections(checkpoint);
         FullBlockData {
             height: checkpoint.sequence,
             timestamp: checkpoint.timestamp,
@@ -382,47 +418,59 @@ impl BlockchainEngine {
             tx_count: checkpoint.transactions.len(),
             events: Vec::new(),
             transactions: checkpoint.transactions.iter().cloned().collect(),
-            transaction_effects: checkpoint.transaction_effects.iter().cloned().collect(),
-            object_changes: checkpoint.object_changes.iter().cloned().collect(),
-            object_graph_edges: checkpoint.object_graph_edges.iter().cloned().collect(),
+            transaction_effects,
+            object_changes,
+            object_graph_edges,
             vertices: checkpoint.vertices.iter().map(hex::encode).collect(),
         }
     }
 
+    fn checkpoint_detail_collections(
+        checkpoint: &Checkpoint,
+    ) -> (
+        Vec<kanari_types::transaction::TransactionEffects>,
+        Vec<kanari_types::transaction::ObjectChange>,
+        Vec<kanari_types::transaction::ObjectGraphEdge>,
+    ) {
+        (
+            checkpoint.transaction_effects.iter().cloned().collect(),
+            if checkpoint.object_changes.is_empty() {
+                checkpoint
+                    .transaction_effects
+                    .iter()
+                    .flat_map(|effects| effects.object_changes.iter().cloned())
+                    .collect()
+            } else {
+                checkpoint.object_changes.iter().cloned().collect()
+            },
+            if checkpoint.object_graph_edges.is_empty() {
+                checkpoint
+                    .transaction_effects
+                    .iter()
+                    .flat_map(|effects| effects.causal_edges.iter().cloned())
+                    .collect()
+            } else {
+                checkpoint.object_graph_edges.iter().cloned().collect()
+            },
+        )
+    }
+
     pub fn get_block(&self, height: u64) -> Option<BlockData> {
-        let chain = match self.blockchain.read() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                log::error!("Blockchain lock poisoned in get_block, recovering...");
-                poisoned.into_inner()
-            }
-        };
+        let chain = self.blockchain_read_for_query("get_block");
         chain
             .get_checkpoint(height)
             .map(Self::block_data_from_checkpoint)
     }
 
     pub fn get_full_block(&self, height: u64) -> Option<FullBlockData> {
-        let chain = match self.blockchain.read() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                log::error!("Blockchain lock poisoned in get_full_block, recovering...");
-                poisoned.into_inner()
-            }
-        };
+        let chain = self.blockchain_read_for_query("get_full_block");
         chain
             .get_checkpoint(height)
             .map(Self::full_block_data_from_checkpoint)
     }
 
     pub fn get_checkpoint_sync(&self, sequence: u64) -> Result<Option<CheckpointSyncData>> {
-        let chain = match self.blockchain.read() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                log::error!("Blockchain lock poisoned in get_checkpoint_sync, recovering...");
-                poisoned.into_inner()
-            }
-        };
+        let chain = self.blockchain_read_for_query("get_checkpoint_sync");
         let Some(checkpoint) = chain.get_checkpoint(sequence).cloned() else {
             return Ok(None);
         };
@@ -445,7 +493,14 @@ impl BlockchainEngine {
             .transpose()
     }
 
-    pub fn block_from_full_data(full_block: &FullBlockData) -> kanari_types::block::Block {
+    fn decode_block_hash_field(label: &str, value: &str) -> Result<Vec<u8>> {
+        let decoded = decode_hex_exact(label, value, 32)?;
+        Ok(decoded)
+    }
+
+    pub fn try_block_from_full_data(
+        full_block: &FullBlockData,
+    ) -> Result<kanari_types::block::Block> {
         use kanari_types::block::{Block, BlockHeader};
         use smt::compute_merkle_root as compute_transaction_merkle_root;
 
@@ -454,22 +509,27 @@ impl BlockchainEngine {
 
         let header = BlockHeader::new(
             full_block.height,
-            hex::decode(&full_block.prev_hash).unwrap_or_default(),
-            hex::decode(&full_block.state_root).unwrap_or_default(),
+            Self::decode_block_hash_field("block prev_hash", &full_block.prev_hash)?,
+            Self::decode_block_hash_field("block state_root", &full_block.state_root)?,
             merkle_root,
             full_block.tx_count,
             full_block.timestamp,
         );
 
-        Block {
+        Ok(Block {
             header,
             transactions: full_block.transactions.clone(),
             events: full_block.events.clone(),
-        }
+        })
+    }
+
+    pub fn block_from_full_data(full_block: &FullBlockData) -> kanari_types::block::Block {
+        Self::try_block_from_full_data(full_block)
+            .expect("FullBlockData must contain valid 32-byte hex prev_hash and state_root")
     }
 
     pub fn sync_checkpoint_from_data(&self, checkpoint_data: &CheckpointSyncData) -> Result<()> {
-        let stats = self.get_stats();
+        let stats = self.try_get_stats()?;
         let checkpoint = &checkpoint_data.checkpoint;
         info!(
             "[SYNC] Attempting to sync checkpoint #{} (our height: {})",

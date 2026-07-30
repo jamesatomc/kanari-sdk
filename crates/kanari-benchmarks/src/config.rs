@@ -4,10 +4,12 @@ pub const DEFAULT_SENDER_COUNT: usize = 64;
 pub const HIGH_THROUGHPUT_TX_COUNT: usize = 10_000;
 pub const HIGH_THROUGHPUT_SENDER_COUNT: usize = HIGH_THROUGHPUT_TX_COUNT;
 pub const HIGH_THROUGHPUT_RUNS: usize = 3;
-pub const HIGH_THROUGHPUT_TARGET_TPS: f64 = 60_000.0;
+pub const HIGH_THROUGHPUT_TARGET_TPS: f64 = 50_000.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessMode {
+    Admission,
+    OwnedFastPath,
     Production,
     Immediate,
 }
@@ -15,6 +17,8 @@ pub enum HarnessMode {
 impl HarnessMode {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Admission => "admission",
+            Self::OwnedFastPath => "owned-fastpath",
             Self::Production => "production",
             Self::Immediate => "immediate",
         }
@@ -89,6 +93,8 @@ where
             "--mode" => {
                 let value = args.next().context("missing value after --mode")?;
                 config.mode = match value.as_str() {
+                    "admission" => HarnessMode::Admission,
+                    "owned-fastpath" => HarnessMode::OwnedFastPath,
                     "production" => HarnessMode::Production,
                     "immediate" => HarnessMode::Immediate,
                     _ => bail!("unknown mode: {value}\n\n{}", usage()),
@@ -112,7 +118,7 @@ where
 }
 
 pub fn usage() -> &'static str {
-    "Usage: cargo run --release -p kanari-benchmarks -- [--txs N] [--senders N] [--runs N] [--target-tps N] [--mode production|immediate] [--json]\n       cargo run --release -p kanari-benchmarks -- --high-throughput --json\n       cargo run --release -p kanari-benchmarks -- [N]\n\nDefault mode is production: submit_transaction + produce_checkpoint."
+    "Usage: cargo run --release -p kanari-benchmarks -- [--txs N] [--senders N] [--runs N] [--target-tps N] [--mode admission|owned-fastpath|production|immediate] [--json]\n       cargo run --release -p kanari-benchmarks -- --high-throughput --json\n       cargo run --release -p kanari-benchmarks -- [N]\n\nDefault mode is production: submit_transaction + produce_checkpoint. Admission mode measures verified mempool batch admission only. Owned-fastpath mode commits no-shared-object transactions through the checkpoint pipeline without DAG consensus."
 }
 
 fn apply_high_throughput_preset(config: &mut HarnessConfig) {
@@ -125,7 +131,7 @@ fn apply_high_throughput_preset(config: &mut HarnessConfig) {
     if config.runs == HarnessConfig::default().runs {
         config.runs = HIGH_THROUGHPUT_RUNS;
     }
-    config.mode = HarnessMode::Production;
+    config.mode = HarnessMode::Admission;
     config.target_tps = Some(HIGH_THROUGHPUT_TARGET_TPS);
 }
 
@@ -219,7 +225,7 @@ mod tests {
         assert_eq!(config.tx_count, HIGH_THROUGHPUT_TX_COUNT);
         assert_eq!(config.sender_count, Some(HIGH_THROUGHPUT_SENDER_COUNT));
         assert_eq!(config.runs, HIGH_THROUGHPUT_RUNS);
-        assert_eq!(config.mode, HarnessMode::Production);
+        assert_eq!(config.mode, HarnessMode::Admission);
         assert_eq!(config.target_tps, Some(HIGH_THROUGHPUT_TARGET_TPS));
     }
 

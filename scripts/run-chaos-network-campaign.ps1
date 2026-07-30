@@ -19,11 +19,39 @@ param(
     [ValidateRange(0.000000001, 1000000000)]
     [double]$Amount = 0.000000001,
 
-    [ValidateRange(1, 256)]
+    [ValidateRange(1, 1000000)]
     [int]$FaucetCoinsPerSender = 16,
+
+    [switch]$AutoCoinFanout,
 
     [ValidateRange(0, 20)]
     [int]$ChaosRoundsPerIteration = 4,
+
+    [ValidateRange(0, 20)]
+    [int]$CrashDuringLoadRoundsPerIteration = 0,
+
+    [ValidateSet('follower', 'leader', 'two-node', 'round-robin', 'client-ingress')]
+    [string]$CrashDuringLoadPattern = 'follower',
+
+    [ValidateRange(1, 3600)]
+    [int]$CrashDuringLoadFirstDelaySec = 10,
+
+    [ValidateRange(1, 3600)]
+    [int]$CrashDuringLoadRestartDelaySec = 0,
+
+    [ValidateRange(0, 20)]
+    [int]$RecoveryAuditRoundsPerIteration = 1,
+
+    [ValidateRange(0, 3600)]
+    [int]$ProfileIntervalSec = 15,
+
+    [switch]$StartLinuxPerfRecorders,
+
+    [ValidateRange(1, 10000)]
+    [int]$PerfSampleHz = 99,
+
+    [ValidateRange(1, 3600)]
+    [int]$PerfDurationSec = 30,
 
     [ValidateRange(0, 30000)]
     [int]$P2pPublishDelayMs = 250,
@@ -61,6 +89,7 @@ Write-Host "Kanari network chaos campaign"
 Write-Host "  deadline=$deadline"
 Write-Host "  senders=$($Senders -join ', ')"
 Write-Host "  count_per_sender=$CountPerSender chaos_rounds=$ChaosRoundsPerIteration"
+Write-Host "  crash_during_load_rounds=$CrashDuringLoadRoundsPerIteration pattern=$CrashDuringLoadPattern recovery_audit_rounds=$RecoveryAuditRoundsPerIteration"
 Write-Host "  p2p_delay_ms=$P2pPublishDelayMs duplicate_publishes=$P2pDuplicatePublishes"
 
 while ((Get-Date) -lt $deadline) {
@@ -77,6 +106,7 @@ while ((Get-Date) -lt $deadline) {
         -FundSenders `
         -FaucetAmount 1 `
         -FaucetCoinsPerSender $FaucetCoinsPerSender `
+        -AutoCoinFanout:$AutoCoinFanout `
         -P2pChannelCapacity $P2pChannelCapacity `
         -MaxConcurrentSyncMessages $MaxConcurrentSyncMessages `
         -P2pPublishDelayMs $P2pPublishDelayMs `
@@ -84,6 +114,15 @@ while ((Get-Date) -lt $deadline) {
         -CountPerSender $CountPerSender `
         -Amount $Amount `
         -ChaosRounds $ChaosRoundsPerIteration `
+        -CrashDuringLoadRounds $CrashDuringLoadRoundsPerIteration `
+        -CrashDuringLoadPattern $CrashDuringLoadPattern `
+        -CrashDuringLoadFirstDelaySec $CrashDuringLoadFirstDelaySec `
+        -CrashDuringLoadRestartDelaySec $CrashDuringLoadRestartDelaySec `
+        -RecoveryAuditRounds $RecoveryAuditRoundsPerIteration `
+        -ProfileIntervalSec $ProfileIntervalSec `
+        -StartLinuxPerfRecorders:$StartLinuxPerfRecorders `
+        -PerfSampleHz $PerfSampleHz `
+        -PerfDurationSec $PerfDurationSec `
         -RootSyncTimeoutSec $RootSyncTimeoutSec `
         -BaseP2pPort $baseP2pPort `
         -BaseRpcPort $baseRpcPort `

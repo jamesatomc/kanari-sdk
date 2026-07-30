@@ -243,6 +243,29 @@ fn assert_fresh_engine_exposes_separate_genesis_native_gas_coin(engine: &Blockch
 }
 
 #[test]
+fn try_get_owner_info_rejects_malformed_owner_state() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let owner = KanariAddress::DEV_ADDRESS;
+    let owner_addr = KanariAddress::parse_to_account_address(owner).unwrap();
+    let owner_key = {
+        let mut key = b"account:".to_vec();
+        key.extend_from_slice(owner_addr.as_ref());
+        key
+    };
+    engine
+        .state_read()
+        .store
+        .apply_raw_changes(&[(owner_key, vec![0x80])], &[])
+        .unwrap();
+
+    let error = engine.try_get_owner_info(owner).unwrap_err();
+    assert!(
+        error.to_string().contains("Failed to load owner state"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn sync_checkpoint_from_data_rejects_uncertified_checkpoint() {
     let engine = BlockchainEngine::new_in_memory().unwrap();
     let prev_hash = {
@@ -355,4 +378,29 @@ fn block_queries_include_checkpoint_object_changes() {
     assert_eq!(block.object_changes[0].object_ref.object_id, "0x1");
     assert_eq!(block.object_graph_edges.len(), 1);
     assert_eq!(full_block.object_graph_edges.len(), 1);
+}
+
+#[test]
+fn block_from_full_data_rejects_invalid_hash_fields() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let mut full_block = engine
+        .get_full_block(0)
+        .expect("genesis block should exist");
+
+    full_block.prev_hash = "not-hex".to_string();
+    let error = BlockchainEngine::try_block_from_full_data(&full_block).unwrap_err();
+    assert!(
+        error.to_string().contains("block prev_hash"),
+        "unexpected error: {error}"
+    );
+
+    let mut full_block = engine
+        .get_full_block(0)
+        .expect("genesis block should exist");
+    full_block.state_root = "0x01".to_string();
+    let error = BlockchainEngine::try_block_from_full_data(&full_block).unwrap_err();
+    assert!(
+        error.to_string().contains("block state_root"),
+        "unexpected error: {error}"
+    );
 }

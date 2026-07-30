@@ -11,7 +11,7 @@ use kanari_system_natives::object::{
     BorrowedObjectsExt, DeletedObjectsExt, LoadedObjectsExt, SavedObjectsExt,
 };
 use kanari_system_natives::transfer_natives::TransferredObjectsExt;
-use kanari_types::clock::ClockModule;
+use kanari_types::clock::{Clock, ClockModule};
 
 use kanari_types::error::KanariUnwrapExt;
 use kanari_types::event::Event;
@@ -25,6 +25,7 @@ use move_vm_runtime::move_vm::MoveVM;
 use move_vm_runtime::native_extensions::NativeContextExtensions;
 use move_vm_runtime::native_functions::NativeFunctionTable;
 use move_vm_runtime::session::Session;
+use sha3::{Digest, Sha3_256};
 mod gas_ops;
 mod helpers;
 pub mod load_system_modules;
@@ -32,6 +33,7 @@ mod object_ops;
 mod parsers;
 use kanari_types::address::Address as KanariAddress;
 use kanari_types::gas::GasOperation;
+use kanari_types::object::UIDRecord;
 use kanari_types::transaction::{ObjectInput, ObjectOwnerKind, ObjectRef};
 use kanari_types::tx_context::TxContextModule;
 mod move_runtime_extensions;
@@ -1223,6 +1225,13 @@ impl MoveRuntime {
             return Ok(id);
         }
 
+        if !std::env::var("KANARI_CLOCK_CREATE_VM")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+        {
+            return self.ensure_system_clock_native(state);
+        }
+
         let module_id = ClockModule::get_module_id()?;
         let func_name = ClockModule::function_names().create;
 
@@ -1241,7 +1250,7 @@ impl MoveRuntime {
             false,
         )?;
 
-        state.apply_changeset(&cs)?;
+        state.apply_changeset_without_supply_validation(&cs)?;
         self.persist_created_objects(&cs)?;
         self.persist_deleted_objects(&cs)?;
 
@@ -1252,6 +1261,47 @@ impl MoveRuntime {
             .require("Clock object was not created by clock::create")?;
 
         let addr = AccountAddress::from_hex_literal(object_id)?;
+        state.set_system_clock_object_id(addr)?;
+        Ok(addr)
+    }
+
+    fn ensure_system_clock_native(&self, state: &mut StateManager) -> Result<AccountAddress> {
+        let genesis_tx_hash = hash_data_blake3(b"KANARI::GENESIS::CLOCK");
+        let mut hasher = Sha3_256::new();
+        hasher.update(genesis_tx_hash);
+        hasher.update(0u64.to_le_bytes());
+        let digest = hasher.finalize();
+        let addr = AccountAddress::from_bytes(&digest[..AccountAddress::LENGTH])
+            .context("Failed to derive native system clock object id")?;
+        let clock = Clock {
+            id: UIDRecord::new(addr),
+            timestamp_ms: 0,
+        };
+        let clock_type = {
+            let module_id = ClockModule::get_module_id()?;
+            format!(
+                "{}::{}::{}",
+                module_id.address().to_hex_literal(),
+                module_id.name(),
+                ClockModule::CLOCK_STRUCT
+            )
+        };
+        let mut changeset = ChangeSet::new();
+        changeset.created_objects.push((
+            addr.to_hex_literal(),
+            crate::changeset::CreatedObject {
+                owner: AccountAddress::ZERO,
+                owner_kind: kanari_types::transaction::ObjectOwnerKind::Shared,
+                uid: Some(clock.id.clone()),
+                id: None,
+                type_: clock_type,
+                data: bcs::to_bytes(&clock).context("Failed to encode native system clock")?,
+                version: 1,
+            },
+        ));
+        state.apply_changeset_without_supply_validation(&changeset)?;
+        self.persist_created_objects(&changeset)?;
+        self.persist_deleted_objects(&changeset)?;
         state.set_system_clock_object_id(addr)?;
         Ok(addr)
     }
@@ -1282,6 +1332,52 @@ impl MoveRuntime {
         )
     }
 
+    pub fn build_native_clock_consensus_commit_prologue(
+        &self,
+        state: &StateManager,
+        clock_id: AccountAddress,
+        timestamp_ms: u64,
+    ) -> Result<ChangeSet> {
+        let object_id = clock_id.to_hex_literal();
+        let existing = state
+            .get_object(&object_id)?
+            .with_context(|| format!("System clock object {object_id} not found"))?;
+        let current_clock: Clock = bcs::from_bytes(&existing.data)
+            .context("Failed to decode system clock object for native prologue")?;
+        ensure!(
+            timestamp_ms >= current_clock.timestamp_ms,
+            "Clock timestamp is not monotonic: new={} current={}",
+            timestamp_ms,
+            current_clock.timestamp_ms
+        );
+
+        let clock = Clock {
+            id: UIDRecord::new(clock_id),
+            timestamp_ms,
+        };
+        let data = bcs::to_bytes(&clock).context("Failed to encode native clock prologue")?;
+        let version = if data == existing.data {
+            existing.version
+        } else {
+            existing.version.saturating_add(1)
+        };
+
+        let mut changeset = ChangeSet::new();
+        changeset.created_objects.push((
+            object_id,
+            crate::changeset::CreatedObject {
+                owner: existing.owner,
+                owner_kind: existing.owner_kind,
+                uid: Some(clock.id),
+                id: existing.id,
+                type_: existing.type_,
+                data,
+                version,
+            },
+        ));
+        Ok(changeset)
+    }
+
     pub fn execute_entry_function(
         &self,
         module_id: &ModuleId,
@@ -1298,35 +1394,6 @@ impl MoveRuntime {
             type_args,
             args,
             ExecutionOptions::new(sender, gas_info, timestamp, None),
-        )
-    }
-
-    pub fn execute_entry_function_with_tx_hash_and_persistence(
-        &self,
-        module_id: &ModuleId,
-        function_name: &str,
-        type_args: Vec<TypeTag>,
-        args: Vec<Vec<u8>>,
-        sender: Option<AccountAddress>,
-        gas_info: Option<(u64, u64)>,
-        timestamp: Option<u64>,
-        tx_hash: Option<Vec<u8>>,
-        persist_runtime_state: bool,
-    ) -> Result<ChangeSet> {
-        self.execute_entry_function_with_object_context_and_persistence(
-            module_id,
-            function_name,
-            type_args,
-            args,
-            EntryFunctionObjectContext {
-                object_inputs: Vec::new(),
-                sender,
-                gas_info,
-                timestamp,
-                tx_hash,
-                persist_runtime_state,
-                state_overlay: None,
-            },
         )
     }
 
@@ -2079,7 +2146,7 @@ impl MoveRuntime {
             return serde_json::Value::String(addr.to_hex_literal());
         }
 
-        serde_json::to_value(bytes).unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
+        serde_json::Value::Array(bytes.iter().copied().map(serde_json::Value::from).collect())
     }
 }
 

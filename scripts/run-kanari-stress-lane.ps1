@@ -18,14 +18,15 @@ param(
     [int]$Count,
 
     [Parameter(Mandatory = $true)]
-    [string]$Rpc,
-
-    [Parameter(Mandatory = $true)]
-    [string]$Password
+    [string]$Rpc
 )
 
 $ErrorActionPreference = 'Stop'
 $env:KANARI_KEYSTORE_PATH = $KeystorePath
+$password = $env:KANARI_LOAD_PASSWORD
+if ([string]::IsNullOrWhiteSpace($password)) {
+    throw 'KANARI_LOAD_PASSWORD is required.'
+}
 
 & $KanariExe `
     client `
@@ -35,6 +36,6 @@ $env:KANARI_KEYSTORE_PATH = $KeystorePath
     --amount $Amount `
     --count $Count `
     --rpc $Rpc `
-    -p $Password
+    -p $password
 
 exit $LASTEXITCODE

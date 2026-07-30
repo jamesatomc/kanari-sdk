@@ -142,15 +142,12 @@ pub struct DagProductionPolicy {
     pub missing_parent_authors: Vec<String>,
     pub parent_author_count: usize,
     pub quorum_size: usize,
-    pub local_has_vertex_in_current_round: bool,
-    pub using_catch_up_round: bool,
 }
 
 impl DagProductionPolicy {
     pub fn should_wait_for_current_round_quorum(&self) -> bool {
         self.current_round > 0
             && self.parent_round == self.current_round
-            && self.local_has_vertex_in_current_round
             && self.parent_author_count < self.quorum_size
     }
 }
@@ -258,7 +255,7 @@ impl MysticetiBackend {
         let authority_count = committee.len();
         let protocol_config = MysticetiConsensusProtocol::Mysticeti {
             leader_count: NonZeroUsize::new(authority_count.clamp(1, 2))
-                .expect("leader count is non-zero"),
+                .context("Mysticeti leader count must be non-zero")?,
         };
         let protocol = protocol_config
             .to_protocol(&committee)
@@ -359,16 +356,10 @@ impl MysticetiBackend {
 
         self.core.drain_submitted_transactions();
         let Some(block) = self.core.try_new_block() else {
-            // `try_send` only hands the transactions to Mysticeti's local queue;
-            // `try_new_block` is the first point where they become anchored in a
-            // native block. After a restart or threshold-clock stall, Core may
-            // decline to produce a block even though Kanari has marked the hashes
-            // as submitted. Roll the marks back so the next producer tick can
-            // re-offer still-pending mempool transactions instead of stranding
-            // them forever.
-            for (_, hash) in &candidates {
-                self.submitted_tx_hashes.remove(hash);
-            }
+            // The drain moved these transactions into Mysticeti's internal
+            // pending queue. Keep the admission markers until commit;
+            // re-submitting on every threshold-clock stall fills the bounded
+            // channel with duplicates and can starve DAG repair.
             return Ok(None);
         };
         let reference = *block.reference();
@@ -642,10 +633,6 @@ impl DagEngine {
             .cloned()
             .collect();
 
-        let local_has_vertex_in_current_round = mysticeti_blocks
-            .iter()
-            .any(|block| self.authority_id(block.author()) == self.authority_id);
-
         DagProductionPolicy {
             current_round,
             parent_round,
@@ -655,8 +642,6 @@ impl DagEngine {
             missing_parent_authors,
             parent_author_count: parent_authors.len(),
             quorum_size: state.mysticeti.protocol.direct_commit_quorum as usize,
-            local_has_vertex_in_current_round,
-            using_catch_up_round: false,
         }
     }
 
@@ -809,14 +794,13 @@ impl DagEngine {
             return Ok(Some(existing));
         }
         let mut seen = HashSet::new();
-        let transactions = batch
-            .transactions
-            .into_iter()
-            .filter(|tx| {
-                let hash = tx.transaction_hash().to_vec();
-                seen.insert(hash.clone()) && !self.engine.is_transaction_committed(&hash)
-            })
-            .collect::<Vec<_>>();
+        let mut transactions = Vec::new();
+        for tx in batch.transactions {
+            let hash = tx.transaction_hash().to_vec();
+            if seen.insert(hash.clone()) && !self.engine.try_is_transaction_committed(&hash)? {
+                transactions.push(tx);
+            }
+        }
         if transactions.is_empty() {
             info!(
                 "[DAG v2] Committed empty sub-DAG anchor {} without creating a blockchain checkpoint",
@@ -845,16 +829,10 @@ impl DagEngine {
         let prepared = self.engine.prepare_checkpoint_state(&checkpoint)?;
         checkpoint.state_root = prepared.state_root;
         checkpoint.transaction_effects = prepared.effects.into();
-        checkpoint.object_changes =
-            BlockchainEngine::aggregate_checkpoint_object_changes(&checkpoint.transaction_effects)
-                .into();
-        checkpoint.object_graph_edges = BlockchainEngine::aggregate_checkpoint_object_graph_edges(
-            &checkpoint.transaction_effects,
-        )
-        .into();
         self.engine.apply_prepared_checkpoint(
             checkpoint.clone(),
             prepared.state,
+            prepared.smt_changes,
             prepared.transactions,
             true,
         )?;
@@ -912,6 +890,73 @@ impl DagEngine {
         Ok(vertices)
     }
 
+    /// Return a bounded, parent-first slice ending at `target_round`.
+    ///
+    /// A repair request names the round it is missing. Serving the newest local
+    /// vertices instead can never close an older gap and creates retry traffic.
+    pub fn vertices_through_round_for_sync(
+        &self,
+        target_round: u64,
+        limit: usize,
+    ) -> Result<Vec<DagVertex>> {
+        if target_round == 0 || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let state = lock_read(&self.state);
+        let reader = state.mysticeti.core.block_reader();
+        let target_round = target_round.min(reader.highest_round());
+        let mut vertices = Vec::with_capacity(limit);
+        for round in (1..=target_round).rev() {
+            let mut blocks = reader.get_blocks_by_round(round);
+            blocks.sort_by_key(|block| block.author().index());
+            for block in blocks {
+                vertices.push(state.mysticeti.block_to_vertex(&block).with_context(|| {
+                    format!("Failed to convert Mysticeti block from round {round} for DAG repair")
+                })?);
+                if vertices.len() == limit {
+                    break;
+                }
+            }
+            if vertices.len() == limit {
+                break;
+            }
+        }
+        vertices.sort_by(|left, right| {
+            left.round
+                .cmp(&right.round)
+                .then_with(|| left.author.cmp(&right.author))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(vertices)
+    }
+
+    /// Return parent rounds that are still absent from Mysticeti's
+    /// authoritative block store. This lets checkpoint catch-up request the
+    /// next ancestry page instead of repeatedly requesting buffered roots.
+    pub fn missing_parent_rounds_for_sync(&self, vertices: &[DagVertex]) -> Vec<u64> {
+        let state = lock_read(&self.state);
+        let reader = state.mysticeti.core.block_reader();
+        let mut missing = BTreeSet::new();
+
+        for vertex in vertices {
+            for (_, parent_round, parent_id) in &vertex.parents {
+                if *parent_round == 0 {
+                    continue;
+                }
+                let present = reader
+                    .get_blocks_by_round(*parent_round)
+                    .iter()
+                    .any(|block| mysticeti_reference_to_vertex_id(block.reference()) == *parent_id);
+                if !present {
+                    missing.insert(*parent_round);
+                }
+            }
+        }
+
+        missing.into_iter().collect()
+    }
+
     /// Return the exact checkpoint vertices plus every available non-genesis
     /// parent required to inject them into Mysticeti. Roots are resolved from
     /// the retained Mysticeti block store; parents are then resolved by their
@@ -925,6 +970,7 @@ impl DagEngine {
             return Ok(Vec::new());
         }
         anyhow::ensure!(limit > 0, "Checkpoint DAG sync limit must be non-zero");
+        const MAX_SYNC_VERTEX_JSON_BYTES: usize = 4 * 1024 * 1024;
 
         let state = lock_read(&self.state);
         let reader = state.mysticeti.core.block_reader();
@@ -944,6 +990,7 @@ impl DagEngine {
         // vertices until their own Mysticeti store has the parent, and a remote
         // checkpoint is never applied before the local DAG commits it.
         let mut pending = VecDeque::with_capacity(checkpoint_vertices.len());
+        let checkpoint_roots = checkpoint_vertices.iter().copied().collect::<HashSet<_>>();
         for vertex_id in checkpoint_vertices {
             let vertex = recent.get(vertex_id).cloned().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -956,12 +1003,22 @@ impl DagEngine {
         }
 
         let mut closure = BTreeMap::new();
+        let mut encoded_bytes = 0usize;
         let mut truncated = false;
         while let Some(vertex) = pending.pop_front() {
             if closure.contains_key(&vertex.id) {
                 continue;
             }
             if closure.len() >= limit {
+                truncated = true;
+                break;
+            }
+            let vertex_bytes = serde_json::to_vec(&vertex)
+                .context("Failed to size DAG vertex for checkpoint sync")?
+                .len();
+            if !checkpoint_roots.contains(&vertex.id)
+                && encoded_bytes.saturating_add(vertex_bytes) > MAX_SYNC_VERTEX_JSON_BYTES
+            {
                 truncated = true;
                 break;
             }
@@ -990,6 +1047,7 @@ impl DagEngine {
                 );
                 pending.push_back(parent_vertex);
             }
+            encoded_bytes = encoded_bytes.saturating_add(vertex_bytes);
             closure.insert(vertex.id, vertex);
         }
         if truncated {

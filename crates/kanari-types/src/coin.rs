@@ -6,9 +6,12 @@ use crate::balance::BalanceRecord;
 use crate::object::UIDRecord;
 use anyhow::{Context, Result};
 use move_core_types::{
-    account_address::AccountAddress, identifier::Identifier, language_storage::ModuleId,
+    account_address::AccountAddress,
+    identifier::Identifier,
+    language_storage::{ModuleId, TypeTag},
 };
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Coin wrapper (mirrors `Coin<T>` in Move)
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -170,6 +173,19 @@ impl CoinModule {
         )
     }
 
+    /// Canonicalize a Move token type while preserving unknown legacy spellings.
+    pub fn normalize_token_type(token_type: &str) -> String {
+        TypeTag::from_str(token_type)
+            .map(|tag| tag.to_string())
+            .unwrap_or_else(|_| token_type.to_string())
+    }
+
+    /// Read the `u64` balance from the canonical `Coin<T>` BCS layout.
+    pub fn read_balance(data: &[u8]) -> Option<u64> {
+        let amount = data.get(32..40)?;
+        Some(u64::from_le_bytes(amount.try_into().ok()?))
+    }
+
     /// Legacy nested coin path accepted for older indexed objects.
     pub fn legacy_nested_coin_type(token_type: &str) -> String {
         format!(
@@ -267,5 +283,23 @@ mod tests {
         assert_eq!(metadata.symbol_str().unwrap(), "KANARI");
         assert_eq!(metadata.name_str().unwrap(), "Kanari Coin");
         assert_eq!(metadata.decimals, 9u8);
+    }
+
+    #[test]
+    fn coin_layout_balance_reader_is_bounded() {
+        assert_eq!(CoinModule::read_balance(&[0; 39]), None);
+
+        let mut bytes = vec![0u8; 40];
+        bytes[32..40].copy_from_slice(&42u64.to_le_bytes());
+        assert_eq!(CoinModule::read_balance(&bytes), Some(42));
+    }
+
+    #[test]
+    fn token_type_normalization_is_canonical_and_legacy_safe() {
+        assert_eq!(
+            CoinModule::normalize_token_type("0x2::kanari::KANARI"),
+            "0x2::kanari::KANARI"
+        );
+        assert_eq!(CoinModule::normalize_token_type("not-a-type"), "not-a-type");
     }
 }

@@ -18,6 +18,7 @@ blake3 = { workspace = true }
 kanari-db-common = { workspace = true }
 tracing = { workspace = true }
 once_cell = { workspace = true }
+rayon = { workspace = true }
 
 [features]
 default = []

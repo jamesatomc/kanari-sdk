@@ -9,6 +9,22 @@ use kanari_types::transaction::{ObjectRef, SignedTransaction, Transaction};
 use move_core_types::account_address::AccountAddress;
 use proptest::prelude::*;
 
+#[test]
+fn dag_repair_requests_quorum_without_a_local_vertex_after_restart() {
+    let policy = DagProductionPolicy {
+        current_round: 42,
+        target_round: 43,
+        parent_round: 42,
+        parent_author_count: 1,
+        quorum_size: 3,
+        parent_ids: vec![],
+        parent_authors: vec!["authority-a".to_string()],
+        missing_parent_authors: vec!["authority-b".to_string(), "authority-c".to_string()],
+    };
+
+    assert!(policy.should_wait_for_current_round_quorum());
+}
+
 fn authority_key(seed: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
 }
@@ -889,6 +905,27 @@ fn test_checkpoint_sync_finds_roots_across_retained_mysticeti_store() {
 
     assert_eq!(evidence.len(), 1);
     assert_eq!(evidence[0].id, old_root);
+}
+
+#[test]
+fn test_checkpoint_sync_reports_only_missing_parent_rounds() {
+    let (_engine, dag_engine, _) = build_test_dag_engine(vec!["auth1".to_string()], "auth1");
+    let existing = dag_engine
+        .produce_vertex()
+        .unwrap()
+        .vertex
+        .expect("single-authority node should produce a vertex");
+    let mut buffered = existing.clone();
+    buffered.parents = vec![
+        ("auth1".to_string(), existing.round, existing.id),
+        ("auth1".to_string(), 77, [0x77; 32]),
+        ("auth1".to_string(), 78, [0x78; 32]),
+    ];
+
+    assert_eq!(
+        dag_engine.missing_parent_rounds_for_sync(&[buffered]),
+        vec![77, 78]
+    );
 }
 
 #[test]
