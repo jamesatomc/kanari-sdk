@@ -709,7 +709,7 @@ impl P2PEventHandler {
                     }
                 } => {
                     let queued_ms = queued.enqueued_at.elapsed().as_millis();
-                    info!(
+                    debug!(
                         p2p_outbound_queue_latency_ms = queued_ms,
                         "P2P outbound queue latency"
                     );

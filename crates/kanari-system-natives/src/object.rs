@@ -3,6 +3,7 @@
 
 use better_any::{Tid, TidAble};
 use move_core_types::gas_algebra::{InternalGas, InternalGasPerByte, NumBytes};
+use move_core_types::language_storage::TypeTag;
 use move_vm_runtime::native_charge_gas_early_exit;
 use move_vm_runtime::native_functions::NativeContext;
 use move_vm_runtime::native_functions::NativeFunction;
@@ -10,6 +11,7 @@ use move_vm_types::natives::function::NativeResult;
 use move_vm_types::natives::function::PartialVMResult;
 use smallvec::smallvec;
 use std::collections::VecDeque;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::helpers::{expect_native_args, expect_native_signature, make_module_natives};
@@ -18,6 +20,7 @@ pub const E_OBJECT_NOT_FOUND: u64 = 9_001;
 pub const E_OBJECT_LAYOUT_UNAVAILABLE: u64 = 9_002;
 pub const E_OBJECT_TYPE_MISMATCH: u64 = 9_003;
 pub const E_OBJECT_DESERIALIZE_FAILED: u64 = 9_004;
+pub const E_OBJECT_NOT_MUTABLY_BORROWABLE: u64 = 9_005;
 
 #[derive(Debug, Clone)]
 pub struct GasParameters {
@@ -134,18 +137,44 @@ impl DeletedObjectsExt {
 }
 
 /// Extension for loaded objects from storage
+#[derive(Clone, Debug)]
+pub struct LoadedObject {
+    pub type_str: String,
+    pub data: Vec<u8>,
+    pub can_mutably_borrow: bool,
+}
+
 #[derive(Tid, Default)]
 pub struct LoadedObjectsExt {
-    pub objects: std::collections::HashMap<String, (String, Vec<u8>)>,
+    pub objects: std::collections::HashMap<String, LoadedObject>,
 }
 
 impl LoadedObjectsExt {
-    pub fn insert(&mut self, object_id: String, type_str: String, data: Vec<u8>) {
-        self.objects.insert(object_id, (type_str, data));
+    pub fn insert(
+        &mut self,
+        object_id: String,
+        type_str: String,
+        data: Vec<u8>,
+        can_mutably_borrow: bool,
+    ) {
+        self.objects.insert(
+            object_id,
+            LoadedObject {
+                type_str,
+                data,
+                can_mutably_borrow,
+            },
+        );
     }
-    pub fn get(&self, object_id: &str) -> Option<&(String, Vec<u8>)> {
+    pub fn get(&self, object_id: &str) -> Option<&LoadedObject> {
         self.objects.get(object_id)
     }
+}
+
+fn canonical_type_string(type_str: &str) -> String {
+    TypeTag::from_str(type_str)
+        .map(|tag| tag.to_string())
+        .unwrap_or_else(|_| type_str.to_string())
 }
 
 /// Extension for tracking borrowed mutable objects
@@ -219,9 +248,11 @@ fn native_borrow_global(
             ext.get(&object_id).cloned()
         });
 
-    let Some((type_str, obj_data)) = loaded_data.flatten() else {
+    let Some(loaded_object) = loaded_data.flatten() else {
         return Ok(NR::err(context.gas_used(), E_OBJECT_NOT_FOUND));
     };
+    let type_str = loaded_object.type_str;
+    let obj_data = loaded_object.data;
 
     native_charge_gas_early_exit!(
         context,
@@ -244,7 +275,7 @@ fn native_borrow_global(
         }
     };
 
-    if type_str != requested_type {
+    if canonical_type_string(&type_str) != canonical_type_string(&requested_type) {
         return Ok(NR::err(context.gas_used(), E_OBJECT_TYPE_MISMATCH));
     }
 
@@ -289,9 +320,14 @@ fn native_borrow_global_mut(
             ext.get(&object_id).cloned()
         });
 
-    let Some((type_str, obj_data)) = loaded_data.flatten() else {
+    let Some(loaded_object) = loaded_data.flatten() else {
         return Ok(NR::err(context.gas_used(), E_OBJECT_NOT_FOUND));
     };
+    if !loaded_object.can_mutably_borrow {
+        return Ok(NR::err(context.gas_used(), E_OBJECT_NOT_MUTABLY_BORROWABLE));
+    }
+    let type_str = loaded_object.type_str;
+    let obj_data = loaded_object.data;
 
     native_charge_gas_early_exit!(
         context,
@@ -314,7 +350,7 @@ fn native_borrow_global_mut(
         }
     };
 
-    if type_str != requested_type {
+    if canonical_type_string(&type_str) != canonical_type_string(&requested_type) {
         return Ok(NR::err(context.gas_used(), E_OBJECT_TYPE_MISMATCH));
     }
 
@@ -477,13 +513,14 @@ mod tests {
         let type_str = "0x1::coin::Coin<0x1::kanari_coin::KANARI>".to_string();
         let data = vec![0x01, 0x02, 0x03];
 
-        ext.insert(object_id.clone(), type_str.clone(), data.clone());
+        ext.insert(object_id.clone(), type_str.clone(), data.clone(), true);
 
         let retrieved = ext.get(&object_id);
         assert!(retrieved.is_some());
-        let (retrieved_type, retrieved_data) = retrieved.unwrap();
-        assert_eq!(*retrieved_type, type_str);
-        assert_eq!(*retrieved_data, data);
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.type_str, type_str);
+        assert_eq!(retrieved.data, data);
+        assert!(retrieved.can_mutably_borrow);
     }
 
     #[test]

@@ -76,16 +76,24 @@ pub fn resolve_sender(from_opt: Option<String>) -> Result<String> {
     normalize_addr(&addr)
 }
 
-/// Load a wallet for the given normalized address, prompting for a password if not provided.
+/// Load a wallet for the given normalized address.
+///
+/// An explicit password takes precedence. For non-interactive, local automation
+/// (for example an isolated devnet test harness), `KANARI_WALLET_PASSWORD` may
+/// be set. Interactive clients retain the secure password prompt by default.
 pub fn load_wallet_for(
     address_normalized: &str,
     password_opt: Option<String>,
 ) -> Result<kanari_crypto::wallet::Wallet> {
-    let password = match password_opt {
-        Some(p) => p,
-        None => rpassword::prompt_password("Wallet password: ")
-            .context("Password required for signing")?,
-    };
+    let password = password_opt
+        .or_else(|| {
+            std::env::var("KANARI_WALLET_PASSWORD")
+                .ok()
+                .filter(|password| !password.is_empty())
+        })
+        .map(Ok)
+        .unwrap_or_else(|| rpassword::prompt_password("Wallet password: "))
+        .context("Password required for signing")?;
 
     let w = load_wallet(address_normalized, &password)
         .context("Failed to load wallet. Make sure the wallet exists and password is correct")?;

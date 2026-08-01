@@ -204,6 +204,7 @@ pub async fn consolidate_coin_objects(
                     .context("Invalid merge coin object ID")?
                     .to_vec(),
                 ],
+                object_inputs: None,
                 gas_limit,
                 gas_price,
                 nonce: None,

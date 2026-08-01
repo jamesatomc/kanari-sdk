@@ -652,6 +652,9 @@ impl BlockchainEngine {
                 .deleted_objects
                 .push(gas_object_ref.object_id.clone());
         } else {
+            let burned_coin_balance = object_balance
+                .checked_sub(amount)
+                .context("Native burn coin balance underflow after precheck")?;
             changeset.created_objects.push((
                 gas_object_ref.object_id.clone(),
                 CreatedObject {
@@ -660,8 +663,187 @@ impl BlockchainEngine {
                     uid: gas_object.uid,
                     id: gas_object.id,
                     type_: gas_object.type_,
-                    data: gas_object.data,
+                    data: Self::native_coin_data_with_balance(
+                        &gas_object_ref.object_id,
+                        &gas_object.data,
+                        burned_coin_balance,
+                    )?,
                     version: gas_object.version,
+                },
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn native_coin_data_with_balance(
+        object_id: &str,
+        existing_data: &[u8],
+        amount: u64,
+    ) -> Result<Vec<u8>> {
+        let mut data = existing_data.to_vec();
+        ensure!(
+            data.len() >= 40,
+            "Native coin object {} has invalid coin bytes",
+            object_id
+        );
+        data[32..40].copy_from_slice(&amount.to_le_bytes());
+        Ok(data)
+    }
+
+    fn deterministic_native_transfer_output_id(tx: &Transaction) -> String {
+        let mut seed = b"kanari:native_transfer_output:v1:".to_vec();
+        seed.extend_from_slice(&tx.hash());
+        format!("0x{}", hex::encode(kanari_crypto::hash_data_blake3(&seed)))
+    }
+
+    fn execute_backend_native_transfer(
+        state: &StateManager,
+        tx: &Transaction,
+        sender_addr: AccountAddress,
+        coin_object_id: &str,
+        recipient: &str,
+        amount: u64,
+        gas_cost: u64,
+        changeset: &mut ChangeSet,
+    ) -> Result<()> {
+        let gas_payment = tx
+            .gas_payment()
+            .context("Native transfer requires prepared gas payment")?;
+        let gas_object_ref = gas_payment
+            .payment_objects
+            .first()
+            .context("Native transfer requires one prepared gas payment object")?;
+        ensure!(
+            gas_object_ref.object_id != coin_object_id,
+            "Native transfer requires two distinct Coin<{}> objects: one mutable transfer input and one separate gas payment object",
+            GAS_COIN
+        );
+
+        let transfer_object = state.get_object(coin_object_id)?.with_context(|| {
+            format!(
+                "Native transfer coin object {} was not found",
+                coin_object_id
+            )
+        })?;
+        ensure!(
+            Self::is_native_gas_coin_type(&transfer_object.type_),
+            "Native transfer object {} must be Coin<{}>, found {}",
+            coin_object_id,
+            GAS_COIN,
+            transfer_object.type_
+        );
+        ensure!(
+            transfer_object.owner == sender_addr,
+            "Native transfer object {} is not owned by sender {}",
+            coin_object_id,
+            sender_addr.to_hex_literal()
+        );
+
+        let gas_object = state
+            .get_object(&gas_object_ref.object_id)?
+            .with_context(|| {
+                format!(
+                    "Native transfer gas object {} was not found",
+                    gas_object_ref.object_id
+                )
+            })?;
+        ensure!(
+            Self::is_native_gas_coin_type(&gas_object.type_),
+            "Native transfer gas object {} must be Coin<{}>, found {}",
+            gas_object_ref.object_id,
+            GAS_COIN,
+            gas_object.type_
+        );
+        ensure!(
+            gas_object.owner == sender_addr,
+            "Native transfer gas object {} is not owned by sender {}",
+            gas_object_ref.object_id,
+            sender_addr.to_hex_literal()
+        );
+
+        let transfer_balance =
+            CoinModule::read_balance(&transfer_object.data).with_context(|| {
+                format!(
+                    "Native transfer object {} has invalid coin bytes",
+                    coin_object_id
+                )
+            })?;
+        let gas_balance = CoinModule::read_balance(&gas_object.data).with_context(|| {
+            format!(
+                "Native transfer gas object {} has invalid coin bytes",
+                gas_object_ref.object_id
+            )
+        })?;
+        ensure!(
+            transfer_balance >= amount,
+            "Native transfer requires Coin<{}> object {} with at least {} Mist; only has {} Mist",
+            GAS_COIN,
+            coin_object_id,
+            amount,
+            transfer_balance
+        );
+        ensure!(
+            gas_balance >= gas_cost,
+            "Native transfer gas object {} needs at least {} Mist; only has {} Mist",
+            gas_object_ref.object_id,
+            gas_cost,
+            gas_balance
+        );
+
+        let recipient_addr = KanariAddress::parse_to_account_address(recipient)?;
+
+        if transfer_balance == amount {
+            changeset.created_objects.push((
+                coin_object_id.to_string(),
+                CreatedObject {
+                    owner: recipient_addr,
+                    owner_kind: ObjectOwnerKind::AddressOwner(recipient_addr.to_hex_literal()),
+                    uid: transfer_object.uid,
+                    id: transfer_object.id,
+                    type_: transfer_object.type_,
+                    data: transfer_object.data,
+                    version: transfer_object.version,
+                },
+            ));
+        } else {
+            changeset.transfer(sender_addr, recipient_addr, amount);
+            let remaining = transfer_balance
+                .checked_sub(amount)
+                .context("Native transfer coin balance underflow after precheck")?;
+            changeset.created_objects.push((
+                coin_object_id.to_string(),
+                CreatedObject {
+                    owner: transfer_object.owner,
+                    owner_kind: transfer_object.owner_kind,
+                    uid: transfer_object.uid.clone(),
+                    id: transfer_object.id.clone(),
+                    type_: transfer_object.type_.clone(),
+                    data: Self::native_coin_data_with_balance(
+                        coin_object_id,
+                        &transfer_object.data,
+                        remaining,
+                    )?,
+                    version: transfer_object.version,
+                },
+            ));
+
+            let output_id = Self::deterministic_native_transfer_output_id(tx);
+            let mut output_data =
+                Self::native_coin_data_with_balance(&output_id, &transfer_object.data, amount)?;
+            if let Ok(output_addr) = AccountAddress::from_hex_literal(&output_id) {
+                output_data[..32].copy_from_slice(output_addr.as_ref());
+            }
+            changeset.created_objects.push((
+                output_id,
+                CreatedObject {
+                    owner: recipient_addr,
+                    owner_kind: ObjectOwnerKind::AddressOwner(recipient_addr.to_hex_literal()),
+                    uid: None,
+                    id: None,
+                    type_: transfer_object.type_,
+                    data: output_data,
+                    version: 1,
                 },
             ));
         }
@@ -2737,6 +2919,38 @@ impl BlockchainEngine {
                 args,
                 ..
             } => {
+                if let Some(kanari_types::transaction::NativeCall::Transfer {
+                    coin_object_id,
+                    recipient,
+                    amount,
+                }) = native_call.clone()
+                {
+                    let state = state_arc.read().unwrap_or_else(|e| e.into_inner());
+                    match Self::execute_backend_native_transfer(
+                        &state,
+                        tx,
+                        sender_addr,
+                        &coin_object_id,
+                        &recipient,
+                        amount,
+                        base_gas_cost,
+                        &mut changeset,
+                    ) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            changeset.mark_failed(format!("Execution failed: {}", e));
+                        }
+                    }
+                    Self::apply_gas_and_sequence(
+                        &mut changeset,
+                        sender_addr,
+                        base_gas_cost,
+                        gas_meter.gas_used,
+                    )?;
+                    Self::annotate_changeset_object_effects(&state, &mut changeset)?;
+                    return Ok(changeset);
+                }
+
                 if let Some(kanari_types::transaction::NativeCall::Burn { amount }) =
                     native_call.clone()
                 {

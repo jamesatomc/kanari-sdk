@@ -786,6 +786,8 @@ pub struct BuildCallFunctionRequest {
     pub function: String,
     pub type_args: Vec<String>,
     pub args: Vec<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_inputs: Option<Vec<ObjectInput>>,
     pub gas_limit: u64,
     pub gas_price: u64,
     /// Preferred replay nonce field. If omitted, RPC generates one from OS randomness.

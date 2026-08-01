@@ -113,6 +113,7 @@ impl Call {
                 function: self.function.clone(),
                 type_args: self.type_args.clone(),
                 args: parsed_args,
+                object_inputs: None,
                 gas_limit,
                 gas_price,
                 nonce: None,

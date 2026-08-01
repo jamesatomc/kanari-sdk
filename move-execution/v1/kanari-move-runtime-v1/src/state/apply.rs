@@ -488,10 +488,62 @@ impl StateManager {
                 burn_amount,
                 self.total_supply
             );
-            Some(self.total_supply - burn_amount)
+            Some(
+                self.total_supply
+                    .checked_sub(burn_amount)
+                    .context("Native total supply underflow after burn precheck")?,
+            )
         } else {
             None
         };
+        let native_gas_debit_total =
+            changeset
+                .native_gas_credits
+                .values()
+                .try_fold(0u64, |total, credit| {
+                    total
+                        .checked_add(*credit)
+                        .require("Native gas debit total overflow")
+                })?;
+        let owner_native_debit = |owner: &AccountAddress| -> Result<u64> {
+            changeset
+                .owner_deltas
+                .get(owner)
+                .map(|change| change.balance_delta)
+                .filter(|delta| *delta < 0)
+                .map(|delta| {
+                    u64::try_from(delta.unsigned_abs())
+                        .require("Native debit overflowed u64 gas object adjustment")
+                })
+                .transpose()
+                .map(|debit| debit.unwrap_or(0))
+        };
+        let gas_payment_owner = changeset
+            .gas_payment
+            .as_ref()
+            .and_then(|payment| AccountAddress::from_hex_literal(&payment.owner).ok());
+        let mut debit_owners = changeset
+            .owner_deltas
+            .iter()
+            .filter(|(_, change)| change.balance_delta < 0)
+            .map(|(owner, _)| *owner);
+        let first_debit_owner = debit_owners.next();
+        let single_debit_owner = if debit_owners.next().is_none() {
+            first_debit_owner
+        } else {
+            None
+        };
+        let implicit_gas_payer = gas_payment_owner.or(single_debit_owner);
+        let owner_native_gas_debit =
+            |owner: &AccountAddress, explicit_gas_object: bool| -> Result<u64> {
+                Ok(
+                    if explicit_gas_object || Some(*owner) == implicit_gas_payer {
+                        owner_native_debit(owner)?.min(native_gas_debit_total)
+                    } else {
+                        0
+                    },
+                )
+            };
 
         // Capture native balances once before mutating the state. Debit validation and
         // post-object recomputation both need this snapshot; independently resolving the
@@ -555,11 +607,7 @@ impl StateManager {
                 .get(address)
                 .copied()
                 .unwrap_or((0, 0));
-            let balance = if ledger_balance > 0 {
-                ledger_balance
-            } else {
-                object_balance
-            };
+            let balance = ledger_balance.max(object_balance);
             ensure!(
                 balance >= debit,
                 "Insufficient native balance for {}: need {}, have {}",
@@ -627,7 +675,24 @@ impl StateManager {
             } else if change.balance_delta < 0 {
                 let debit = u64::try_from(change.balance_delta.unsigned_abs())
                     .require("Native debit overflowed u64 owner balance")?;
-                let next = owner_state.native_balance() - debit;
+                let current = owner_state.native_balance();
+                let effective_balance = if current >= debit {
+                    current
+                } else {
+                    let (_, object_balance) = native_balances_before
+                        .get(address)
+                        .copied()
+                        .unwrap_or((current, 0));
+                    current.max(object_balance)
+                };
+                let next = effective_balance.checked_sub(debit).with_context(|| {
+                    format!(
+                        "Insufficient native balance for {} while applying owner delta: need {}, have {}",
+                        address.to_hex_literal(),
+                        debit,
+                        effective_balance
+                    )
+                })?;
                 owner_state.set_token_balance_value(&native_token, next);
             }
             native_balance_after_owner_deltas
@@ -842,22 +907,14 @@ impl StateManager {
                 // object-backed balance reconciliation cannot erase the owner debit.
                 // Explicit gas references always take precedence when they are present.
                 let is_implicit_gas_object = changeset.gas_object_refs.is_empty()
+                    && native_gas_debit_total > 0
                     && changeset
                         .owner_deltas
                         .get(&existing.owner)
                         .is_some_and(|change| change.balance_delta < 0);
                 if existing_native_coin && (is_designated_gas_object || is_implicit_gas_object) {
-                    let sender_native_debit: u64 = changeset
-                        .owner_deltas
-                        .get(&existing.owner)
-                        .map(|change| change.balance_delta)
-                        .filter(|delta| *delta < 0)
-                        .map(|delta| {
-                            u64::try_from(delta.unsigned_abs())
-                                .require("Native debit overflowed u64 object gas adjustment")
-                        })
-                        .transpose()?
-                        .unwrap_or(0);
+                    let sender_native_debit =
+                        owner_native_gas_debit(&existing.owner, is_designated_gas_object)?;
                     let already_adjusted = native_object_gas_adjusted
                         .get(&existing.owner)
                         .copied()
@@ -994,17 +1051,7 @@ impl StateManager {
         for gas_ref in &changeset.gas_object_refs {
             let canonical_gas_id = Self::canonical_owned_object_id(&gas_ref.object_id);
             if let Some(owner) = created_object_owners_by_id.get(&canonical_gas_id) {
-                let sender_native_debit = changeset
-                    .owner_deltas
-                    .get(owner)
-                    .map(|change| change.balance_delta)
-                    .filter(|delta| *delta < 0)
-                    .map(|delta| {
-                        u64::try_from(delta.unsigned_abs())
-                            .require("Native debit overflowed u64 gas object adjustment")
-                    })
-                    .transpose()?
-                    .unwrap_or(0);
+                let sender_native_debit = owner_native_gas_debit(owner, true)?;
                 let already_adjusted = native_object_gas_adjusted.get(owner).copied().unwrap_or(0);
                 if sender_native_debit > 0 && already_adjusted >= sender_native_debit {
                     continue;
@@ -1015,17 +1062,7 @@ impl StateManager {
             else {
                 continue;
             };
-            let sender_native_debit = changeset
-                .owner_deltas
-                .get(&existing.owner)
-                .map(|change| change.balance_delta)
-                .filter(|delta| *delta < 0)
-                .map(|delta| {
-                    u64::try_from(delta.unsigned_abs())
-                        .require("Native debit overflowed u64 gas object adjustment")
-                })
-                .transpose()?
-                .unwrap_or(0);
+            let sender_native_debit = owner_native_gas_debit(&existing.owner, true)?;
             let already_adjusted = native_object_gas_adjusted
                 .get(&existing.owner)
                 .copied()
@@ -1390,7 +1427,11 @@ impl StateManager {
                 burn_amount,
                 self.total_supply
             );
-            self.save_native_total_supply(self.total_supply - burn_amount)?;
+            let next_total_supply = self
+                .total_supply
+                .checked_sub(burn_amount)
+                .context("Native total supply underflow after burn precheck")?;
+            self.save_native_total_supply(next_total_supply)?;
             let current_visible = self
                 .global_token_supplies
                 .get(GAS_COIN)
@@ -1402,7 +1443,9 @@ impl StateManager {
                 current_visible,
                 burn_amount
             );
-            let next_visible = current_visible - burn_amount;
+            let next_visible = current_visible
+                .checked_sub(burn_amount)
+                .context("Native visible supply underflow after burn precheck")?;
             if next_visible == 0 {
                 self.global_token_supplies.remove(GAS_COIN);
             } else {
@@ -1431,7 +1474,9 @@ impl StateManager {
                     debit,
                     current
                 );
-                current - debit
+                current
+                    .checked_sub(debit)
+                    .context("Native owner balance underflow after debit precheck")?
             };
             owner_state.set_token_balance_value(GAS_COIN, next);
             if owner_state.is_empty() {

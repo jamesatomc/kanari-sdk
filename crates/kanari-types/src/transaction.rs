@@ -589,6 +589,7 @@ impl Transaction {
             module,
             function,
             args,
+            object_inputs,
             ..
         } = self
         else {
@@ -601,6 +602,35 @@ impl Transaction {
         }
 
         match function.as_str() {
+            function_name
+                if function_name == GasModule::function_names().transfer && args.len() >= 3 =>
+            {
+                // The ABI carries the authoritative coin address in args[0]. Object
+                // inputs are not ordered, so using the first input can select the
+                // wrong coin when callers include additional inputs.
+                let coin_object_id = AccountAddress::from_bytes(args.first()?.as_slice())
+                    .ok()?
+                    .to_hex_literal();
+                // Keep the native fast path fail-closed: the ABI coin must be a
+                // mutable object input. Other shapes go through full Move execution.
+                if !object_inputs.iter().any(|input| {
+                    input.mutable
+                        && AccountAddress::from_hex_literal(&input.object_ref.object_id)
+                            .map(|address| address.to_hex_literal() == coin_object_id)
+                            .unwrap_or(false)
+                }) {
+                    return None;
+                }
+                let amount = bcs::from_bytes::<u64>(args.get(1)?).ok()?;
+                let recipient = AccountAddress::from_bytes(args.get(2)?.as_slice())
+                    .ok()?
+                    .to_hex_literal();
+                Some(NativeCall::Transfer {
+                    coin_object_id,
+                    recipient,
+                    amount,
+                })
+            }
             function_name
                 if function_name == GasModule::function_names().burn && !args.is_empty() =>
             {
@@ -770,9 +800,17 @@ mod tests {
 
     #[test]
     fn transfer_helper_builds_native_execute_function() {
+        let coin_object_id = format!("0x{:064x}", 0xaaaau64);
+        let canonical_coin_object_id = AccountAddress::from_hex_literal(&coin_object_id)
+            .unwrap()
+            .to_hex_literal();
         let tx = Transaction::new_transfer_with_object_ref(
             "0x1".to_string(),
-            ObjectRef::new("0xaaaa", Some(1), Some("0xtestdigest".to_string())),
+            ObjectRef::new(
+                coin_object_id.clone(),
+                Some(1),
+                Some("0xtestdigest".to_string()),
+            ),
             "0x2".to_string(),
             42,
             7,
@@ -797,15 +835,32 @@ mod tests {
             }
         }
 
-        assert_eq!(tx.native_call(), None);
+        assert_eq!(
+            tx.native_call(),
+            Some(NativeCall::Transfer {
+                coin_object_id: canonical_coin_object_id,
+                recipient: AccountAddress::from_hex_literal("0x2")
+                    .unwrap()
+                    .to_hex_literal(),
+                amount: 42,
+            })
+        );
         assert_eq!(tx.tx_type_label(), "transfer");
     }
 
     #[test]
     fn transfer_helper_builds_execute_function_with_coin_input() {
+        let coin_object_id = format!("0x{:064x}", 0xaaaau64);
+        let canonical_coin_object_id = AccountAddress::from_hex_literal(&coin_object_id)
+            .unwrap()
+            .to_hex_literal();
         let tx = Transaction::new_transfer_with_object_ref(
             "0x1".to_string(),
-            ObjectRef::new("0xaaaa", Some(1), Some("0xtestdigest".to_string())),
+            ObjectRef::new(
+                coin_object_id.clone(),
+                Some(1),
+                Some("0xtestdigest".to_string()),
+            ),
             "0x2".to_string(),
             42,
             7,
@@ -832,7 +887,61 @@ mod tests {
             }
         }
 
-        assert_eq!(tx.native_call(), None);
+        assert_eq!(
+            tx.native_call(),
+            Some(NativeCall::Transfer {
+                coin_object_id: canonical_coin_object_id,
+                recipient: AccountAddress::from_hex_literal("0x2")
+                    .unwrap()
+                    .to_hex_literal(),
+                amount: 42,
+            })
+        );
+    }
+
+    #[test]
+    fn native_transfer_uses_abi_coin_id_not_object_input_order() {
+        let coin_object_id = format!("0x{:064x}", 0xaaaau64);
+        let canonical_coin_object_id = AccountAddress::from_hex_literal(&coin_object_id)
+            .unwrap()
+            .to_hex_literal();
+        let mut tx = Transaction::new_transfer_with_object_ref(
+            "0x1".to_string(),
+            ObjectRef::new(
+                coin_object_id.clone(),
+                Some(1),
+                Some("0xtestdigest".to_string()),
+            ),
+            "0x2".to_string(),
+            42,
+            7,
+        );
+        let Transaction::ExecuteFunction { object_inputs, .. } = &mut tx else {
+            panic!("transfer helper must build a call");
+        };
+        object_inputs.insert(
+            0,
+            ObjectInput {
+                object_ref: ObjectRef::new(
+                    format!("0x{:064x}", 0xbbbbu64),
+                    Some(1),
+                    Some("0xotherdigest".to_string()),
+                ),
+                owner: None,
+                mutable: false,
+            },
+        );
+
+        assert_eq!(
+            tx.native_call(),
+            Some(NativeCall::Transfer {
+                coin_object_id: canonical_coin_object_id,
+                recipient: AccountAddress::from_hex_literal("0x2")
+                    .unwrap()
+                    .to_hex_literal(),
+                amount: 42,
+            })
+        );
     }
 
     #[test]

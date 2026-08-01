@@ -11,6 +11,12 @@ param(
     [ValidateRange(1, 1000000)]
     [int]$FaucetCoinsPerSender = 16,
 
+    [ValidateRange(1, 64)]
+    [int]$FanoutBatchSize = 64,
+
+    [ValidateRange(30, 7200)]
+    [int]$LaneTimeoutSec = 900,
+
     [switch]$AutoCoinFanout,
 
     [ValidateRange(16, 65536)]
@@ -84,6 +90,8 @@ $loadScript = Join-Path $repoRoot 'scripts\run-local-four-node-parallel-tx-chaos
     -FundSenders `
     -FaucetAmount 1 `
     -FaucetCoinsPerSender $FaucetCoinsPerSender `
+    -FanoutBatchSize $FanoutBatchSize `
+    -LaneTimeoutSec $LaneTimeoutSec `
     -AutoCoinFanout:$AutoCoinFanout `
     -P2pChannelCapacity $P2pChannelCapacity `
     -MaxConcurrentSyncMessages $MaxConcurrentSyncMessages `

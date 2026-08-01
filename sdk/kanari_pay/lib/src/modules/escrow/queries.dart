@@ -2,7 +2,6 @@
 // Escrow view functions and queries.
 
 import 'dart:convert';
-import 'package:http/http.dart' as http;
 
 import '../../client/kanari_client.dart';
 import '../../core/bcs_utils.dart';
@@ -55,14 +54,16 @@ class EscrowQueries {
     for (final obj in dealObjects) {
       final objectId = obj.id;
       final objectType = obj.type;
-      final coinType = BcsUtils.extractCoinTypeFromObjectType(objectType);
+      final coinType = _extractEscrowDealCoinType(objectType);
 
       if (coinType == null) {
         continue;
       }
 
       Map<String, dynamic> dealDetails;
-      int? state;
+      int state;
+      String? dealLabel;
+      String? proofId;
       try {
         dealDetails = await getDealDetailsByObjectId(
           wallet: wallet,
@@ -74,18 +75,21 @@ class EscrowQueries {
           dealObjectId: objectId,
           coinType: coinType,
         );
-      } catch (_) {
-        final decoded = _decodeDealObjectData(obj);
-        if (decoded == null) {
-          // Object indexes can briefly expose stale or partially indexed escrow
-          // candidates. Skip unreadable candidates instead of failing the screen.
+        dealLabel = await _dealLabelForObject(obj);
+        proofId = await _matchingProofObjectId(
+          proofObjects,
+          dealLabel,
+        );
+      } catch (error) {
+        if (_isObjectInputNotFoundError(error)) {
           continue;
         }
-        dealDetails = decoded;
-        state = decoded['state'] as int?;
+        rethrow;
       }
 
-      final proofId = proofObjects.isEmpty ? null : proofObjects.first.id;
+      if (dealLabel == null) {
+        continue;
+      }
 
       deals.add({
         'object_id': objectId,
@@ -135,7 +139,6 @@ class EscrowQueries {
     required KanariWallet wallet,
     required TransactionEffectsInfo effects,
     required String buyerAddress,
-    required String fallbackCoinType,
   }) async {
     final dealChanges = effects.objectChanges
         .where((change) => _isEscrowDealType(change.objectType ?? ''))
@@ -156,8 +159,10 @@ class EscrowQueries {
       }
 
       final objectType = dealChange.objectType ?? '';
-      final coinType =
-          BcsUtils.extractCoinTypeFromObjectType(objectType) ?? fallbackCoinType;
+      final coinType = _extractEscrowDealCoinType(objectType);
+      if (coinType == null) {
+        continue;
+      }
 
       try {
         final details = await getDealDetailsByObjectId(
@@ -181,14 +186,16 @@ class EscrowQueries {
           ...details,
         };
       } catch (_) {
-        // The transaction may still be pending in consensus; object index fallback can pick it up later.
+        // The transaction may still be pending in consensus.
       }
     }
 
     return null;
   }
 
-  Future<List<ObjectInfo>> _getEscrowCandidateObjects(String buyerAddress) async {
+  Future<List<ObjectInfo>> _getEscrowCandidateObjects(
+    String buyerAddress,
+  ) async {
     final byId = <String, ObjectInfo>{};
 
     void addAll(Iterable<ObjectInfo> objects) {
@@ -201,26 +208,7 @@ class EscrowQueries {
 
     addAll(await rpc.getOwnedObjects(buyerAddress));
 
-    try {
-      addAll(await rpc.getObjects(owner: buyerAddress));
-    } catch (_) {
-      // Older nodes may not expose kanari_getObjects; owned objects above still works.
-    }
-
-    if (!byId.values.any((obj) => _isEscrowDealType(obj.type))) {
-      try {
-        final indexedObjects = await rpc.getObjects();
-        addAll(
-          indexedObjects.where(
-            (obj) =>
-                _sameAddress(obj.owner, buyerAddress) &&
-                (_isEscrowDealType(obj.type) || _isEscrowProofType(obj.type)),
-          ),
-        );
-      } catch (_) {
-        // Best-effort index fallback only.
-      }
-    }
+    addAll(await rpc.getObjects(owner: buyerAddress));
 
     return byId.values.toList();
   }
@@ -239,15 +227,40 @@ class EscrowQueries {
         type.contains(EscrowConstants.objectTypeProof);
   }
 
+  String? _extractEscrowDealCoinType(String objectType) {
+    if (!_isEscrowDealType(objectType)) return null;
+
+    final start = objectType.indexOf('<');
+    final end = objectType.lastIndexOf('>');
+    if (start == -1 || end == -1 || end <= start) return null;
+
+    final coinType = objectType.substring(start + 1, end).trim();
+    return coinType.isEmpty ? null : coinType;
+  }
+
   bool _sameAddress(String left, String right) {
     try {
-      return BcsUtils.normalizeAddress(left) == BcsUtils.normalizeAddress(right);
+      return BcsUtils.normalizeAddress(left) ==
+          BcsUtils.normalizeAddress(right);
     } catch (_) {
       return left.toLowerCase() == right.toLowerCase();
     }
   }
 
-  Map<String, dynamic>? _decodeDealObjectData(ObjectInfo object) {
+  Future<String?> _dealLabelForObject(ObjectInfo object) async {
+    final fullObject = object.data.isNotEmpty
+        ? object
+        : await rpc.getObject(object.id);
+    return _decodeObjectDealLabel(fullObject);
+  }
+
+  bool _isObjectInputNotFoundError(Object error) {
+    final text = error.toString().toLowerCase();
+    return (text.contains('object input') && text.contains('was not found')) ||
+        text.contains('object not found');
+  }
+
+  String? _decodeObjectDealLabel(ObjectInfo object) {
     final data = object.data;
     var offset = 0;
 
@@ -279,43 +292,10 @@ class EscrowQueries {
       return utf8.decode(bytes, allowMalformed: true);
     }
 
-    int? readU64() {
-      final bytes = readBytes(8);
-      if (bytes == null) return null;
-      var value = 0;
-      for (var i = 0; i < bytes.length; i++) {
-        value |= bytes[i] << (8 * i);
-      }
-      return value;
-    }
-
     final objectIdBytes = readBytes(32);
     if (objectIdBytes == null) return null;
 
-    final dealId = readString();
-    final buyerBytes = readBytes(32);
-    final sellerBytes = readBytes(32);
-    final amount = readU64();
-    final description = readString();
-    if (dealId == null ||
-        buyerBytes == null ||
-        sellerBytes == null ||
-        amount == null ||
-        description == null ||
-        offset >= data.length) {
-      return null;
-    }
-
-    final state = data[offset++];
-
-    return {
-      'deal_id': dealId,
-      'buyer': BcsUtils.bytesToHex(buyerBytes),
-      'seller': BcsUtils.bytesToHex(sellerBytes),
-      'amount': amount,
-      'description': description,
-      'state': state,
-    };
+    return readString();
   }
 
   dynamic _unwrapViewResult(dynamic value) {
@@ -349,6 +329,33 @@ class EscrowQueries {
     return null;
   }
 
+  Future<String?> _matchingProofObjectId(
+    List<ObjectInfo> proofObjects,
+    String? dealId,
+  ) async {
+    if (dealId == null || dealId.isEmpty) return null;
+
+    for (final proofObject in proofObjects) {
+      ObjectInfo fullProofObject;
+      try {
+        fullProofObject = proofObject.data.isNotEmpty
+            ? proofObject
+            : await rpc.getObject(proofObject.id);
+      } catch (error) {
+        if (_isObjectInputNotFoundError(error)) {
+          continue;
+        }
+        rethrow;
+      }
+      final proofDealId = _decodeObjectDealLabel(fullProofObject);
+      if (proofDealId == dealId) {
+        return proofObject.id;
+      }
+    }
+
+    return null;
+  }
+
   /// Generic view function caller
   Future<List<dynamic>> _callViewFunction({
     required KanariWallet wallet,
@@ -362,14 +369,16 @@ class EscrowQueries {
       EscrowConstants.packageAddress,
     );
     final objectInputs = objectInputId == null
-        ? null
+        ? const <Map<String, dynamic>>[]
         : [await _objectInputForView(objectInputId)];
 
-    return _viewFunction(
-      wallet: wallet,
-      function: '$packageAddr::${EscrowConstants.module}::$functionName',
-      typeArguments: [normalizedToken],
-      arguments: args.build(),
+    return rpc.viewFunction(
+      sender: wallet.address,
+      package: packageAddr,
+      module: EscrowConstants.module,
+      function: functionName,
+      typeArgs: [normalizedToken],
+      args: args.build(),
       objectInputs: objectInputs,
     );
   }
@@ -390,65 +399,4 @@ class EscrowQueries {
     };
   }
 
-  /// Execute view function via RPC
-  Future<List<dynamic>> _viewFunction({
-    required KanariWallet wallet,
-    required String function,
-    required List<String> typeArguments,
-    required List<List<int>> arguments,
-    List<Map<String, dynamic>>? objectInputs,
-  }) async {
-    final parts = function.split('::');
-    if (parts.length != 3) {
-      throw Exception('Invalid function format: $function');
-    }
-
-    final package = BcsUtils.normalizeAddress(parts[0]);
-    final module = parts[1];
-    final functionName = parts[2];
-
-    final argsHex = arguments
-        .map(
-          (bytes) =>
-              '0x${bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}',
-        )
-        .toList();
-
-    final requestData = {
-      'sender': wallet.taggedAddress,
-      'package': package,
-      'module': module,
-      'function': functionName,
-      'type_args': typeArguments,
-      'args': argsHex,
-      if (objectInputs != null && objectInputs.isNotEmpty)
-        'object_inputs': objectInputs,
-    };
-
-    final body = {
-      'jsonrpc': '2.0',
-      'method': 'kanari_viewFunction',
-      'params': [requestData],
-      'id': DateTime.now().millisecondsSinceEpoch,
-    };
-
-    final response = await http.post(
-      Uri.parse(rpc.url),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(body),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('View function failed: ${response.statusCode}');
-    }
-
-    final jsonResponse = jsonDecode(response.body) as Map<String, dynamic>;
-
-    if (jsonResponse.containsKey('error')) {
-      throw Exception('View function error: ${jsonResponse['error']}');
-    }
-
-    final result = jsonResponse['result'];
-    return result is List ? result : [result];
-  }
 }

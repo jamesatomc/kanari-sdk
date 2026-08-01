@@ -7,7 +7,7 @@ class EscrowConstants {
   static const String module = 'escrow';
 
   // Entry functions
-  static const String fnCreateDeal = 'create_deal_ref';
+  static const String fnCreateDeal = 'create_deal';
   // ID-based entry points are required for cross-owner actions. The deal and
   // proof belong to the buyer, while the seller must be able to confirm
   // delivery without being declared the object owner in the transaction.

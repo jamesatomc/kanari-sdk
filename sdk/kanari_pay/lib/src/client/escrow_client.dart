@@ -134,13 +134,11 @@ class EscrowClient {
     required KanariWallet wallet,
     required TransactionEffectsInfo effects,
     required String buyerAddress,
-    required String fallbackCoinType,
   }) {
     return _queries.getDealFromEffects(
       wallet: wallet,
       effects: effects,
       buyerAddress: buyerAddress,
-      fallbackCoinType: fallbackCoinType,
     );
   }
 

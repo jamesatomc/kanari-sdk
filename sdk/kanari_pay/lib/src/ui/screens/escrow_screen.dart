@@ -345,7 +345,6 @@ class _EscrowScreenState extends State<EscrowScreen>
               wallet: wallet,
               effects: effects,
               buyerAddress: buyerAddress,
-              fallbackCoinType: tokenType,
             )
             .timeout(const Duration(seconds: 10));
 

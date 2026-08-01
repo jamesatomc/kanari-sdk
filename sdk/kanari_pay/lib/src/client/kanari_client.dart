@@ -138,6 +138,26 @@ class KanariClient {
     return _queries.verifyModule(moduleBytes);
   }
 
+  Future<List<dynamic>> viewFunction({
+    required String sender,
+    required String package,
+    required String module,
+    required String function,
+    List<String> typeArgs = const [],
+    List<List<int>> args = const [],
+    List<Map<String, dynamic>> objectInputs = const [],
+  }) {
+    return _queries.viewFunction(
+      sender: sender,
+      package: package,
+      module: module,
+      function: function,
+      typeArgs: typeArgs,
+      args: args,
+      objectInputs: objectInputs,
+    );
+  }
+
   // ==================== TRANSACTIONS (Write Operations) ====================
 
   /// Publish a Move module to the blockchain
@@ -186,6 +206,7 @@ class KanariClient {
     required String function,
     List<String> typeArgs = const [],
     List<List<int>> args = const [],
+    List<Map<String, dynamic>> objectInputs = const [],
     int gasLimit = TransactionConstants.defaultGasLimit,
     int gasPrice = TransactionConstants.defaultGasPrice,
     bool? executeImmediate,
@@ -197,6 +218,7 @@ class KanariClient {
       function: function,
       typeArgs: typeArgs,
       args: args,
+      objectInputs: objectInputs,
       gasLimit: gasLimit,
       gasPrice: gasPrice,
       executeImmediate: executeImmediate,

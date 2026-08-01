@@ -17,11 +17,20 @@ use std::sync::RwLockReadGuard;
 
 impl BlockchainEngine {
     // Checkpoint sync is sequential, so the receiver normally already has the
-    // previous round. Keep only a small root-first evidence slice here; missing
-    // ancestry is recovered by the round-targeted DAG repair protocol. Large
-    // closures duplicate transaction payloads and turn one checkpoint into a
-    // multi-megabyte P2P response.
-    const MAX_DAG_VERTICES_PER_CHECKPOINT_SYNC: usize = 16;
+    // previous round. Crash/restart catch-up can be much further behind and
+    // needs enough signed Mysticeti evidence to rebuild the local DAG before it
+    // applies a checkpoint. Keep this bounded and operator-tunable because
+    // vertices carry transaction payloads.
+    const DEFAULT_DAG_VERTICES_PER_CHECKPOINT_SYNC: usize = 128;
+    const MAX_DAG_VERTICES_PER_CHECKPOINT_SYNC: usize = 512;
+
+    fn dag_vertices_per_checkpoint_sync() -> usize {
+        std::env::var("KANARI_DAG_VERTICES_PER_CHECKPOINT_SYNC")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|value| value.clamp(16, Self::MAX_DAG_VERTICES_PER_CHECKPOINT_SYNC))
+            .unwrap_or(Self::DEFAULT_DAG_VERTICES_PER_CHECKPOINT_SYNC)
+    }
     pub fn smt_status(&self, audit: bool) -> Result<SmtStatusResponse> {
         let diagnostics = self.state_read().smt_diagnostics(audit)?;
         let stats = self.try_get_stats()?;
@@ -477,7 +486,7 @@ impl BlockchainEngine {
         drop(chain);
         let dag_vertices = self.dag_vertices_for_checkpoint_sync(
             &checkpoint.vertices,
-            Self::MAX_DAG_VERTICES_PER_CHECKPOINT_SYNC,
+            Self::dag_vertices_per_checkpoint_sync(),
         )?;
         Ok(Some(CheckpointSyncData {
             checkpoint,

@@ -19,6 +19,7 @@ use kanari_types::object::{IDRecord, UIDRecord};
 use kanari_types::transaction::ObjectOwnerKind;
 use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::{StructTag, TypeTag};
+use rocksdb::WriteBatch;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use smt;
@@ -48,7 +49,7 @@ type RawStateValue = Vec<u8>;
 type RawStateUpdate = (RawStateKey, RawStateValue);
 type RawStateDelete = RawStateKey;
 type OverlaySmtChanges = (Vec<RawStateUpdate>, Vec<RawStateDelete>);
-pub type PrecomputedSmtChanges = (Vec<(Vec<u8>, Vec<u8>)>, Vec<Vec<u8>>);
+pub type PrecomputedSmtChanges = (Vec<(Vec<u8>, Vec<u8>)>, Vec<Vec<u8>>, smt::SmtNodeOverlay);
 type DerivedIndexes = (
     Vec<String>,
     BTreeMap<AccountAddress, Vec<String>>,
@@ -515,17 +516,43 @@ impl StateManager {
         }
 
         // Genesis identity is explicit. Supply is protocol state and may legitimately be zero.
+        // The check, initialization, and commit must remain under the same lock: a
+        // second initializer can otherwise observe an empty store before waiting and
+        // run genesis after the first one has committed.
         if !genesis_already_initialized {
-            state
-                .save_internal(GENESIS_INITIALIZED_KEY, &true)
-                .context("Failed to stage genesis initialization marker")?;
-            crate::genesis::init_genesis(&mut state).context("Genesis initialization failed")?;
-            // Flush genesis state to DB immediately
-            state.commit().context("Failed to commit genesis state")?;
-            ensure!(
-                state.total_supply > 0,
-                "Genesis initialization completed but total_supply is still 0"
-            );
+            let genesis_store = state.store.clone();
+            let _genesis_guard = genesis_store.genesis_init_guard();
+
+            let initialized_while_waiting = state
+                .store
+                .load::<bool>(GENESIS_INITIALIZED_KEY)
+                .context("Failed to re-check genesis initialization marker")?
+                .unwrap_or(false);
+            if initialized_while_waiting {
+                state.total_supply = state
+                    .store
+                    .load::<u64>(b"total_supply")
+                    .context("Failed to reload total_supply after genesis initialization")?
+                    .unwrap_or(0);
+                state.global_token_supplies = state
+                    .store
+                    .load::<BTreeMap<String, u64>>(b"global_token_supplies")
+                    .context("Failed to reload global token supplies after genesis initialization")?
+                    .unwrap_or_default();
+            } else {
+                state
+                    .save_internal(GENESIS_INITIALIZED_KEY, &true)
+                    .context("Failed to stage genesis initialization marker")?;
+                crate::genesis::init_genesis(&mut state)
+                    .context("Genesis initialization failed")?;
+                // Flush genesis state to DB immediately while still holding the
+                // initialization lock, so subsequent constructors see a complete DB.
+                state.commit().context("Failed to commit genesis state")?;
+                ensure!(
+                    state.total_supply > 0,
+                    "Genesis initialization completed but total_supply is still 0"
+                );
+            }
         }
 
         state
@@ -914,19 +941,70 @@ impl StateManager {
         let smt_changes = if self.smt.is_some() {
             match precomputed_smt_changes {
                 Some(changes) => Some(changes),
-                None => Some(self.smt_changes_from_overlay()?),
+                None => {
+                    let (updates, deletes) = self.smt_changes_from_overlay()?;
+                    let node_overlay = if let Some(smt) = &self.smt {
+                        if let Some(root) = verified_root {
+                            let (computed_root, overlay) =
+                                smt.root_hash_with_changes_and_overlay(&updates, &deletes)?;
+                            ensure!(
+                                computed_root == root,
+                                "verified SMT root mismatch while precomputing node overlay"
+                            );
+                            overlay
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    Some((updates, deletes, node_overlay))
+                }
             }
         } else {
             None
         };
 
-        self.store.apply_raw_changes(&updates, &deletes)?;
-
         // Update SMT if available
-        if let (Some(smt), Some((smt_updates, smt_deletes))) = (&self.smt, smt_changes) {
+        if let (Some(smt), Some((smt_updates, smt_deletes, node_overlay))) =
+            (&self.smt, smt_changes)
+        {
+            if let (Some(root), Some(db)) = (verified_root, self.store.get_db())
+                && !node_overlay.is_empty()
+            {
+                let mut batch = WriteBatch::default();
+                for (key, value) in &updates {
+                    batch.put(key, value);
+                }
+                for key in &deletes {
+                    batch.delete(key);
+                }
+                smt.stage_changes_with_precomputed_overlay(
+                    &mut batch,
+                    &smt_updates,
+                    &smt_deletes,
+                    root,
+                    &node_overlay,
+                )?;
+                db.write(batch)?;
+                smt.apply_precomputed_node_overlay(node_overlay);
+                self.overlay.clear();
+                return Ok(());
+            }
+
+            self.store.apply_raw_changes(&updates, &deletes)?;
             let update_result = (|| -> Result<()> {
                 if let Some(root) = verified_root {
-                    smt.apply_changes_with_root(&smt_updates, &smt_deletes, root)?;
+                    if node_overlay.is_empty() {
+                        smt.apply_changes_with_root(&smt_updates, &smt_deletes, root)?;
+                    } else {
+                        smt.apply_changes_with_precomputed_overlay(
+                            &smt_updates,
+                            &smt_deletes,
+                            root,
+                            node_overlay,
+                        )?;
+                    }
                 } else if !smt_deletes.is_empty() {
                     smt.delete(&smt_deletes)?;
                     if !smt_updates.is_empty() {
@@ -944,6 +1022,8 @@ impl StateManager {
                     format!("SMT delta update failed ({update_error}); full repair also failed")
                 })?;
             }
+        } else {
+            self.store.apply_raw_changes(&updates, &deletes)?;
         }
 
         self.overlay.clear();
@@ -1550,7 +1630,9 @@ impl StateManager {
         let started_at = std::time::Instant::now();
         if let Some(smt) = &self.smt {
             let (updates, deletes) = self.smt_changes_from_overlay()?;
-            let root = smt.root_hash_with_changes(&updates, &deletes)?.to_vec();
+            let (root, node_overlay) =
+                smt.root_hash_with_changes_and_overlay(&updates, &deletes)?;
+            let root = root.to_vec();
             if profile_root {
                 eprintln!(
                     "state root profile: smt updates={} deletes={} total={:.6}s",
@@ -1559,7 +1641,7 @@ impl StateManager {
                     started_at.elapsed().as_secs_f64()
                 );
             }
-            return Ok((root, Some((updates, deletes))));
+            return Ok((root, Some((updates, deletes, node_overlay))));
         }
         let logical_started_at = std::time::Instant::now();
         let mut entries: BTreeMap<Vec<u8>, Vec<u8>> =

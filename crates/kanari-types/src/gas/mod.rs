@@ -40,9 +40,11 @@ select_gas_impl!(v3_1);
 mod tests {
     use super::{gas_v1, gas_v2, gas_v3, gas_v3_1};
 
+    type GasPolicy = (&'static str, fn(u64) -> u64, fn(u64) -> bool);
+
     #[test]
     fn priced_gas_models_never_turn_valid_nonzero_price_into_zero_cost() {
-        let priced_models: &[(&str, fn(u64) -> u64, fn(u64) -> bool)] = &[
+        let priced_models: &[GasPolicy] = &[
             (
                 gas_v1::GAS_MODEL,
                 gas_v1::effective_gas_price,

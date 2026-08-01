@@ -7,6 +7,7 @@ use clap::Subcommand;
 pub mod balance;
 pub mod burn;
 pub mod envs;
+pub mod fanout;
 pub mod faucet;
 pub mod objects;
 pub mod owner;
@@ -25,6 +26,8 @@ pub enum ClientCommand {
     TokenTransfer(token_transfer::TokenTransfer),
     /// Request tokens from the Dev faucet
     Faucet(faucet::Faucet),
+    /// Split a native coin into many owned coin objects for parallel load testing
+    Fanout(fanout::Fanout),
     /// Burn Kanari tokens from a wallet (remove from total supply)
     Burn(burn::Burn),
     /// Show blockchain statistics
@@ -54,6 +57,7 @@ impl ClientCommand {
             ClientCommand::Transfer(cmd) => cmd.execute().await,
             ClientCommand::TokenTransfer(cmd) => cmd.execute().await,
             ClientCommand::Faucet(cmd) => cmd.execute().await,
+            ClientCommand::Fanout(cmd) => cmd.execute().await,
             ClientCommand::Burn(cmd) => cmd.execute().await,
             ClientCommand::Stats(cmd) => cmd.execute().await,
             ClientCommand::Balance(cmd) => cmd.execute().await,

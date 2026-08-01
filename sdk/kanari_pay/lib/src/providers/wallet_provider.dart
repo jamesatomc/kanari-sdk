@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:kanari_pay/kanari_pay.dart';
+
+import '../core/bcs_utils.dart';
 import '../core/token_utils.dart' as token_utils;
 
 class WalletState extends ChangeNotifier {
@@ -504,6 +506,42 @@ class WalletState extends ChangeNotifier {
     });
   }
 
+  Future<String?> validateNativeTransferReadiness({
+    required int amount,
+    int gasLimit = TransactionConstants.defaultGasLimit,
+    int gasPrice = TransactionConstants.defaultGasPrice,
+  }) async {
+    if (_client == null || _wallet == null) return 'Client not initialized';
+
+    final requiredGas = gasLimit * gasPrice;
+    final ownedObjects = await _client!.getOwnedObjects(_wallet!.address);
+    final nativeCoins = ownedObjects
+        .where((object) {
+          final coinType = BcsUtils.extractCoinTypeFromObjectType(object.type);
+          return coinType != null &&
+              BcsUtils.tokenTypesEqual(coinType, kanariTokenType);
+        })
+        .map(
+          (object) => BcsUtils.readCoinObjectBalance(object.data) ?? 0,
+        )
+        .where((balance) => balance > 0)
+        .toList();
+
+    if (nativeCoins.length < 2) {
+      return 'Native KANARI transfer needs two separate Coin<KANARI> objects: one coin to send and another coin to pay gas. Receive/fund this wallet once more, then try again.';
+    }
+
+    for (var i = 0; i < nativeCoins.length; i++) {
+      if (nativeCoins[i] < amount) continue;
+      for (var j = 0; j < nativeCoins.length; j++) {
+        if (i == j) continue;
+        if (nativeCoins[j] >= requiredGas) return null;
+      }
+    }
+
+    return 'Native KANARI transfer needs one Coin<KANARI> with enough send amount and a different Coin<KANARI> with enough gas. Try a smaller amount or fund another gas coin.';
+  }
+
   Future<String?> executeFunction({
     required String packageAddress,
     required String module,
@@ -615,7 +653,7 @@ class WalletState extends ChangeNotifier {
           await refreshBalance(notifyListenersOnSuccess: false);
           return message;
         } catch (e) {
-          return 'Error: $e';
+          return 'Error: ${_friendlyTransactionError(e)}';
         }
       });
     } finally {
@@ -647,5 +685,17 @@ class WalletState extends ChangeNotifier {
   String _normalizeWalletAddress(String address) {
     final lower = address.trim().toLowerCase();
     return lower.startsWith('0x') ? lower.substring(2) : lower;
+  }
+
+  String _friendlyTransactionError(Object error) {
+    final text = error.toString();
+    if (text.contains('Native transfer requires two distinct Coin<') ||
+        text.contains('native_transfer_policy_not_satisfied')) {
+      return 'Native KANARI transfer needs two separate Coin<KANARI> objects: one coin to send and another coin to pay gas. Receive/fund this wallet once more, then try again.';
+    }
+    if (text.contains('No spendable native gas coin object found')) {
+      return 'No separate spendable Coin<KANARI> gas object was found. Fund this wallet with another KANARI coin object, then try again.';
+    }
+    return text;
   }
 }

@@ -34,3 +34,4 @@ tower = { workspace = true }
 
 [dev-dependencies]
 kanari-crypto.workspace = true
+proptest.workspace = true

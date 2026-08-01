@@ -281,7 +281,7 @@ impl ChangeSet {
             return false;
         }
         if delta.balance_delta >= 0 {
-            return self.native_gas_credits.contains_key(owner);
+            return false;
         }
 
         let Some(payment) = &self.gas_payment else {

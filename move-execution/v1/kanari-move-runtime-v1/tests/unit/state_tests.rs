@@ -1,7 +1,8 @@
 use super::*;
 use kanari_types::error::KanariUnwrapExt;
-use kanari_types::transaction::ObjectOwnerKind;
+use kanari_types::transaction::{ObjectOwnerKind, ObjectRef};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Barrier};
 
 fn address_owner(owner: AccountAddress) -> ObjectOwnerKind {
     ObjectOwnerKind::AddressOwner(owner.to_hex_literal())
@@ -28,6 +29,51 @@ fn new_state_persists_runtime_and_wallet_index_versions() -> Result<()> {
         state.load_internal::<u32>(WALLET_SUPPLY_INDEX_VERSION_KEY)?,
         Some(WALLET_SUPPLY_INDEX_VERSION)
     );
+    Ok(())
+}
+
+#[test]
+fn concurrent_rocksdb_state_initialization_runs_genesis_once() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("state");
+    let Ok(first_store) = PersistentStore::open_with_path(Some(db_path.clone())) else {
+        return Ok(());
+    };
+    let second_store = PersistentStore::open_with_path(Some(db_path))?;
+    let first_store = Arc::new(first_store);
+    let second_store = Arc::new(second_store);
+    assert!(
+        Arc::ptr_eq(
+            &first_store.get_db().expect("RocksDB store must expose DB"),
+            &second_store.get_db().expect("RocksDB store must expose DB"),
+        ),
+        "test requires two PersistentStore wrappers for the same RocksDB handle"
+    );
+    let barrier = Arc::new(Barrier::new(2));
+    let mut initializers = Vec::new();
+
+    for store in [first_store.clone(), second_store] {
+        let barrier = barrier.clone();
+        initializers.push(std::thread::spawn(move || -> Result<u64> {
+            barrier.wait();
+            Ok(StateManager::try_new(store)?.total_supply)
+        }));
+    }
+
+    let supplies = initializers
+        .into_iter()
+        .map(|initializer| initializer.join().expect("initializer thread panicked"))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(supplies.iter().all(|supply| *supply > 0));
+    assert_eq!(supplies[0], supplies[1]);
+    assert_eq!(
+        first_store.load::<bool>(GENESIS_INITIALIZED_KEY)?,
+        Some(true),
+        "concurrent initialization must leave one durable genesis marker"
+    );
+
+    let reopened = StateManager::try_new(first_store)?;
+    assert_eq!(reopened.total_supply, supplies[0]);
     Ok(())
 }
 
@@ -976,6 +1022,62 @@ fn apply_changeset_rejects_insufficient_debit_without_partial_writes() -> Result
 }
 
 #[test]
+fn apply_changeset_debits_object_backed_native_balance_without_panicking() -> Result<()> {
+    let sender = AccountAddress::from_hex_literal("0x1111")?;
+    let recipient = AccountAddress::from_hex_literal("0x2222")?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(GAS_COIN)?;
+    set_native_supply_for_test(&mut state, base.total_supply + 10)?;
+
+    let mut coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    coin_data[..UID_SIZE].copy_from_slice(&[0xA5; UID_SIZE]);
+    coin_data[UID_SIZE..].copy_from_slice(&10u64.to_le_bytes());
+    let mut seed = ChangeSet::new();
+    seed.created_objects.push((
+        "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5".to_string(),
+        CreatedObject {
+            owner: sender,
+            owner_kind: address_owner(sender),
+            uid: None,
+            id: None,
+            type_: format!("0x2::coin::Coin<{}>", GAS_COIN),
+            data: coin_data,
+            version: 1,
+        },
+    ));
+    state.apply_changeset(&seed)?;
+
+    state.save_owner_state(&OwnerState::with_native_balance(sender, 0))?;
+    assert_eq!(state.resolve_owner_native_balance(sender)?, 10);
+    let root_before = state.compute_state_root();
+
+    let mut transfer = ChangeSet::new();
+    transfer.transfer(sender, recipient, 8);
+    let mut remaining_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    remaining_coin_data[..UID_SIZE].copy_from_slice(&[0xA5; UID_SIZE]);
+    remaining_coin_data[UID_SIZE..].copy_from_slice(&2u64.to_le_bytes());
+    transfer.created_objects.push((
+        "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5".to_string(),
+        CreatedObject {
+            owner: sender,
+            owner_kind: address_owner(sender),
+            uid: None,
+            id: None,
+            type_: format!("0x2::coin::Coin<{}>", GAS_COIN),
+            data: remaining_coin_data,
+            version: 2,
+        },
+    ));
+
+    state.apply_changeset(&transfer)?;
+    assert_ne!(state.compute_state_root(), root_before);
+    assert_eq!(state.resolve_owner_native_balance(sender)?, 2);
+    assert_eq!(state.resolve_owner_native_balance(recipient)?, 8);
+
+    Ok(())
+}
+
+#[test]
 fn apply_changeset_rejects_supply_invariant_violation_without_mutating_live_state() -> Result<()> {
     let sender = AccountAddress::from_hex_literal("0x1111")?;
     let recipient = AccountAddress::from_hex_literal("0x2222")?;
@@ -1443,6 +1545,166 @@ fn object_backed_gas_recompute_preserves_prior_owner_only_native_debits() -> Res
             .native_balance(),
         990
     );
+
+    Ok(())
+}
+
+#[test]
+fn implicit_gas_object_adjustment_does_not_apply_total_gas_to_multiple_debit_owners() -> Result<()>
+{
+    let alice = AccountAddress::from_hex_literal("0x1111")?;
+    let bob = AccountAddress::from_hex_literal("0x2222")?;
+    let gas_collector = AccountAddress::from_hex_literal("0x3333")?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(GAS_COIN)?;
+    set_native_supply_for_test(&mut state, base.total_supply + 2_000)?;
+
+    let coin_type = format!("0x2::coin::Coin<{}>", GAS_COIN);
+    let mut alice_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    alice_coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut bob_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    bob_coin_data[0] = 0xbb;
+    bob_coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut init = ChangeSet::new();
+    init.created_objects.push((
+        "0xaaaa".to_string(),
+        CreatedObject {
+            owner: alice,
+            owner_kind: address_owner(alice),
+            uid: None,
+            id: None,
+            type_: coin_type.clone(),
+            data: alice_coin_data,
+            version: 1,
+        },
+    ));
+    init.created_objects.push((
+        "0xbbbb".to_string(),
+        CreatedObject {
+            owner: bob,
+            owner_kind: address_owner(bob),
+            uid: None,
+            id: None,
+            type_: coin_type.clone(),
+            data: bob_coin_data,
+            version: 1,
+        },
+    ));
+    state.apply_changeset(&init)?;
+
+    let mut alice_touched = vec![0u8; UID_SIZE + U64_SIZE];
+    alice_touched[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut bob_touched = vec![0u8; UID_SIZE + U64_SIZE];
+    bob_touched[0] = 0xbb;
+    bob_touched[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut changeset = ChangeSet::new();
+    changeset.get_or_create_owner_delta(alice).debit(3);
+    changeset.get_or_create_owner_delta(bob).debit(4);
+    changeset.collect_gas(gas_collector, 7);
+    changeset.created_objects.push((
+        "0xaaaa".to_string(),
+        CreatedObject {
+            owner: alice,
+            owner_kind: address_owner(alice),
+            uid: None,
+            id: None,
+            type_: coin_type.clone(),
+            data: alice_touched,
+            version: 2,
+        },
+    ));
+    changeset.created_objects.push((
+        "0xbbbb".to_string(),
+        CreatedObject {
+            owner: bob,
+            owner_kind: address_owner(bob),
+            uid: None,
+            id: None,
+            type_: coin_type,
+            data: bob_touched,
+            version: 2,
+        },
+    ));
+
+    state.apply_changeset(&changeset)?;
+
+    assert_eq!(state.resolve_owner_native_balance(alice)?, 997);
+    assert_eq!(state.resolve_owner_native_balance(bob)?, 996);
+    assert_eq!(state.resolve_owner_native_balance(gas_collector)?, 7);
+
+    Ok(())
+}
+
+#[test]
+fn explicit_gas_object_adjusts_its_owner_even_with_multiple_debit_owners() -> Result<()> {
+    let alice = AccountAddress::from_hex_literal("0x1111")?;
+    let bob = AccountAddress::from_hex_literal("0x2222")?;
+    let gas_collector = AccountAddress::from_hex_literal("0x3333")?;
+    let mut state = StateManager::new_in_memory();
+    let base = state.token_supply_summary(GAS_COIN)?;
+    set_native_supply_for_test(&mut state, base.total_supply + 2_000)?;
+
+    let coin_type = format!("0x2::coin::Coin<{}>", GAS_COIN);
+    let mut alice_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    alice_coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut bob_coin_data = vec![0u8; UID_SIZE + U64_SIZE];
+    bob_coin_data[0] = 0xbb;
+    bob_coin_data[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut init = ChangeSet::new();
+    init.created_objects.push((
+        "0xaaaa".to_string(),
+        CreatedObject {
+            owner: alice,
+            owner_kind: address_owner(alice),
+            uid: None,
+            id: None,
+            type_: coin_type.clone(),
+            data: alice_coin_data,
+            version: 1,
+        },
+    ));
+    init.created_objects.push((
+        "0xbbbb".to_string(),
+        CreatedObject {
+            owner: bob,
+            owner_kind: address_owner(bob),
+            uid: None,
+            id: None,
+            type_: coin_type.clone(),
+            data: bob_coin_data,
+            version: 1,
+        },
+    ));
+    state.apply_changeset(&init)?;
+
+    let mut bob_touched = vec![0u8; UID_SIZE + U64_SIZE];
+    bob_touched[0] = 0xbb;
+    bob_touched[UID_SIZE..].copy_from_slice(&1_000u64.to_le_bytes());
+    let mut changeset = ChangeSet::new();
+    changeset.get_or_create_owner_delta(alice).debit(7);
+    changeset.get_or_create_owner_delta(bob).debit(4);
+    changeset.collect_gas(gas_collector, 7);
+    changeset
+        .gas_object_refs
+        .push(ObjectRef::new("0xaaaa".to_string(), Some(1), None));
+    changeset.created_objects.push((
+        "0xbbbb".to_string(),
+        CreatedObject {
+            owner: bob,
+            owner_kind: address_owner(bob),
+            uid: None,
+            id: None,
+            type_: coin_type,
+            data: bob_touched,
+            version: 2,
+        },
+    ));
+
+    state.apply_changeset(&changeset)?;
+
+    assert_eq!(state.resolve_owner_native_balance(alice)?, 993);
+    assert_eq!(state.resolve_owner_native_balance(bob)?, 996);
+    assert_eq!(state.resolve_owner_native_balance(gas_collector)?, 7);
 
     Ok(())
 }

@@ -19,6 +19,7 @@ pub use kanari_db_common::open_or_get_db;
 
 mod hash;
 mod sparse_merkle;
+pub use sparse_merkle::SmtNodeOverlay;
 pub use sparse_merkle::SparseMerkleTree;
 pub use sparse_merkle::compute_sparse_root;
 pub use sparse_merkle::default_hashes;

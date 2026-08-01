@@ -2,10 +2,12 @@ use super::*;
 use anyhow::Context;
 use kanari_types::gas_coin::GasModule;
 use move_core_types::identifier::Identifier;
+use move_core_types::language_storage::{StructTag, TypeTag};
 use move_package::BuildConfig;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tempfile::tempdir;
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -376,6 +378,230 @@ fn kanari_transfer_keeps_distinct_sender_gas_coin_objects() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn entry_can_borrow_coin_id_after_string_address_and_u64_args() -> Result<()> {
+    let runtime = MoveRuntime::new_with_kanari_natives_in_memory()?;
+    let package_dir = create_escrow_like_test_package()?;
+    let (module_id, module_bytes) = compile_test_module(&package_dir)?;
+
+    runtime
+        .publish_module(module_bytes, *module_id.address(), None, None)
+        .context("publish escrow-like object input test module")?;
+
+    let sender = *module_id.address();
+    let seller = AccountAddress::from_hex_literal(
+        "0x3141a487d7a5382bb435c0ad39a6060067765e60e45b50953a0050bcf24b03a3",
+    )?;
+    let coin_id = "0x15fd69ee1ac3b3e43b0348b5c59202059404f529a23d4c054d56841193fdb45a";
+    let coin_type = format!("0x2::coin::Coin<{}>", kanari_types::gas_coin::GAS_COIN);
+    let coin = StoredObject {
+        id: coin_id.to_string(),
+        owner: sender,
+        owner_kind: ObjectOwnerKind::AddressOwner(sender.to_hex_literal()),
+        type_name: coin_type,
+        data: coin_data(coin_id, 1_000_000_000)?,
+        version: 1,
+    };
+    runtime.object_storage.store_object(coin.clone())?;
+
+    runtime.execute_entry_function_with_object_context_and_persistence(
+        &module_id,
+        "create_deal",
+        vec![TypeTag::Struct(Box::new(StructTag::from_str(
+            kanari_types::gas_coin::GAS_COIN,
+        )?))],
+        vec![
+            bcs::to_bytes("deal-1")?,
+            bcs::to_bytes(&seller)?,
+            bcs::to_bytes(&100u64)?,
+            bcs::to_bytes("escrow description")?,
+            bcs::to_bytes(&AccountAddress::from_hex_literal(coin.id.as_str())?)?,
+        ],
+        EntryFunctionObjectContext {
+            object_inputs: vec![],
+            sender: Some(sender),
+            gas_info: Some((100_000, 1)),
+            timestamp: Some(1_785_475_231_485),
+            tx_hash: Some(vec![3; 32]),
+            persist_runtime_state: false,
+            state_overlay: None,
+        },
+    )?;
+
+    Ok(())
+}
+
+#[test]
+fn entry_cannot_mutably_borrow_address_owned_coin_from_other_owner() -> Result<()> {
+    let runtime = MoveRuntime::new_with_kanari_natives_in_memory()?;
+    let package_dir = create_escrow_like_test_package()?;
+    let (module_id, module_bytes) = compile_test_module(&package_dir)?;
+
+    runtime
+        .publish_module(module_bytes, *module_id.address(), None, None)
+        .context("publish escrow-like unauthorized borrow test module")?;
+
+    let sender = *module_id.address();
+    let other_owner = AccountAddress::from_hex_literal(
+        "0x8e8bbedac8598c9cb45e92f48c61c9671aa474c199e5d113a5e76cd9e154aa74",
+    )?;
+    let seller = AccountAddress::from_hex_literal(
+        "0x3141a487d7a5382bb435c0ad39a6060067765e60e45b50953a0050bcf24b03a3",
+    )?;
+    let coin_id = "0x25fd69ee1ac3b3e43b0348b5c59202059404f529a23d4c054d56841193fdb45a";
+    let coin_type = format!("0x2::coin::Coin<{}>", kanari_types::gas_coin::GAS_COIN);
+    runtime.object_storage.store_object(StoredObject {
+        id: coin_id.to_string(),
+        owner: other_owner,
+        owner_kind: ObjectOwnerKind::AddressOwner(other_owner.to_hex_literal()),
+        type_name: coin_type,
+        data: coin_data(coin_id, 1_000_000_000)?,
+        version: 1,
+    })?;
+
+    let err = runtime
+        .execute_entry_function_with_object_context_and_persistence(
+            &module_id,
+            "create_deal",
+            vec![TypeTag::Struct(Box::new(StructTag::from_str(
+                kanari_types::gas_coin::GAS_COIN,
+            )?))],
+            vec![
+                bcs::to_bytes("deal-1")?,
+                bcs::to_bytes(&seller)?,
+                bcs::to_bytes(&100u64)?,
+                bcs::to_bytes("escrow description")?,
+                bcs::to_bytes(&AccountAddress::from_hex_literal(coin_id)?)?,
+            ],
+            EntryFunctionObjectContext {
+                object_inputs: vec![],
+                sender: Some(sender),
+                gas_info: Some((100_000, 1)),
+                timestamp: Some(1_785_475_231_485),
+                tx_hash: Some(vec![4; 32]),
+                persist_runtime_state: false,
+                state_overlay: None,
+            },
+        )
+        .expect_err("sender must not mutably borrow another owner's owned coin");
+
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("9005") || message.contains("E_OBJECT_NOT_MUTABLY_BORROWABLE"),
+        "expected mutable borrow authorization failure, got: {message}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn raw_address_arg_cannot_mutably_borrow_non_coin_object_from_other_owner() -> Result<()> {
+    let runtime = MoveRuntime::new_with_kanari_natives_in_memory()?;
+    let package_dir = create_escrow_like_test_package()?;
+    let (module_id, module_bytes) = compile_test_module(&package_dir)?;
+
+    runtime
+        .publish_module(module_bytes, *module_id.address(), None, None)
+        .context("publish escrow-like cross-owner object test module")?;
+
+    let sender = *module_id.address();
+    let other_owner = AccountAddress::from_hex_literal(
+        "0x8e8bbedac8598c9cb45e92f48c61c9671aa474c199e5d113a5e76cd9e154aa74",
+    )?;
+    let marker_id = "0x35fd69ee1ac3b3e43b0348b5c59202059404f529a23d4c054d56841193fdb45a";
+    runtime.object_storage.store_object(StoredObject {
+        id: marker_id.to_string(),
+        owner: other_owner,
+        owner_kind: ObjectOwnerKind::AddressOwner(other_owner.to_hex_literal()),
+        type_name: format!(
+            "{}::escrow_like_object_input::Marker",
+            module_id.address().to_hex_literal()
+        ),
+        data: AccountAddress::from_hex_literal(marker_id)?.to_vec(),
+        version: 1,
+    })?;
+
+    let err = runtime
+        .execute_entry_function_with_object_context_and_persistence(
+            &module_id,
+            "touch_marker",
+            vec![],
+            vec![bcs::to_bytes(&AccountAddress::from_hex_literal(
+                marker_id,
+            )?)?],
+            EntryFunctionObjectContext {
+                object_inputs: vec![],
+                sender: Some(sender),
+                gas_info: Some((100_000, 1)),
+                timestamp: Some(1_785_475_231_485),
+                tx_hash: Some(vec![5; 32]),
+                persist_runtime_state: false,
+                state_overlay: None,
+            },
+        )
+        .expect_err("raw address args must not mutably borrow another owner's object");
+
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("9005") || message.contains("E_OBJECT_NOT_MUTABLY_BORROWABLE"),
+        "expected explicit object input requirement failure, got: {message}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn explicit_object_input_can_mutably_borrow_non_coin_defi_object_from_other_owner() -> Result<()> {
+    let runtime = MoveRuntime::new_with_kanari_natives_in_memory()?;
+    let package_dir = create_escrow_like_test_package()?;
+    let (module_id, module_bytes) = compile_test_module(&package_dir)?;
+
+    runtime
+        .publish_module(module_bytes, *module_id.address(), None, None)
+        .context("publish escrow-like explicit cross-owner object test module")?;
+
+    let sender = *module_id.address();
+    let other_owner = AccountAddress::from_hex_literal(
+        "0x8e8bbedac8598c9cb45e92f48c61c9671aa474c199e5d113a5e76cd9e154aa74",
+    )?;
+    let marker_id = "0x45fd69ee1ac3b3e43b0348b5c59202059404f529a23d4c054d56841193fdb45a";
+    runtime.object_storage.store_object(StoredObject {
+        id: marker_id.to_string(),
+        owner: other_owner,
+        owner_kind: ObjectOwnerKind::AddressOwner(other_owner.to_hex_literal()),
+        type_name: format!(
+            "{}::escrow_like_object_input::Marker",
+            module_id.address().to_hex_literal()
+        ),
+        data: AccountAddress::from_hex_literal(marker_id)?.to_vec(),
+        version: 1,
+    })?;
+
+    runtime.execute_entry_function_with_object_context_and_persistence(
+        &module_id,
+        "touch_marker",
+        vec![],
+        vec![bcs::to_bytes(&AccountAddress::from_hex_literal(
+            marker_id,
+        )?)?],
+        EntryFunctionObjectContext {
+            object_inputs: vec![ObjectInput {
+                object_ref: ObjectRef::new(marker_id.to_string(), Some(1), None),
+                owner: Some(ObjectOwnerKind::AddressOwner(other_owner.to_hex_literal())),
+                mutable: true,
+            }],
+            sender: Some(sender),
+            gas_info: Some((100_000, 1)),
+            timestamp: Some(1_785_475_231_485),
+            tx_hash: Some(vec![6; 32]),
+            persist_runtime_state: false,
+            state_overlay: None,
+        },
+    )?;
+
+    Ok(())
+}
+
 fn coin_balance(data: &[u8]) -> u64 {
     if data.len() < 40 {
         return 0;
@@ -506,6 +732,15 @@ fn create_transfer_test_package() -> Result<PathBuf> {
         "0x47",
         "gas_meter_transfer_e2e.move",
         "module tester::gas_meter_transfer_e2e {\n    use kanari_system::object::{Self, UID};\n    use kanari_system::transfer;\n    use kanari_system::tx_context::{Self, TxContext};\n\n    struct Blob has key, store {\n        id: UID,\n        data: vector<u8>,\n    }\n\n    public entry fun transfer_blob(data: vector<u8>, ctx: &mut TxContext) {\n        let blob = Blob { id: object::new(ctx), data };\n        transfer::public_transfer(blob, tx_context::sender(ctx));\n    }\n}\n",
+    )
+}
+
+fn create_escrow_like_test_package() -> Result<PathBuf> {
+    create_test_package(
+        "EscrowLikeObjectInput",
+        "0x48",
+        "escrow_like_object_input.move",
+        "#[allow(unused_field)]\nmodule tester::escrow_like_object_input {\n    use std::string::String;\n    use kanari_system::coin::{Self, Coin};\n    use kanari_system::object::{Self, UID};\n    use kanari_system::tx_context::{Self, TxContext};\n\n    const E_NOT_ENOUGH_BALANCE: u64 = 7;\n\n    struct Marker has key, store {\n        id: UID,\n    }\n\n    public entry fun create_deal<CoinType>(\n        deal_id: String,\n        seller: address,\n        amount: u64,\n        description: String,\n        buyer_coin_id: address,\n        ctx: &mut TxContext,\n    ) {\n        let _buyer = tx_context::sender(ctx);\n        let _deal_id = deal_id;\n        let _seller = seller;\n        let _description = description;\n        let buyer_coin: &mut Coin<CoinType> = object::borrow_global_mut<Coin<CoinType>>(buyer_coin_id);\n        assert!(coin::value(buyer_coin) >= amount, E_NOT_ENOUGH_BALANCE);\n    }\n\n    public entry fun touch_marker(marker_id: address, ctx: &mut TxContext) {\n        let _sender = tx_context::sender(ctx);\n        let _marker: &mut Marker = object::borrow_global_mut<Marker>(marker_id);\n    }\n}\n",
     )
 }
 

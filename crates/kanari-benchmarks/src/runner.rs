@@ -73,6 +73,7 @@ pub fn run_harness(config: &HarnessConfig) -> Result<HarnessReport> {
             (block_info, start.elapsed().as_secs_f64())
         }
     };
+    maybe_print_rocksdb_profile(engine);
     let tps = if duration_secs > 0.0 {
         block_info.tx_count as f64 / duration_secs
     } else {
@@ -89,6 +90,91 @@ pub fn run_harness(config: &HarnessConfig) -> Result<HarnessReport> {
         tps,
         target_tps: config.target_tps,
     })
+}
+
+fn rocksdb_profile_enabled() -> bool {
+    std::env::var("KANARI_BENCH_ROCKSDB_PROFILE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn maybe_print_rocksdb_profile(engine: &kanari_core::BlockchainEngine) {
+    if !rocksdb_profile_enabled() {
+        return;
+    }
+
+    let Some(store) = engine.persistent_store.as_ref() else {
+        eprintln!("RocksDB profile: backend=in-memory");
+        return;
+    };
+
+    print_rocksdb_profile(store, "post-run");
+
+    if env_flag("KANARI_BENCH_ROCKSDB_FLUSH_PROFILE") {
+        let started = Instant::now();
+        match store.flush() {
+            Ok(()) => eprintln!(
+                "RocksDB flush profile: flush_secs={:.6}",
+                started.elapsed().as_secs_f64()
+            ),
+            Err(err) => eprintln!("RocksDB flush profile: flush_error={err}"),
+        }
+        print_rocksdb_profile(store, "post-flush");
+    }
+
+    if env_flag("KANARI_BENCH_ROCKSDB_COMPACT_PROFILE") {
+        let started = Instant::now();
+        store.compact();
+        eprintln!(
+            "RocksDB compact profile: compact_secs={:.6}",
+            started.elapsed().as_secs_f64()
+        );
+        print_rocksdb_profile(store, "post-compact");
+    }
+}
+
+fn print_rocksdb_profile(
+    store: &kanari_core::kanari_move_runtime_v1::storage::persistent_store::PersistentStore,
+    label: &str,
+) {
+    eprintln!("RocksDB profile ({label}):");
+    for property in [
+        "rocksdb.estimate-pending-compaction-bytes",
+        "rocksdb.cur-size-active-mem-table",
+        "rocksdb.cur-size-all-mem-tables",
+        "rocksdb.num-immutable-mem-table",
+        "rocksdb.mem-table-flush-pending",
+        "rocksdb.compaction-pending",
+        "rocksdb.num-running-compactions",
+        "rocksdb.num-running-flushes",
+        "rocksdb.num-files-at-level0",
+        "rocksdb.estimate-live-data-size",
+        "rocksdb.total-sst-files-size",
+    ] {
+        match store.rocksdb_int_property(property) {
+            Ok(Some(value)) => eprintln!("  {property}={value}"),
+            Ok(None) => {}
+            Err(err) => eprintln!("  {property}=<error: {err}>"),
+        }
+    }
+
+    match store.rocksdb_property("rocksdb.stats") {
+        Ok(Some(stats)) => {
+            eprintln!("RocksDB stats begin");
+            for line in stats.lines().take(160) {
+                eprintln!("{line}");
+            }
+            eprintln!("RocksDB stats end");
+        }
+        Ok(None) => {}
+        Err(err) => eprintln!("  rocksdb.stats=<error: {err}>"),
+    }
 }
 
 pub fn run_many(config: &HarnessConfig) -> Result<Vec<HarnessReport>> {

@@ -783,11 +783,13 @@ impl SyncManager {
     }
 
     fn should_buffer_dag_vertex_error(error_text: &str) -> bool {
-        error_text.contains("Parent vertex not found")
-            || error_text.contains("Missing parent")
-            || error_text.contains("Not enough parents for quorum")
-            || error_text.contains("DAG_WAITING")
-            || error_text.contains("SYNC_WAITING")
+        let normalized = error_text.to_ascii_lowercase();
+        normalized.contains("parent vertex not found")
+            || normalized.contains("missing parent")
+            || normalized.contains("missing parents")
+            || normalized.contains("not enough parents for quorum")
+            || normalized.contains("dag_waiting")
+            || normalized.contains("sync_waiting")
     }
 
     fn buffer_dag_vertex(&self, vertex: DagVertex, reason: &str) {

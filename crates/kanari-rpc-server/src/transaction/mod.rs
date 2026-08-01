@@ -25,6 +25,7 @@ use move_binary_format::{
     CompiledModule,
     file_format::{SignatureToken, StructHandleIndex},
 };
+use move_core_types::account_address::AccountAddress;
 use move_core_types::language_storage::TypeTag;
 use rand::{TryRng, rngs::SysRng};
 use std::collections::HashSet;
@@ -1123,26 +1124,80 @@ fn validate_object_ref_completeness(
     Ok(())
 }
 
+fn canonical_rpc_object_id(
+    id: u64,
+    field: &str,
+    object_id: &str,
+) -> Result<String, Box<RpcResponse>> {
+    AccountAddress::from_hex_literal(object_id)
+        .map(|address| address.to_hex_literal())
+        .map_err(|err| {
+            Box::new(invalid_params_response(
+                id,
+                format!("{field} must be a valid object id: {err}"),
+            ))
+        })
+}
+
 fn validate_object_inputs_and_gas(
     id: u64,
     object_inputs: &[kanari_types::transaction::ObjectInput],
     gas_payment: Option<&kanari_types::transaction::GasPayment>,
 ) -> Result<(), Box<RpcResponse>> {
+    let mut mutable_object_ids = HashSet::new();
     for (index, input) in object_inputs.iter().enumerate() {
         validate_object_ref_completeness(
             id,
             &format!("object_inputs[{index}].object_ref"),
             &input.object_ref,
         )?;
+        let canonical_object_id = canonical_rpc_object_id(
+            id,
+            &format!("object_inputs[{index}].object_ref.object_id"),
+            &input.object_ref.object_id,
+        )?;
+        if input.mutable && !mutable_object_ids.insert(canonical_object_id) {
+            return Err(Box::new(invalid_params_response(
+                id,
+                format!(
+                    "Duplicate mutable object input {} is not allowed",
+                    input.object_ref.object_id
+                ),
+            )));
+        }
     }
 
     if let Some(gas_payment) = gas_payment {
+        let mut gas_object_ids = HashSet::new();
         for (index, payment) in gas_payment.payment_objects.iter().enumerate() {
             validate_object_ref_completeness(
                 id,
                 &format!("gas_payment.payment_objects[{index}]"),
                 payment,
             )?;
+            let canonical_payment_id = canonical_rpc_object_id(
+                id,
+                &format!("gas_payment.payment_objects[{index}].object_id"),
+                &payment.object_id,
+            )?;
+            if !gas_object_ids.insert(canonical_payment_id.clone()) {
+                return Err(Box::new(invalid_params_response(
+                    id,
+                    format!(
+                        "Duplicate gas payment object {} is not allowed",
+                        payment.object_id
+                    ),
+                )));
+            }
+            if mutable_object_ids.contains(&canonical_payment_id) {
+                return Err(Box::new(invalid_params_response(
+                    id,
+                    format!(
+                        "Gas payment object {} cannot overlap with a mutable object input",
+                        payment.object_id
+                    ),
+                )));
+            }
         }
     }
 
@@ -1712,20 +1767,30 @@ pub async fn handle_build_call_function(
         &build_data.module,
         &build_data.function,
     );
-    let object_inputs = match infer_object_inputs(
-        state,
-        &build_data.sender,
-        &build_data.args,
-        object_ref_arg_indices.as_ref(),
-    ) {
-        Ok(inputs) => inputs,
-        Err(e) => {
-            return RpcResponse {
-                jsonrpc: "2.0".into(),
-                result: None,
-                error: Some(transaction_error_with_reason(e.to_string())),
-                id: request.id,
-            };
+    let object_inputs = if let Some(inputs) = build_data.object_inputs.clone() {
+        if let Err(response) = validate_object_inputs_and_gas(request.id, &inputs, None) {
+            return *response;
+        }
+        if let Err(response) = validate_object_inputs_match_state(state, request.id, &inputs) {
+            return *response;
+        }
+        inputs
+    } else {
+        match infer_object_inputs(
+            state,
+            &build_data.sender,
+            &build_data.args,
+            object_ref_arg_indices.as_ref(),
+        ) {
+            Ok(inputs) => inputs,
+            Err(e) => {
+                return RpcResponse {
+                    jsonrpc: "2.0".into(),
+                    result: None,
+                    error: Some(transaction_error_with_reason(e.to_string())),
+                    id: request.id,
+                };
+            }
         }
     };
     let exclude_ids = object_inputs

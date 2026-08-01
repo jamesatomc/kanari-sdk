@@ -5,7 +5,9 @@ use anyhow::Result;
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{
+    Arc, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak,
+};
 
 use rocksdb::{DB, IteratorMode, WriteBatch};
 
@@ -62,6 +64,27 @@ impl From<std::io::Error> for PersistentStoreError {
 type MemoryStore = Arc<RwLock<HashMap<Vec<u8>, Vec<u8>>>>;
 type RawKeyValue = (Vec<u8>, Vec<u8>);
 
+/// One genesis lock per shared RocksDB handle. `open_or_get_db` returns one
+/// `Arc<DB>` for repeated opens of a path, so all wrappers around that DB share
+/// this lock without serializing unrelated databases.
+static DB_GENESIS_LOCKS: OnceLock<Mutex<HashMap<usize, Weak<Mutex<()>>>>> = OnceLock::new();
+
+fn genesis_lock_for_db(db: &Arc<DB>) -> Arc<Mutex<()>> {
+    let key = Arc::as_ptr(db) as usize;
+    let registry = DB_GENESIS_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    registry.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = registry.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+
+    let lock = Arc::new(Mutex::new(()));
+    registry.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
 /// Lightweight persistent BCS-backed store for runtime state using RocksDB.
 #[derive(Debug)]
 pub struct PersistentStore {
@@ -69,12 +92,22 @@ pub struct PersistentStore {
     // In-memory store for when RocksDB is not used (e.g. tests, Miri)
     memory_store: Option<MemoryStore>,
     transaction_lock: Mutex<()>,
+    // Serializes first-time genesis check, initialization, and commit for the
+    // underlying database without blocking unrelated databases in this process.
+    genesis_init_lock: Arc<Mutex<()>>,
 }
 
 impl PersistentStore {
     /// Serialize read-modify-write transactions that maintain secondary indexes.
     pub(crate) fn transaction_guard(&self) -> MutexGuard<'_, ()> {
         self.transaction_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Serialize first-time genesis initialization for this store's database.
+    pub(crate) fn genesis_init_guard(&self) -> MutexGuard<'_, ()> {
+        self.genesis_init_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -88,10 +121,12 @@ impl PersistentStore {
     /// Open store using an explicit path (None -> default).
     pub fn open_with_path(path_opt: Option<PathBuf>) -> Result<Self> {
         let db = kanari_db_common::open_or_get_db(path_opt)?;
+        let genesis_init_lock = genesis_lock_for_db(&db);
         Ok(PersistentStore {
             db: Some(db),
             memory_store: None,
             transaction_lock: Mutex::new(()),
+            genesis_init_lock,
         })
     }
 
@@ -102,6 +137,7 @@ impl PersistentStore {
             db: None,
             memory_store: Some(Arc::new(RwLock::new(HashMap::new()))),
             transaction_lock: Mutex::new(()),
+            genesis_init_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -243,6 +279,28 @@ impl PersistentStore {
         if let Some(db) = &self.db {
             db.compact_range::<&[u8], &[u8]>(None, None);
         }
+    }
+
+    /// Read a RocksDB string property for benchmark/operational diagnostics.
+    pub fn rocksdb_property(
+        &self,
+        name: &str,
+    ) -> std::result::Result<Option<String>, PersistentStoreError> {
+        let Some(db) = &self.db else {
+            return Ok(None);
+        };
+        Ok(db.property_value(name)?)
+    }
+
+    /// Read a RocksDB integer property for benchmark/operational diagnostics.
+    pub fn rocksdb_int_property(
+        &self,
+        name: &str,
+    ) -> std::result::Result<Option<u64>, PersistentStoreError> {
+        let Some(db) = &self.db else {
+            return Ok(None);
+        };
+        Ok(db.property_int_value(name)?)
     }
 
     fn is_internal_smt_key(key: &[u8]) -> bool {

@@ -54,18 +54,11 @@ impl BlockchainEngine {
         let runtime = &self.runtime_pool[0];
         let mut state_write = state_arc.write().unwrap_or_else(|e| e.into_inner());
         let clock_id = runtime.ensure_system_clock(&mut state_write)?;
-        let use_vm_prologue = std::env::var("KANARI_CLOCK_PROLOGUE_VM")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-            .unwrap_or(false);
-        let changeset = if use_vm_prologue {
-            runtime.execute_clock_consensus_commit_prologue(clock_id, timestamp_ms)?
-        } else {
-            runtime.build_native_clock_consensus_commit_prologue(
-                &state_write,
-                clock_id,
-                timestamp_ms,
-            )?
-        };
+        let changeset = runtime.build_native_clock_consensus_commit_prologue(
+            &state_write,
+            clock_id,
+            timestamp_ms,
+        )?;
         // Apply without supply validation first, then repair legacy overcount
         // that may be exposed by the clock prologue changeset.
         state_write

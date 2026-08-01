@@ -280,6 +280,16 @@ class _TransferBottomSheetState extends State<TransferBottomSheet> {
       );
       return;
     }
+    if (selectedTokenValue == WalletState.kanariTokenType) {
+      final readinessError = await walletState.validateNativeTransferReadiness(
+        amount: rawAmount,
+      );
+      if (readinessError != null) {
+        if (!context.mounted) return;
+        _showMessage(context, readinessError, isError: true);
+        return;
+      }
+    }
 
     final authorized = await showAppPinVerificationSheet(
       context: context,

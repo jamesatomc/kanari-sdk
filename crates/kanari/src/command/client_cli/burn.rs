@@ -102,6 +102,7 @@ impl Burn {
                     function: "burn".to_string(),
                     type_args: vec![],
                     args: burn_args.clone(),
+                    object_inputs: None,
                     gas_limit,
                     gas_price,
                     nonce: None,

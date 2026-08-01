@@ -6,9 +6,42 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:kanari_crypto/kanari_crypto.dart';
 import 'package:kanari_pay/kanari_pay.dart';
+import 'package:kanari_pay/src/core/bcs_utils.dart';
 
 void main() {
   group('KanariClient', () {
+    test('coin type extraction only accepts actual Coin objects', () {
+      expect(
+        BcsUtils.extractCoinTypeFromObjectType(
+          '0x2::coin::Coin<0x2::kanari::KANARI>',
+        ),
+        '0x2::kanari::KANARI',
+      );
+
+      expect(
+        BcsUtils.extractCoinTypeFromObjectType(
+          '0xescrow::escrow::EscrowDeal<0x2::kanari::KANARI>',
+        ),
+        isNull,
+      );
+    });
+
+    test('coin type extraction canonicalizes whitespace', () {
+      expect(
+        BcsUtils.extractCoinTypeFromObjectType(
+          '0x2::coin::Coin< 0x2::kanari::KANARI >',
+        ),
+        '0x2::kanari::KANARI',
+      );
+
+      expect(
+        BcsUtils.extractCoinTypeFromObjectType(
+          '0x2::coin::Coin< 0x2::coin::Coin< 0x2::kanari::KANARI > >',
+        ),
+        '0x2::kanari::KANARI',
+      );
+    });
+
     test('getHealth returns health status', () async {
       final mockClient = MockClient((request) async {
         return http.Response(

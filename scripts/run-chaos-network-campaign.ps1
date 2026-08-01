@@ -2,6 +2,11 @@ param(
     [ValidateRange(1, 168)]
     [int]$Hours = 4,
 
+    # Optional finer-grained duration for CI and short validation campaigns.
+    # When set, this takes precedence over Hours.
+    [ValidateRange(0, 10080)]
+    [int]$Minutes = 0,
+
     [Parameter(Mandatory = $true)]
     [string[]]$Senders,
 
@@ -22,6 +27,12 @@ param(
     [ValidateRange(1, 1000000)]
     [int]$FaucetCoinsPerSender = 16,
 
+    [ValidateRange(1, 64)]
+    [int]$FanoutBatchSize = 64,
+
+    [ValidateRange(30, 7200)]
+    [int]$LaneTimeoutSec = 900,
+
     [switch]$AutoCoinFanout,
 
     [ValidateRange(0, 20)]
@@ -37,7 +48,7 @@ param(
     [int]$CrashDuringLoadFirstDelaySec = 10,
 
     [ValidateRange(1, 3600)]
-    [int]$CrashDuringLoadRestartDelaySec = 0,
+    [int]$CrashDuringLoadRestartDelaySec = 1,
 
     [ValidateRange(0, 20)]
     [int]$RecoveryAuditRoundsPerIteration = 1,
@@ -82,11 +93,16 @@ if (-not (Test-Path -LiteralPath $chaosScript)) {
     throw "Missing chaos runner: $chaosScript"
 }
 
-$deadline = (Get-Date).AddHours($Hours)
+$duration = if ($Minutes -gt 0) {
+    [TimeSpan]::FromMinutes($Minutes)
+} else {
+    [TimeSpan]::FromHours($Hours)
+}
+$deadline = (Get-Date).Add($duration)
 $iteration = 0
 
 Write-Host "Kanari network chaos campaign"
-Write-Host "  deadline=$deadline"
+Write-Host "  duration=$duration deadline=$deadline"
 Write-Host "  senders=$($Senders -join ', ')"
 Write-Host "  count_per_sender=$CountPerSender chaos_rounds=$ChaosRoundsPerIteration"
 Write-Host "  crash_during_load_rounds=$CrashDuringLoadRoundsPerIteration pattern=$CrashDuringLoadPattern recovery_audit_rounds=$RecoveryAuditRoundsPerIteration"
@@ -106,6 +122,8 @@ while ((Get-Date) -lt $deadline) {
         -FundSenders `
         -FaucetAmount 1 `
         -FaucetCoinsPerSender $FaucetCoinsPerSender `
+        -FanoutBatchSize $FanoutBatchSize `
+        -LaneTimeoutSec $LaneTimeoutSec `
         -AutoCoinFanout:$AutoCoinFanout `
         -P2pChannelCapacity $P2pChannelCapacity `
         -MaxConcurrentSyncMessages $MaxConcurrentSyncMessages `

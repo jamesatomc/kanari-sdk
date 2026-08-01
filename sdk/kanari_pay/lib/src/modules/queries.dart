@@ -315,6 +315,28 @@ class QueriesModule {
     return resp.result!;
   }
 
+  Future<List<dynamic>> viewFunction({
+    required String sender,
+    required String package,
+    required String module,
+    required String function,
+    List<String> typeArgs = const [],
+    List<List<int>> args = const [],
+    List<Map<String, dynamic>> objectInputs = const [],
+  }) {
+    return RpcUtils.executeViewFunction(
+      client,
+      url,
+      _normalizeAddress(package),
+      module,
+      function,
+      typeArgs,
+      args,
+      sender: _normalizeAddress(sender),
+      objectInputs: objectInputs,
+    );
+  }
+
   String _normalizeAddress(String addr) {
     var clean = addr.startsWith('0x') ? addr.substring(2) : addr;
 

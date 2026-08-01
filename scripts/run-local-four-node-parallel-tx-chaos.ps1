@@ -26,6 +26,16 @@ param(
     [ValidateRange(1, 1000000)]
     [int]$FaucetCoinsPerSender = 2,
 
+    # `pay::split_vec` is deliberately capped below the Move transaction gas
+    # budget.  This is still 64x fewer setup transactions than faucet-per-coin.
+    [ValidateRange(1, 64)]
+    [int]$FanoutBatchSize = 64,
+
+    # Bound each lane so an object-ref starvation cannot make a bounded chaos
+    # campaign run indefinitely.
+    [ValidateRange(30, 7200)]
+    [int]$LaneTimeoutSec = 900,
+
     [switch]$AutoCoinFanout,
 
     [ValidateRange(16, 65536)]
@@ -57,7 +67,7 @@ param(
     [int]$CrashDuringLoadFirstDelaySec = 10,
 
     [ValidateRange(1, 3600)]
-    [int]$CrashDuringLoadRestartDelaySec = 0,
+    [int]$CrashDuringLoadRestartDelaySec = 1,
 
     [ValidateRange(0, 20)]
     [int]$RecoveryAuditRounds = 0,
@@ -139,14 +149,19 @@ $Senders = @(
 if ($Senders.Count -eq 0) {
     throw "At least one sender is required."
 }
-if ($FundSenders -and $CountPerSender -gt 1) {
-    $requiredCoinFanout = $CountPerSender + 1
+if ($FundSenders) {
+    if ($FaucetAmount -le 0) {
+        throw 'FaucetAmount must be greater than zero when -FundSenders is set.'
+    }
+    # Reserve a disjoint transfer/gas pair for every transaction. This avoids
+    # false node-stall results when a prior mutable object version is delayed.
+    $requiredCoinFanout = (2 * $CountPerSender) + 2
     if ($AutoCoinFanout -and $FaucetCoinsPerSender -lt $requiredCoinFanout) {
         Write-Host "AutoCoinFanout adjusted FaucetCoinsPerSender from $FaucetCoinsPerSender to $requiredCoinFanout for CountPerSender=$CountPerSender"
         $FaucetCoinsPerSender = $requiredCoinFanout
     }
     if ($FaucetCoinsPerSender -lt $requiredCoinFanout) {
-        throw "FaucetCoinsPerSender=$FaucetCoinsPerSender is too low for CountPerSender=$CountPerSender. Native transfers need one mutable transfer coin plus a separate gas coin; use -FaucetCoinsPerSender $requiredCoinFanout or higher to avoid object-ref waits and false node-stall failures."
+        throw "FaucetCoinsPerSender=$FaucetCoinsPerSender is too low for CountPerSender=$CountPerSender. Native transfers reserve one transfer coin and one separate gas coin per transaction; use -FaucetCoinsPerSender $requiredCoinFanout or higher to avoid object-ref waits and false node-stall failures."
     }
 }
 
@@ -227,6 +242,20 @@ function Invoke-KanariRpc {
     } | ConvertTo-Json -Depth 32 -Compress
 
     return Invoke-RestMethod -Uri $Url -Method Post -ContentType 'application/json' -Body $body -TimeoutSec $TimeoutSec
+}
+
+function Get-NativeCoinObjectCount {
+    param([string]$Url, [string]$Owner)
+
+    $response = Invoke-KanariRpc -Url $Url -Method 'kanari_getOwner' -Params $Owner -Id 41 -TimeoutSec 10
+    if ($response.error) {
+        throw "Failed to inspect funded coin objects for ${Owner}: $($response.error.message)"
+    }
+    return @(
+        @($response.result.owned_objects) | Where-Object {
+            $_.type_ -match '::coin::Coin<' -and $_.type_ -match '::kanari::KANARI>'
+        }
+    ).Count
 }
 
 function Start-KanariNode {
@@ -437,6 +466,33 @@ if ($ProtectedRpcNodes.Count -eq 0) {
         # client ingress to exercise the full local devnet under load.
         $ProtectedRpcNodes = @(1, 2, 3, 4)
     }
+}
+
+function Assert-NativeSupplyConverged {
+    param([string[]]$Urls)
+
+    $observed = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($url in $Urls) {
+        $response = Invoke-KanariRpc `
+            -Url $url `
+            -Method 'kanari_getFungibleAsset' `
+            -Params @{ token_type = '0x2::kanari::KANARI' } `
+            -Id 43 `
+            -TimeoutSec 5
+        if ($response.error -or -not $response.result) {
+            $reason = if ($response.error) { $response.error.message } else { 'missing result' }
+            throw "Failed native supply audit at ${url}: $reason"
+        }
+        $asset = $response.result
+        if ([UInt64]$asset.untracked_supply -ne 0) {
+            throw "Native supply audit failed at ${url}: untracked_supply=$($asset.untracked_supply)"
+        }
+        [void]$observed.Add("$($asset.total_supply):$($asset.accounted_supply):$($asset.wallet_visible_supply):$($asset.object_locked_supply):$($asset.untracked_supply)")
+    }
+    if ($observed.Count -ne 1) {
+        throw "Native supply audit diverged across nodes: $($observed -join ', ')"
+    }
+    Write-Host "NATIVE SUPPLY SYNCED $($observed | Select-Object -First 1)"
 }
 
 function Get-DirectorySizeBytes {
@@ -710,6 +766,7 @@ function Invoke-RecoveryAudit {
             $ProcessesByNode[$node] = Start-KanariNode -Index $node -OutSuffix "audit$round"
             Wait-RpcReady -Urls @($Urls[$node - 1]) -Attempts 120
             Wait-StatsConverged -Urls $Urls
+            Assert-NativeSupplyConverged -Urls $Urls
             foreach ($urlIndex in 0..($Urls.Count - 1)) {
                 $stats = (Invoke-KanariRpc -Url $Urls[$urlIndex] -Method 'kanari_getStats' -Id 40 -TimeoutSec 3).result
                 "$(Get-Date -Format o),$round,$($urlIndex + 1),post-restart,$($stats.height),$($stats.total_transactions),$($stats.pending_transactions),$($stats.state_root)" |
@@ -816,16 +873,16 @@ try {
     Write-ProfileSample -Phase 'startup' -ProcessesByNode $processes -Urls $urls -Path $profilePath
 
     if ($FundSenders) {
-        $devAddress = '0x3ba63b92aac5f2bff87e580e820b61faf1c5fe9ae12f0bc8addd931a340b3146'
         foreach ($sender in $Senders) {
-            if ($sender.Equals($devAddress, [StringComparison]::OrdinalIgnoreCase)) {
-                Write-Host "Funding sender $sender skipped; dev genesis wallet already owns native coin objects"
-                continue
-            }
-            Write-Host "Funding sender $sender with $FaucetCoinsPerSender coin object(s) of $FaucetAmount KANARI"
-            for ($fundIndex = 1; $fundIndex -le $FaucetCoinsPerSender; $fundIndex++) {
-                $fundLog = Join-Path $runRoot "fund-$($sender.Substring(2, [Math]::Min(12, $sender.Length - 2)))-$fundIndex.log"
-                $fundErr = Join-Path $runRoot "fund-$($sender.Substring(2, [Math]::Min(12, $sender.Length - 2)))-$fundIndex.err.log"
+            $senderShort = $sender.Substring(2, [Math]::Min(12, $sender.Length - 2))
+            $sourceAmount = $FaucetAmount * $requiredCoinFanout
+            Write-Host "Funding sender $sender with one source coin ($sourceAmount KANARI), one gas reserve ($FaucetAmount KANARI), then native batch fanout to $requiredCoinFanout reserved objects"
+            foreach ($funding in @(
+                @{ Name = 'source'; Amount = $sourceAmount },
+                @{ Name = 'gas'; Amount = $FaucetAmount }
+            )) {
+                $fundLog = Join-Path $runRoot "fund-$senderShort-$($funding.Name).log"
+                $fundErr = Join-Path $runRoot "fund-$senderShort-$($funding.Name).err.log"
                 $env:KANARI_KEYSTORE_PATH = $KeystorePath
                 $fundArgs = @(
                     'client',
@@ -833,7 +890,7 @@ try {
                     '--to',
                     $sender,
                     '--amount',
-                    $FaucetAmount,
+                    $funding.Amount,
                     '--rpc',
                     $urls[0],
                     '--dev-password',
@@ -851,11 +908,55 @@ try {
                 if ($fundProcess.ExitCode -ne 0) {
                     Get-Content $fundLog -Tail 80
                     Get-Content $fundErr -Tail 80
-                    throw "fund sender failed for $sender coin $fundIndex; logs: $fundLog $fundErr"
+                    throw "fund sender failed for $sender ($($funding.Name)); logs: $fundLog $fundErr"
                 }
+            }
+            $remainingFanout = $requiredCoinFanout
+            $fanoutBatch = 0
+            while ($remainingFanout -gt 0) {
+                $fanoutBatch += 1
+                $batchCount = [Math]::Min($FanoutBatchSize, $remainingFanout)
+                $fanoutLog = Join-Path $runRoot "fanout-$senderShort-$fanoutBatch.log"
+                $fanoutErr = Join-Path $runRoot "fanout-$senderShort-$fanoutBatch.err.log"
+                $fanoutArgs = @(
+                    'client',
+                    'fanout',
+                    '--from',
+                    $sender,
+                    '--password',
+                    $Password,
+                    '--count',
+                    $batchCount,
+                    '--amount',
+                    $FaucetAmount,
+                    '--rpc',
+                    $urls[0]
+                )
+                $fanoutProcess = Start-Process `
+                    -FilePath $kanariExe `
+                    -ArgumentList $fanoutArgs `
+                    -WorkingDirectory $repoRoot `
+                    -RedirectStandardOutput $fanoutLog `
+                    -RedirectStandardError $fanoutErr `
+                    -WindowStyle Hidden `
+                    -Wait `
+                    -PassThru
+                if ($fanoutProcess.ExitCode -ne 0) {
+                    Get-Content $fanoutLog -Tail 80
+                    Get-Content $fanoutErr -Tail 80
+                    throw "native batch fanout failed for $sender batch $fanoutBatch; logs: $fanoutLog $fanoutErr"
+                }
+                $remainingFanout -= $batchCount
             }
         }
         Wait-StatsConverged -Urls $urls
+        foreach ($sender in $Senders) {
+            $nativeCoinCount = Get-NativeCoinObjectCount -Url $urls[0] -Owner $sender
+            if ($nativeCoinCount -lt $requiredCoinFanout) {
+                throw "Sender $sender has only $nativeCoinCount native coin object(s) after funding; need at least $requiredCoinFanout reserved transfer/gas objects before starting load."
+            }
+            Write-Host "PRE-FLIGHT sender=$sender native_coin_objects=$nativeCoinCount reserved_required=$requiredCoinFanout"
+        }
         Write-ProfileSample -Phase 'post-funding' -ProcessesByNode $processes -Urls $urls -Path $profilePath
     }
 
@@ -923,10 +1024,17 @@ try {
 
     Write-Host "Waiting for tx lanes to finish"
     $remainingCrashRounds = $CrashDuringLoadRounds
+    $laneDeadline = (Get-Date).AddSeconds($LaneTimeoutSec)
     $lastProfileSample = Get-Date
     $nextCrashAt = if ($remainingCrashRounds -gt 0) { (Get-Date).AddSeconds($CrashDuringLoadFirstDelaySec) } else { $null }
     while ($txProcesses | Where-Object { -not $_.HasExited }) {
         $now = Get-Date
+        if ($now -ge $laneDeadline) {
+            foreach ($process in $txProcesses | Where-Object { -not $_.HasExited }) {
+                try { Stop-Process -Id $process.Id -Force } catch {}
+            }
+            throw "Transaction lanes exceeded LaneTimeoutSec=$LaneTimeoutSec. This is a harness object-reservation or liveness failure; inspect lane*.tx.*.log in $runRoot."
+        }
         if ($ProfileIntervalSec -gt 0 -and (($now - $lastProfileSample).TotalSeconds -ge $ProfileIntervalSec)) {
             Write-ProfileSample -Phase 'load' -ProcessesByNode $processes -Urls $urls -Path $profilePath
             $lastProfileSample = $now
@@ -981,6 +1089,7 @@ try {
     }
 
     Wait-StatsConverged -Urls $urls
+    Assert-NativeSupplyConverged -Urls $urls
     Show-Stats -Urls $urls
     Write-ProfileSample -Phase 'post-load' -ProcessesByNode $processes -Urls $urls -Path $profilePath
     if ($laneFailures -gt 0) {

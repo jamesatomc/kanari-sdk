@@ -14,6 +14,10 @@ module kanari_escrow::escrow {
     const E_WRONG_STATE:       u64 = 3;
     const E_NOT_AUTHORIZED:    u64 = 6;
     const E_NOT_ENOUGH_BALANCE: u64 = 7;
+    // The proof object supplied to an action must belong to that exact deal.
+    // Without this check an otherwise authorized party could append an entry to
+    // a proof object for a different escrow deal.
+    const E_PROOF_DEAL_MISMATCH: u64 = 8;
 
     // ─── Deal states ─────────────────────────────────────────────────
     const STATE_LOCKED:     u8 = 1; // crypto locked, waiting delivery
@@ -220,6 +224,13 @@ module kanari_escrow::escrow {
         *deal_id
     }
 
+    fun assert_proof_matches_deal<CoinType>(
+        deal: &EscrowDeal<CoinType>,
+        proof: &EscrowProof,
+    ) {
+        assert!(deal.deal_id == proof.deal_id, E_PROOF_DEAL_MISMATCH);
+    }
+
     // Step 2: Seller confirms delivery
     // For CLI usage: Uses borrow_global_mut to load objects from storage by Object ID
     public entry fun confirm_delivery<CoinType>(
@@ -235,6 +246,7 @@ module kanari_escrow::escrow {
         
         assert!(deal.seller == seller_addr, E_NOT_SELLER);
         assert!(deal.state == STATE_LOCKED, E_WRONG_STATE);
+        assert_proof_matches_deal(deal, proof);
 
         let now = tx_context::epoch_timestamp_ms(ctx);
         let old_state = deal.state;
@@ -275,6 +287,7 @@ module kanari_escrow::escrow {
 
         assert!(deal.seller == seller_addr, E_NOT_SELLER);
         assert!(deal.state == STATE_LOCKED, E_WRONG_STATE);
+        assert_proof_matches_deal(deal, proof);
 
         let now = tx_context::epoch_timestamp_ms(ctx);
         let old_state = deal.state;
@@ -312,6 +325,7 @@ module kanari_escrow::escrow {
 
         assert!(deal.buyer == buyer_addr, E_NOT_BUYER);
         assert!(deal.state == STATE_DELIVERED, E_WRONG_STATE);
+        assert_proof_matches_deal(deal, proof);
 
         let now = tx_context::epoch_timestamp_ms(ctx);
         let old_state = deal.state;
@@ -353,6 +367,7 @@ module kanari_escrow::escrow {
 
         assert!(caller == deal.buyer || caller == deal.seller, E_NOT_AUTHORIZED);
         assert!(deal.state == STATE_LOCKED || deal.state == STATE_DELIVERED, E_WRONG_STATE);
+        assert_proof_matches_deal(deal, proof);
 
         let now = tx_context::epoch_timestamp_ms(ctx);
         let old_state = deal.state;
@@ -393,6 +408,7 @@ module kanari_escrow::escrow {
         
         assert!(deal.seller == seller_addr, E_NOT_SELLER);
         assert!(deal.state == STATE_LOCKED, E_WRONG_STATE);
+        assert_proof_matches_deal(deal, proof);
 
         let now = tx_context::epoch_timestamp_ms(ctx);
         let old_state = deal.state;
@@ -438,6 +454,7 @@ module kanari_escrow::escrow {
         
         assert!(deal.buyer == buyer_addr, E_NOT_BUYER);
         assert!(deal.state == STATE_DELIVERED, E_WRONG_STATE);
+        assert_proof_matches_deal(deal, proof);
 
         let now = tx_context::epoch_timestamp_ms(ctx);
         let old_state = deal.state;
@@ -535,6 +552,7 @@ module kanari_escrow::escrow {
         
         // ✅ Only allow dispute in LOCKED (1) or DELIVERED (2) states
         assert!(deal.state == STATE_LOCKED || deal.state == STATE_DELIVERED, E_WRONG_STATE);
+        assert_proof_matches_deal(deal, proof);
         
         //  Cannot dispute if deal is already COMPLETED (3) or DISPUTED (4)
         // This prevents refunding after deal completion

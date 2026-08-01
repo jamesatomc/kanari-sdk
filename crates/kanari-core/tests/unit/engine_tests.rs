@@ -19,6 +19,7 @@ use kanari_types::transaction::{
     TransactionEffects,
 };
 use move_core_types::account_address::AccountAddress;
+use proptest::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
@@ -50,8 +51,7 @@ fn snapshot_preview(engine: &BlockchainEngine, limit: usize) -> String {
 }
 
 fn native_coin_object_ref(object_id: &str, balance: u64) -> ObjectRef {
-    let mut coin_data = vec![0u8; 40];
-    coin_data[32..40].copy_from_slice(&balance.to_le_bytes());
+    let coin_data = native_coin_data(object_id, balance);
     ObjectRef::new(
         object_id.to_string(),
         Some(1),
@@ -60,6 +60,15 @@ fn native_coin_object_ref(object_id: &str, balance: u64) -> ObjectRef {
             hex::encode(kanari_crypto::hash_data_blake3(&coin_data))
         )),
     )
+}
+
+fn native_coin_data(object_id: &str, balance: u64) -> Vec<u8> {
+    let mut coin_data = vec![0u8; 40];
+    if let Ok(addr) = AccountAddress::from_hex_literal(object_id) {
+        coin_data[..32].copy_from_slice(addr.as_ref());
+    }
+    coin_data[32..40].copy_from_slice(&balance.to_le_bytes());
+    coin_data
 }
 
 fn signed_transfer_from(sender: &kanari_crypto::keys::KeyPair, nonce: u64) -> SignedTransaction {
@@ -155,8 +164,7 @@ fn fund_sender_with_coin_type(
     token_type: &str,
 ) {
     let addr = AccountAddress::from_hex_literal(address).unwrap();
-    let mut coin_data = vec![0u8; 40];
-    coin_data[32..40].copy_from_slice(&balance.to_le_bytes());
+    let coin_data = native_coin_data(coin_object_id, balance);
     let mut state = engine.state.write().unwrap_or_else(|e| e.into_inner());
 
     let mut create_coin = ChangeSet::new();
@@ -232,8 +240,10 @@ fn committed_native_transfer_updates_sender_and_recipient_owner_balances() {
     configure_single_authority_consensus(&mut engine);
     let sender = generate_keypair(CurveType::Ed25519).unwrap();
     let recipient = generate_keypair(CurveType::Ed25519).unwrap();
-    fund_sender_with_coin(&engine, &sender.address, "0xaaaa", 3_000_000);
-    fund_sender_with_coin(&engine, &sender.address, "0x1001", 1_000_000);
+    let transfer_coin_id = "0xaaaa";
+    let gas_coin_id = "0x1001";
+    fund_sender_with_coin(&engine, &sender.address, transfer_coin_id, 3_000_000);
+    fund_sender_with_coin(&engine, &sender.address, gas_coin_id, 1_000_000);
     engine
         .state
         .write()
@@ -247,7 +257,7 @@ fn committed_native_transfer_updates_sender_and_recipient_owner_balances() {
         .expect("funded sender balance");
     let mut transaction = Transaction::new_transfer_with_object_ref_and_gas(
         sender.tagged_address(),
-        native_coin_object_ref("0xaaaa", 3_000_000),
+        native_coin_object_ref(transfer_coin_id, 3_000_000),
         recipient.address.clone(),
         3_000_000,
         1,
@@ -259,7 +269,7 @@ fn committed_native_transfer_updates_sender_and_recipient_owner_balances() {
         ..
     } = &mut transaction
     {
-        gas_payment.payment_objects = vec![native_coin_object_ref("0x1001", 1_000_000)];
+        gas_payment.payment_objects = vec![native_coin_object_ref(gas_coin_id, 1_000_000)];
     }
     let mut transaction = SignedTransaction::new(transaction);
     transaction
@@ -358,6 +368,225 @@ fn backend_native_burn_uses_prepared_gas_coin_and_reduces_supply() {
             expected_balance
         );
         assert_eq!(state.total_supply, initial_supply - burn_amount);
+    }
+}
+
+#[test]
+fn backend_native_transfer_partial_split_indexes_output_coin() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+    let transfer_coin_id = "0x000000000000000000000000000000000000000000000000000000000000ca01";
+    let gas_coin_id = "0x000000000000000000000000000000000000000000000000000000000000ca02";
+    fund_sender_with_coin(&engine, &sender.address, transfer_coin_id, 1_000_000);
+    fund_sender_with_coin(&engine, &sender.address, gas_coin_id, 1_000_000);
+
+    let signed_tx = signed_transfer_with_refs(
+        &sender,
+        &recipient.address,
+        transfer_coin_id,
+        1_000_000,
+        gas_coin_id,
+        1_000_000,
+        7,
+    );
+    let changeset = engine
+        .execute_transaction_with_runtime_internal(
+            &signed_tx.transaction,
+            &engine.runtime_pool[0],
+            &engine.state,
+            false,
+            Some(123),
+            false,
+        )
+        .unwrap();
+    assert!(changeset.success, "{:?}", changeset.error_message);
+
+    let mut state = engine.state.write().unwrap_or_else(|e| e.into_inner());
+    state.apply_changeset(&changeset).unwrap();
+
+    let sender_addr = AccountAddress::from_hex_literal(&sender.address).unwrap();
+    let recipient_addr = AccountAddress::from_hex_literal(&recipient.address).unwrap();
+    assert_eq!(
+        state.resolve_owner_native_balance(sender_addr).unwrap(),
+        1_999_899
+    );
+    assert_eq!(
+        state.resolve_owner_native_balance(recipient_addr).unwrap(),
+        1
+    );
+
+    let recipient_objects = state.get_owned_objects(&recipient_addr).unwrap();
+    assert_eq!(recipient_objects.len(), 1);
+    let output = state
+        .get_object(&recipient_objects[0])
+        .unwrap()
+        .expect("recipient output coin must exist");
+    assert_eq!(transaction_coin_balance(&output.data), 1);
+    assert_eq!(output.owner, recipient_addr);
+}
+
+#[test]
+fn backend_native_transfer_rejects_gas_overlap_before_execution() {
+    let engine = BlockchainEngine::new_in_memory().unwrap();
+    let sender = generate_keypair(CurveType::Ed25519).unwrap();
+    let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+    let coin_id = "0x000000000000000000000000000000000000000000000000000000000000cb01";
+    fund_sender_with_coin(&engine, &sender.address, coin_id, 1_000_000);
+
+    let signed_tx = signed_transfer_with_refs(
+        &sender,
+        &recipient.address,
+        coin_id,
+        1_000_000,
+        coin_id,
+        1_000_000,
+        8,
+    );
+    let changeset = engine.execute_transaction_with_runtime_internal(
+        &signed_tx.transaction,
+        &engine.runtime_pool[0],
+        &engine.state,
+        false,
+        Some(124),
+        false,
+    );
+
+    let error = changeset.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot overlap with a mutable object input"),
+        "{error:#}"
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+
+    #[test]
+    fn native_transfer_fastpath_requires_matching_mutable_abi_coin_input(
+        abi_coin in 1u64..u64::MAX,
+        input_coin in 1u64..u64::MAX,
+        is_mutable in any::<bool>(),
+    ) {
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let abi_coin_id = format!("0x{abi_coin:064x}");
+        let input_coin_id = format!("0x{input_coin:064x}");
+        let mut tx = Transaction::new_transfer_with_object_ref(
+            sender.tagged_address(),
+            native_coin_object_ref(&input_coin_id, 1_000_000),
+            AccountAddress::TWO.to_hex_literal(),
+            1,
+            1,
+        );
+        let Transaction::ExecuteFunction {
+            args,
+            object_inputs,
+            ..
+        } = &mut tx else {
+            unreachable!("transfer helper must construct ExecuteFunction");
+        };
+        args[0] = AccountAddress::from_hex_literal(&abi_coin_id).unwrap().to_vec();
+        object_inputs[0].mutable = is_mutable;
+
+        prop_assert_eq!(
+            tx.native_call().is_some(),
+            abi_coin == input_coin && is_mutable,
+            "native fastpath must only use the ABI coin when it is mutable input"
+        );
+    }
+
+    #[test]
+    fn native_transfer_and_burn_accounting_property(
+        transfer_balance in 2u64..1_000_000u64,
+        transfer_amount in 1u64..500_000u64,
+        burn_amount in 1u64..500_000u64,
+    ) {
+        let engine = BlockchainEngine::new_in_memory().unwrap();
+        let sender = generate_keypair(CurveType::Ed25519).unwrap();
+        let recipient = generate_keypair(CurveType::Ed25519).unwrap();
+        let transfer_amount = transfer_amount.min(transfer_balance - 1);
+        let burn_balance = burn_amount + 1_000_000;
+        let transfer_coin_id = "0x000000000000000000000000000000000000000000000000000000000000cc01";
+        let transfer_gas_id = "0x000000000000000000000000000000000000000000000000000000000000cc02";
+        let burn_coin_id = "0x000000000000000000000000000000000000000000000000000000000000cc03";
+        fund_sender_with_coin(&engine, &sender.address, transfer_coin_id, transfer_balance);
+        fund_sender_with_coin(&engine, &sender.address, transfer_gas_id, 1_000_000);
+        fund_sender_with_coin(&engine, &sender.address, burn_coin_id, burn_balance);
+
+        let initial_supply = engine.state.read().unwrap_or_else(|e| e.into_inner()).total_supply;
+        let mut transfer_tx = Transaction::new_transfer_with_object_ref_and_gas(
+            sender.tagged_address(),
+            native_coin_object_ref(transfer_coin_id, transfer_balance),
+            recipient.address.clone(),
+            transfer_amount,
+            100,
+            100_000,
+            1,
+        );
+        if let Transaction::ExecuteFunction {
+            gas_payment: Some(gas_payment),
+            ..
+        } = &mut transfer_tx
+        {
+            gas_payment.payment_objects =
+                vec![native_coin_object_ref(transfer_gas_id, 1_000_000)];
+        }
+        let mut transfer_tx = SignedTransaction::new(transfer_tx);
+        transfer_tx.sign(&sender.private_key, sender.curve_type).unwrap();
+        let transfer_cs = engine
+            .execute_transaction_with_runtime_internal(
+                &transfer_tx.transaction,
+                &engine.runtime_pool[0],
+                &engine.state,
+                false,
+                Some(200),
+                false,
+            )
+            .unwrap();
+        prop_assert!(transfer_cs.success, "{:?}", transfer_cs.error_message);
+
+        {
+            let mut state = engine.state.write().unwrap_or_else(|e| e.into_inner());
+            state.apply_changeset(&transfer_cs).unwrap();
+        }
+
+        let mut burn_tx = Transaction::new_burn_with_gas(
+            sender.tagged_address(),
+            burn_amount,
+            101,
+            100_000,
+            1,
+        );
+        if let Transaction::ExecuteFunction { gas_payment, .. } = &mut burn_tx {
+            *gas_payment = Some(GasPayment {
+                payment_objects: vec![native_coin_object_ref(burn_coin_id, burn_balance)],
+                owner: sender.address.clone(),
+                budget: 100_000,
+                price: 1,
+            });
+        }
+        let mut burn_tx = SignedTransaction::new(burn_tx);
+        burn_tx.sign(&sender.private_key, sender.curve_type).unwrap();
+        let burn_cs = engine
+            .execute_transaction_with_runtime_internal(
+                &burn_tx.transaction,
+                &engine.runtime_pool[0],
+                &engine.state,
+                false,
+                Some(201),
+                false,
+            )
+            .unwrap();
+        prop_assert!(burn_cs.success, "{:?}", burn_cs.error_message);
+
+        let mut state = engine.state.write().unwrap_or_else(|e| e.into_inner());
+        state.apply_changeset(&burn_cs).unwrap();
+        let recipient_addr = AccountAddress::from_hex_literal(&recipient.address).unwrap();
+        prop_assert_eq!(state.resolve_owner_native_balance(recipient_addr).unwrap(), transfer_amount);
+        prop_assert_eq!(state.total_supply, initial_supply - burn_amount);
+        state.validate_supply_invariants().unwrap();
     }
 }
 
@@ -1701,7 +1930,7 @@ fn owned_fast_checkpoint_leaves_shared_object_transactions_pending() {
     fund_sender_with_coin(&engine, &owned_sender.address, "0xa001", 1_000_000);
     let owned_tx = signed_native_burn_with_gas_object(&owned_sender, "0xa001", 1_000_000, 1);
     let mut shared_transaction =
-        Transaction::new_burn_with_gas(shared_sender.tagged_address(), 0, 2, 100_000, 0);
+        Transaction::new_burn_with_gas(shared_sender.tagged_address(), 0, 2, 100_000, 1);
     if let Transaction::ExecuteFunction { object_inputs, .. } = &mut shared_transaction {
         object_inputs.push(ObjectInput {
             object_ref: ObjectRef::new("0xshared", Some(1), Some(format!("0x{}", "11".repeat(32)))),

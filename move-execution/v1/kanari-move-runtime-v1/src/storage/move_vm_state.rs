@@ -245,10 +245,18 @@ impl MoveVMState {
 
     /// Load object payload bytes from the stored `CreatedObject` wrapper.
     pub(crate) fn try_get_object(&self, object_id: &AccountAddress) -> Result<Option<Vec<u8>>> {
-        let obj_key = Self::object_key(object_id);
         Ok(self
-            .load_with_overlay::<StoredObject>(obj_key.as_bytes())?
+            .try_get_stored_object(object_id)?
             .map(|object| object.data))
+    }
+
+    /// Load the full stored object metadata and payload for object-native execution.
+    pub(crate) fn try_get_stored_object(
+        &self,
+        object_id: &AccountAddress,
+    ) -> Result<Option<StoredObject>> {
+        let obj_key = Self::object_key(object_id);
+        self.load_with_overlay::<StoredObject>(obj_key.as_bytes())
     }
 
     /// Delete a resource blob keyed by address and struct tag.

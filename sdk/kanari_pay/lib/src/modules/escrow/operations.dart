@@ -181,6 +181,7 @@ class EscrowOperations {
     wallet: wallet,
     coinType: coinType,
     functionName: EscrowConstants.fnConfirmDelivery,
+    objectInputIds: [dealObjectId, proofObjectId],
     args: TransactionArgs()
       ..addObjectId(dealObjectId)
       ..addObjectId(proofObjectId),
@@ -200,6 +201,7 @@ class EscrowOperations {
     wallet: wallet,
     coinType: coinType,
     functionName: EscrowConstants.fnReleaseFunds,
+    objectInputIds: [dealObjectId, proofObjectId],
     args: TransactionArgs()
       ..addObjectId(dealObjectId)
       ..addObjectId(proofObjectId),
@@ -220,6 +222,7 @@ class EscrowOperations {
     wallet: wallet,
     coinType: coinType,
     functionName: EscrowConstants.fnRaiseDispute,
+    objectInputIds: [dealObjectId, proofObjectId],
     args: TransactionArgs()
       ..addObjectId(dealObjectId)
       ..addObjectId(proofObjectId)
@@ -234,14 +237,21 @@ class EscrowOperations {
     required String coinType,
     required String functionName,
     required TransactionArgs args,
+    List<String> objectInputIds = const [],
     int gasLimit = TransactionConstants.defaultGasLimit,
     int gasPrice = TransactionConstants.defaultGasPrice,
-  }) {
+  }) async {
+    final objectInputs = <Map<String, dynamic>>[];
+    for (final objectId in objectInputIds) {
+      objectInputs.add(await _objectInputForAction(objectId));
+    }
+
     return _executePublishedAction(
       wallet: wallet,
       functionName: functionName,
       typeArgs: [BcsUtils.normalizeTokenType(coinType)],
       args: args.build(),
+      objectInputs: objectInputs,
       gasLimit: gasLimit,
       gasPrice: gasPrice,
     );
@@ -252,6 +262,7 @@ class EscrowOperations {
     required String functionName,
     required List<String> typeArgs,
     required List<List<int>> args,
+    List<Map<String, dynamic>> objectInputs = const [],
     required int gasLimit,
     required int gasPrice,
   }) async {
@@ -263,8 +274,26 @@ class EscrowOperations {
       function: functionName,
       typeArgs: typeArgs,
       args: args,
+      objectInputs: objectInputs,
       gasLimit: gasLimit,
       gasPrice: gasPrice,
+      executeImmediate: true,
     );
+  }
+
+  Future<Map<String, dynamic>> _objectInputForAction(String objectId) async {
+    final object = await rpc.getObject(objectId);
+    final objectRef = <String, dynamic>{
+      'object_id': BcsUtils.normalizeObjectId(object.id),
+      'version': object.version,
+      if (object.digest != null && object.digest!.isNotEmpty)
+        'digest': object.digest,
+    };
+
+    return {
+      'object_ref': objectRef,
+      'owner': {'AddressOwner': BcsUtils.normalizeAddress(object.owner)},
+      'mutable': true,
+    };
   }
 }

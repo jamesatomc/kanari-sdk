@@ -47,8 +47,10 @@ class RpcUtils {
     String module,
     String functionName,
     List<String> typeArgs,
-    List<List<int>> arguments,
-  ) async {
+    List<List<int>> arguments, {
+    String sender = '',
+    List<Map<String, dynamic>> objectInputs = const [],
+  }) async {
     // Convert args to hex strings for RPC
     final argsHex = arguments
         .map(
@@ -59,12 +61,13 @@ class RpcUtils {
 
     // Build request data object
     final requestData = {
-      'sender': '', // View functions don't need sender
+      'sender': sender,
       'package': packageAddress,
       'module': module,
       'function': functionName,
       'type_args': typeArgs,
       'args': argsHex,
+      if (objectInputs.isNotEmpty) 'object_inputs': objectInputs,
     };
 
     // params must be an ARRAY containing the request object
