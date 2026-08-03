@@ -2,21 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-#[cfg(feature = "p2p-mdns")]
-use libp2p::mdns;
-use libp2p::{
-    PeerId, Swarm, Transport,
-    core::upgrade,
-    dcutr,
-    futures::StreamExt,
-    gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
-    identify,
-    identity::Keypair,
-    kad::{self, store::MemoryStore},
-    noise, ping, relay,
-    swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux,
-};
+use futures::StreamExt;
+use libp2p_core::{Multiaddr, PeerId, Transport, upgrade};
+use libp2p_dcutr as dcutr;
+use libp2p_gossipsub as gossipsub;
+use libp2p_gossipsub::{IdentTopic, MessageAuthenticity, ValidationMode};
+use libp2p_identify as identify;
+use libp2p_identity::Keypair;
+use libp2p_kad::{self as kad, store::MemoryStore};
+use libp2p_noise as noise;
+use libp2p_ping as ping;
+use libp2p_relay as relay;
+use libp2p_swarm::{NetworkBehaviour, Swarm, SwarmEvent};
+use libp2p_tcp as tcp;
+use libp2p_yamux as yamux;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -179,10 +178,9 @@ pub struct CompressedCheckpointResponseMsg {
 
 /// Network behavior combining multiple protocols
 #[derive(NetworkBehaviour)]
+#[behaviour(prelude = "libp2p_swarm::derive_prelude")]
 pub struct KanariBehaviour {
     pub gossipsub: gossipsub::Behaviour,
-    #[cfg(feature = "p2p-mdns")]
-    pub mdns: mdns::tokio::Behaviour,
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub dcutr: dcutr::Behaviour,
     pub identify: identify::Behaviour,
@@ -318,8 +316,6 @@ impl P2PNetwork {
 
         let behaviour = KanariBehaviour {
             gossipsub,
-            #[cfg(feature = "p2p-mdns")]
-            mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?,
             kademlia,
             dcutr,
             identify,
@@ -331,7 +327,7 @@ impl P2PNetwork {
             transport,
             behaviour,
             local_peer_id,
-            libp2p::swarm::Config::with_tokio_executor()
+            libp2p_swarm::Config::with_tokio_executor()
                 .with_idle_connection_timeout(Duration::from_secs(60)),
         );
 
@@ -1094,34 +1090,6 @@ impl P2PEventHandler {
                     }
                 }
             }
-            #[cfg(feature = "p2p-mdns")]
-            SwarmEvent::Behaviour(KanariBehaviourEvent::Mdns(mdns::Event::Discovered(peers))) => {
-                for (peer_id, multiaddr) in peers {
-                    info!("Discovered peer: {} at {}", peer_id, multiaddr);
-                    self.network
-                        .swarm
-                        .behaviour_mut()
-                        .gossipsub
-                        .add_explicit_peer(&peer_id);
-                    self.network
-                        .swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, multiaddr.clone());
-
-                    // Explicitly dial discovered peer to ensure connection
-                    if let Err(e) = self.network.swarm.dial(multiaddr.clone()) {
-                        warn!("Failed to dial discovered peer {}: {}", peer_id, e);
-                    } else {
-                        // Add to peer store if available
-                        if let Some(store_arc) = &self.peer_store {
-                            let mut store = store_arc.lock().await;
-                            store.add_peer(peer_id, vec![multiaddr.clone()]);
-                            let _ = store.save();
-                        }
-                    }
-                }
-            }
             SwarmEvent::ConnectionClosed {
                 peer_id,
                 endpoint: _,
@@ -1139,7 +1107,7 @@ impl P2PEventHandler {
                         let store = store_arc.lock().await;
                         if let Some(peer_info) = store.peers.get(&peer_id.to_string())
                             && let Some(addr_str) = peer_info.addresses.first()
-                            && let Ok(addr) = addr_str.parse::<libp2p::Multiaddr>()
+                            && let Ok(addr) = addr_str.parse::<Multiaddr>()
                         {
                             info!("Attempting to reconnect to {} at {}...", peer_id, addr);
                             let _ = self.network.swarm.dial(addr);
@@ -1152,21 +1120,6 @@ impl P2PEventHandler {
                     warn!("Failed to connect to {}: {}", pid, error);
                 } else {
                     warn!("Outgoing connection error: {}", error);
-                }
-            }
-            #[cfg(feature = "p2p-mdns")]
-            SwarmEvent::Behaviour(KanariBehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {
-                for (peer_id, _) in peers {
-                    // mDNS expiry only means the discovery record timed out; it
-                    // does not mean the TCP connection or committee membership
-                    // ended. Removing a still-connected validator from the
-                    // explicit Gossipsub set can silently stop DAG and
-                    // transaction propagation in small networks after the mDNS
-                    // TTL expires.
-                    info!(
-                        "Peer discovery record expired for {}; retaining explicit Gossipsub peer",
-                        peer_id
-                    );
                 }
             }
             SwarmEvent::ConnectionEstablished {

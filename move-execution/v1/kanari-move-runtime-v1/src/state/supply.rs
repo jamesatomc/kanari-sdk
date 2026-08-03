@@ -539,7 +539,7 @@ impl StateManager {
         }
         #[derive(Deserialize)]
         struct ParsedCoinMetadata {
-            _id: AccountAddress,
+            id: AccountAddress,
             decimals: u8,
             symbol: MoveString,
             name: MoveString,
@@ -548,6 +548,8 @@ impl StateManager {
         }
 
         if let Ok(meta) = bcs::from_bytes::<ParsedCoinMetadata>(data) {
+            // Required for canonical BCS layout; metadata is keyed by token type.
+            let _ = meta.id;
             self.save_token_metadata_field(b"metadata_decimals:", token_type, &meta.decimals)?;
 
             if let Ok(name) = String::from_utf8(meta.name.bytes) {
@@ -635,7 +637,6 @@ impl StateManager {
         owner: AccountAddress,
         native_delta: i128,
         native_object_changed: bool,
-        _native_object_gas_adjusted: u64,
         native_gas_credit: u64,
         native_ledger_before: u64,
         native_object_before: u64,

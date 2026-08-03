@@ -14,23 +14,17 @@ description.workspace = true
 [dependencies]
 # Internal crates
 kanari-types = { workspace = true }
-kanari-crypto = { workspace = true }
 
 # Database
 rusqlite = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
-serde_json = { workspace = true }
 bcs = { workspace = true }
 hex = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }
-thiserror = { workspace = true }
-
-# Async runtime
-tokio = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

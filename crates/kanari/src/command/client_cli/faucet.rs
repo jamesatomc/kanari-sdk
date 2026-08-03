@@ -29,6 +29,10 @@ pub struct Faucet {
     /// RPC endpoint
     #[clap(long = "rpc")]
     pub rpc_endpoint: Option<String>,
+
+    /// Maximum seconds to wait for the faucet transaction to commit.
+    #[arg(long, default_value_t = 120)]
+    pub commit_timeout_sec: u64,
 }
 
 impl Faucet {
@@ -66,7 +70,7 @@ impl Faucet {
             let committed = wait_for_transaction_commit(
                 &client,
                 &status.hash,
-                Duration::from_secs(20),
+                Duration::from_secs(self.commit_timeout_sec),
                 Duration::from_millis(400),
             )
             .await?;

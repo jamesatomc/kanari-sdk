@@ -45,6 +45,10 @@ pub struct Fanout {
     /// RPC endpoint.
     #[arg(long = "rpc")]
     pub rpc_endpoint: Option<String>,
+
+    /// Maximum seconds to wait for the fanout transaction to commit.
+    #[arg(long, default_value_t = 120)]
+    pub commit_timeout_sec: u64,
 }
 
 impl Fanout {
@@ -124,7 +128,7 @@ impl Fanout {
             let committed = wait_for_transaction_commit(
                 &client,
                 &status.hash,
-                Duration::from_secs(60),
+                Duration::from_secs(self.commit_timeout_sec),
                 Duration::from_millis(250),
             )
             .await?;

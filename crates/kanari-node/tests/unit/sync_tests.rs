@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::*;
 use kanari_core::Checkpoint;
-use libp2p::identity::Keypair;
+use libp2p_identity::Keypair;
 use tokio::sync::mpsc;
 
 fn new_sync_manager() -> SyncManager {

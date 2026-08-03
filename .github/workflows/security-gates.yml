@@ -23,6 +23,16 @@ on:
         options:
           - "false"
           - "true"
+      run_crypto_fuzz_campaign:
+        description: "Run longer kanari-crypto fuzz/dependency campaign"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  schedule:
+    - cron: "17 20 * * *"
 
 permissions:
   contents: read
@@ -58,6 +68,9 @@ jobs:
 
       - name: Byzantine Mysticeti native block one-shot gate
         run: cargo test -p kanari-core long_run_byzantine_native_blocks_cannot_advance_checkpoint -- --ignored --test-threads=1
+
+      - name: Kanari crypto deterministic compatibility gate
+        run: cargo test -p kanari-crypto --all-features --test compatibility_test -- --test-threads=1
 
   four-node-chaos:
     name: Four-node RPC chaos
@@ -124,3 +137,36 @@ jobs:
             -Hours 1 `
             -Workers 1 `
             -IncludeIgnoredLongRuns
+
+  crypto-fuzz-campaign:
+    name: Kanari crypto fuzz / dependency campaign
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_crypto_fuzz_campaign == 'true')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/advisory-db
+            target
+          key: ${{ runner.os }}-crypto-fuzz-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run kanari-crypto long fuzz/dependency campaign
+        shell: pwsh
+        run: |
+          .\scripts\run-crypto-fuzz-campaign.ps1 `
+            -Hours 4 `
+            -Cases 8192 `
+            -Workers 1

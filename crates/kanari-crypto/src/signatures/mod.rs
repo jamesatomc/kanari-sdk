@@ -29,7 +29,10 @@ pub mod dilithium5;
 pub mod ed25519;
 pub mod hybrid;
 pub mod k256;
+pub(crate) mod ml_dsa_provider;
 pub mod p256;
+#[cfg(feature = "experimental-slh-dsa")]
+pub(crate) mod slh_dsa_provider;
 pub mod sphincs;
 
 /// Digital signature errors
@@ -88,15 +91,14 @@ pub fn sign_message(
         CurveType::K256 => sign_message_k256(raw_key, message),
         CurveType::P256 => sign_message_p256(raw_key, message),
         CurveType::Ed25519 => sign_message_ed25519(raw_key, message),
-        // For hybrid K256+Dilithium3, sign with the classical K256 private key part
-        CurveType::K256Dilithium3 => sign_message_hybrid_k256(raw_key, message),
-        // For hybrid Ed25519+Dilithium3, sign with the classical Ed25519 private key part
-        CurveType::Ed25519Dilithium3 => sign_message_hybrid_ed25519(raw_key, message),
-        // Handle pure PQC curves by delegating to PQC-specific signing functions
-        CurveType::Dilithium2 => sign_message_dilithium2(raw_key, message),
-        CurveType::Dilithium3 => sign_message_dilithium3(raw_key, message),
-        CurveType::Dilithium5 => sign_message_dilithium5(raw_key, message),
-        CurveType::SphincsPlusSha256Robust => sign_message_sphincs(raw_key, message),
+        // Preserve full formatted keys for hybrid/PQC curves. Their prefixes carry
+        // provider and packing metadata that must not be stripped by this dispatcher.
+        CurveType::K256Dilithium3 => sign_message_hybrid_k256(private_key_hex, message),
+        CurveType::Ed25519Dilithium3 => sign_message_hybrid_ed25519(private_key_hex, message),
+        CurveType::Dilithium2 => sign_message_dilithium2(private_key_hex, message),
+        CurveType::Dilithium3 => sign_message_dilithium3(private_key_hex, message),
+        CurveType::Dilithium5 => sign_message_dilithium5(private_key_hex, message),
+        CurveType::SphincsPlusSha256Robust => sign_message_sphincs(private_key_hex, message),
     }
 }
 

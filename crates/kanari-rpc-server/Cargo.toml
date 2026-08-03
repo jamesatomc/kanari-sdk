@@ -25,7 +25,6 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 blake3 = { workspace = true }
 hex = { workspace = true }
-sha3 = { workspace = true }
 move-binary-format = { workspace = true }
 move-core-types = { workspace = true }
 bcs = { workspace = true }

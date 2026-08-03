@@ -35,7 +35,6 @@ clap = { workspace = true, features = ["derive"] }
 # Local dependencies
 kanari-crypto = { workspace = true }
 kanari-types = { workspace = true }
-kanari-move-runtime-v1 = { workspace = true }
 kanari-rpc-client = { workspace = true }
 kanari-rpc-api = { workspace = true }
 kanari-common = { workspace = true }

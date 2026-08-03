@@ -7,10 +7,22 @@ use kanari_crypto::{
 };
 use proptest::prelude::*;
 
+const DEFAULT_CRYPTO_FUZZ_CASES: u32 = 256;
+
+fn crypto_fuzz_config() -> proptest::test_runner::Config {
+    proptest::test_runner::Config {
+        cases: std::env::var("KANARI_CRYPTO_PROPTEST_CASES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_CRYPTO_FUZZ_CASES),
+        ..proptest::test_runner::Config::default()
+    }
+}
+
 /// Fuzz test signature verification with random data
 #[test]
 fn prop_fuzz_signature_verification() {
-    proptest!(|(curve_byte in 0u8..3u8, message: Vec<u8>)| {
+    proptest!(crypto_fuzz_config(), |(curve_byte in 0u8..3u8, message: Vec<u8>)| {
         // Limit message size to avoid timeout
         prop_assume!(message.len() <= 1024);
 
@@ -63,7 +75,7 @@ fn prop_fuzz_signature_verification() {
 /// Fuzz test encryption/decryption roundtrip
 #[test]
 fn prop_fuzz_encryption_roundtrip() {
-    proptest!(|(password_bytes: Vec<u8>, plaintext: Vec<u8>)| {
+    proptest!(crypto_fuzz_config(), |(password_bytes: Vec<u8>, plaintext: Vec<u8>)| {
         // Limit sizes
         prop_assume!(password_bytes.len() >= 8 && password_bytes.len() <= 64);
         prop_assume!(plaintext.len() <= 1024);
@@ -96,7 +108,7 @@ fn prop_fuzz_encryption_roundtrip() {
 /// Fuzz test hashing functions
 #[test]
 fn prop_fuzz_hash_functions() {
-    proptest!(|(data: Vec<u8>)| {
+    proptest!(crypto_fuzz_config(), |(data: Vec<u8>)| {
         // Limit data size
         prop_assume!(data.len() <= 1024);
 
@@ -127,7 +139,7 @@ fn prop_fuzz_hash_functions() {
 /// Fuzz test password validation
 #[test]
 fn prop_fuzz_password_validation() {
-    proptest!(|(password_bytes: Vec<u8>)| {
+    proptest!(crypto_fuzz_config(), |(password_bytes: Vec<u8>)| {
         // Limit size
         prop_assume!(password_bytes.len() <= 128);
 
@@ -168,7 +180,7 @@ fn prop_fuzz_password_validation() {
 /// Fuzz test key generation across all curves
 #[test]
 fn prop_fuzz_key_generation() {
-    proptest!(|(curve_selector: u8)| {
+    proptest!(crypto_fuzz_config(), |(curve_selector: u8)| {
         // Map to different curve types
         let curve_type = match curve_selector % 9 {
             0 => CurveType::K256,

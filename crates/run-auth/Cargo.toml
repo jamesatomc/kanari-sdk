@@ -14,7 +14,6 @@ description.workspace = true
 [dependencies]
 # Internal dependencies
 kanari-auth.workspace = true
-kanari-types.workspace = true
 kanari-crypto.workspace = true
 
 # Web framework
@@ -28,7 +27,6 @@ serde_json.workspace = true
 
 # Error handling
 anyhow.workspace = true
-thiserror.workspace = true
 
 # Logging
 tracing.workspace = true

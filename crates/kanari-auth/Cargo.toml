@@ -20,10 +20,7 @@ move-core-types.workspace = true
 # Cryptography
 sha2.workspace = true
 argon2.workspace = true
-hmac.workspace = true
 rand.workspace = true
-rand_core.workspace = true
-hex.workspace = true
 base64.workspace = true
 aes-gcm.workspace = true
 

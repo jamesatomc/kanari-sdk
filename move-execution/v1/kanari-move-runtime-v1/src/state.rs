@@ -521,7 +521,7 @@ impl StateManager {
         // run genesis after the first one has committed.
         if !genesis_already_initialized {
             let genesis_store = state.store.clone();
-            let _genesis_guard = genesis_store.genesis_init_guard();
+            let genesis_guard = genesis_store.genesis_init_guard();
 
             let initialized_while_waiting = state
                 .store
@@ -553,6 +553,7 @@ impl StateManager {
                     "Genesis initialization completed but total_supply is still 0"
                 );
             }
+            drop(genesis_guard);
         }
 
         state

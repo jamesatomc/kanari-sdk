@@ -238,7 +238,7 @@ impl ObjectStorage {
         let owner = obj.owner;
         let mut old_owner = None;
         let mut old_owner_kind = None;
-        let _transaction_guard = self
+        let transaction_guard = self
             .persistent
             .as_ref()
             .map(|store| store.transaction_guard());
@@ -316,6 +316,7 @@ impl ObjectStorage {
             .objects
             .insert(id, obj);
 
+        drop(transaction_guard);
         Ok(())
     }
 
@@ -363,7 +364,7 @@ impl ObjectStorage {
 
     fn delete_object(&self, id: &str) -> Result<(), ObjectStorageError> {
         let mut old_object = None;
-        let _transaction_guard = self
+        let transaction_guard = self
             .persistent
             .as_ref()
             .map(|store| store.transaction_guard());
@@ -409,6 +410,7 @@ impl ObjectStorage {
             .objects
             .remove(id);
 
+        drop(transaction_guard);
         Ok(())
     }
 

@@ -208,12 +208,12 @@ impl ChangeSet {
             }
             access.write(format!("owner:{}", owner.to_hex_literal()));
         }
-        for (_owner, token_type, _) in &self.treasuries {
+        for (_, token_type, _) in &self.treasuries {
             access.write(format!("supply:{token_type}"));
             access.write(format!("treasury:{token_type}"));
             access.write(b"global_token_supplies".to_vec());
         }
-        for (_owner, token_type, _) in &self.nft_caps {
+        for (_, token_type, _) in &self.nft_caps {
             access.write(format!("nft:{token_type}"));
         }
         for (owner, token_type, _) in &self.token_balance_sets {

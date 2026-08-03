@@ -101,22 +101,10 @@ fn main() {
         publish_cs.token_balance_sets.len()
     );
 
-    // Determine function to call (default "setup") and optional mint params from CLI
+    // Determine function to call (default "setup") from CLI.
     let mut function_name = "setup".to_string();
-    let mut _cli_mint_amount: Option<u64> = None;
-    let mut _cli_recipient: Option<MoveAccountAddress> = None;
     if args.len() > 2 {
         function_name = args[2].clone();
-    }
-    if args.len() > 3
-        && let Ok(v) = args[3].parse::<u64>()
-    {
-        _cli_mint_amount = Some(v);
-    }
-    if args.len() > 4
-        && let Ok(addr) = MoveAccountAddress::from_hex_literal(&args[4])
-    {
-        _cli_recipient = Some(addr);
     }
 
     println!(

@@ -1,21 +1,17 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use pqcrypto_dilithium::dilithium3;
-
-use pqcrypto_traits::sign::{
-    DetachedSignature as PqcDetachedTrait, PublicKey as PqcPublicKeyTrait,
-};
-
 use crate::{
     SignatureError,
     signatures::{
-        MAX_CLASSICAL_SIG_LEN, dilithium3::sign_message_dilithium3,
-        ed25519::verify_signature_ed25519, k256::sign_message_k256, k256::verify_signature_k256,
+        MAX_CLASSICAL_SIG_LEN,
+        dilithium3::{sign_message_dilithium3, verify_signature_dilithium3},
+        ed25519::verify_signature_ed25519,
+        k256::sign_message_k256,
+        k256::verify_signature_k256,
         sign_message_ed25519,
     },
 };
-use hex;
 
 /// Detailed hybrid verifier that returns (classical_ok, pqc_ok).
 /// This avoids fallback behaviour and enables precise logging/errors.
@@ -47,17 +43,7 @@ pub fn verify_hybrid_signature_detailed(
         return Ok((classical_ok, false));
     }
 
-    // Strip known prefixes (e.g., "kanapqc") then decode
-    let pqc_pub_raw = crate::keys::extract_raw_key(pqc_pub);
-    let pub_bytes = hex::decode(pqc_pub_raw)
-        .map_err(|_| SignatureError::InvalidPublicKey("Invalid public key hex".to_string()))?;
-    let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-        SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
-    })?;
-    let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
-        SignatureError::InvalidFormat("Invalid signature bytes for Dilithium3".to_string())
-    })?;
-    let pqc_ok = dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok();
+    let pqc_ok = verify_signature_dilithium3(pqc_pub, message, pqc_sig)?;
 
     Ok((classical_ok, pqc_ok))
 }
@@ -180,22 +166,16 @@ pub fn verify_k256dilithium3(
     let pqc_sig = &signature[2 + classical_len..];
 
     let classical_ok = verify_signature_k256(classical, message, classical_sig).unwrap_or(false);
+    if pqc_sig.is_empty() {
+        return Ok(false);
+    }
 
     let parts: Vec<&str> = addr.splitn(2, ':').collect();
     if parts.len() != 2 {
         return Ok(false);
     }
     let pqc_pub = parts[1];
-    let pqc_pub_raw = crate::keys::extract_raw_key(pqc_pub);
-    let pub_bytes = hex::decode(pqc_pub_raw)
-        .map_err(|_| SignatureError::InvalidPublicKey("Invalid public key hex".to_string()))?;
-    let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-        SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
-    })?;
-    let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
-        SignatureError::InvalidFormat("Invalid signature bytes for Dilithium3".to_string())
-    })?;
-    let pqc_ok = dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok();
+    let pqc_ok = verify_signature_dilithium3(pqc_pub, message, pqc_sig)?;
 
     Ok(classical_ok && pqc_ok)
 }
@@ -230,22 +210,16 @@ pub fn verify_ed25519dilithium3(
     let pqc_sig = &signature[2 + classical_len..];
 
     let classical_ok = verify_signature_ed25519(classical, message, classical_sig).unwrap_or(false);
+    if pqc_sig.is_empty() {
+        return Ok(false);
+    }
 
     let parts: Vec<&str> = addr.splitn(2, ':').collect();
     if parts.len() != 2 {
         return Ok(false);
     }
     let pqc_pub = parts[1];
-    let pqc_pub_raw = crate::keys::extract_raw_key(pqc_pub);
-    let pub_bytes = hex::decode(pqc_pub_raw)
-        .map_err(|_| SignatureError::InvalidPublicKey("Invalid public key hex".to_string()))?;
-    let pk = dilithium3::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-        SignatureError::InvalidPublicKey("Invalid Dilithium3 public key".to_string())
-    })?;
-    let sig_obj = dilithium3::DetachedSignature::from_bytes(pqc_sig).map_err(|_| {
-        SignatureError::InvalidFormat("Invalid signature bytes for Dilithium3".to_string())
-    })?;
-    let pqc_ok = dilithium3::verify_detached_signature(&sig_obj, message, &pk).is_ok();
+    let pqc_ok = verify_signature_dilithium3(pqc_pub, message, pqc_sig)?;
 
     Ok(classical_ok && pqc_ok)
 }

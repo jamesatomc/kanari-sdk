@@ -136,7 +136,6 @@ fn main() {
 
     // Look for NftCap and Collection created objects
     let mut found_nftcap: Option<String> = None;
-    let mut _found_collection: Option<String> = None;
     for (id, obj) in publish_cs
         .created_objects
         .iter()
@@ -152,8 +151,6 @@ fn main() {
                 .unwrap_or_else(|e| eprintln!("Failed to preload NftCap: {:?}", e));
         } else if obj.type_.contains("::Collection") {
             println!("Found Collection: id={} type={}", id, obj.type_);
-            _found_collection = Some(id.clone());
-
             // Preload the Collection object into the runtime's object storage
             runtime
                 .preload_object_snapshot(id, obj.owner, &obj.type_, obj.data.clone(), obj.version)
@@ -220,14 +217,10 @@ fn main() {
             let level_mv = make_vec_string(&["1"]);
             let rarity_mv = make_vec_string(&["common"]);
             let attack_mv = make_vec_string(&["10"]);
-            let defense_mv = make_vec_string(&["5"]);
-
             // Then serialize each one properly using BCS to ensure correct Move type layout
             let arg5 = bcs::to_bytes(&level_mv).expect("serialize level");
             let arg6 = bcs::to_bytes(&rarity_mv).expect("serialize rarity");
             let arg7 = bcs::to_bytes(&attack_mv).expect("serialize attack");
-            let _arg8 = bcs::to_bytes(&defense_mv).expect("serialize defense"); // Prepared but not used in current mint signature
-
             // Build args: cap, name, desc, number, url, level, rarity, attack (omit defense to match function signature)
             let mint_args = vec![arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7];
 

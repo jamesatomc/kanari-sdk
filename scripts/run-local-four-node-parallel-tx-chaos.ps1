@@ -36,6 +36,9 @@ param(
     [ValidateRange(30, 7200)]
     [int]$LaneTimeoutSec = 900,
 
+    [ValidateRange(20, 7200)]
+    [int]$FundingCommitTimeoutSec = 180,
+
     [switch]$AutoCoinFanout,
 
     [ValidateRange(16, 65536)]
@@ -91,6 +94,14 @@ param(
     [ValidateRange(1, 300)]
     [int]$RootSyncTimeoutSec = 120,
 
+    [ValidateRange(0, 100000)]
+    [int]$RpcAdversarialRequests = 0,
+
+    [ValidateRange(1, 512)]
+    [int]$RpcAdversarialConcurrency = 32,
+
+    [switch]$IncludeOversizedRpcAdversarial,
+
     [int]$BaseP2pPort = 19500,
 
     [int]$BaseRpcPort = 19501,
@@ -107,6 +118,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $stressLaneScript = Join-Path $repoRoot 'scripts\run-kanari-stress-lane.ps1'
+$rpcProbeScript = Join-Path $repoRoot 'scripts\run-rpc-load-dos.ps1'
 $targetProfileDir = if ($BuildProfile -eq 'release') { 'release' } else { 'debug' }
 $nodeExe = Join-Path $repoRoot "target\$targetProfileDir\kanari-node.exe"
 $kanariExe = Join-Path $repoRoot "target\$targetProfileDir\kanari.exe"
@@ -859,6 +871,9 @@ Write-Host "Crash-during-load pattern: $CrashDuringLoadPattern nodes=$($CrashDur
 if ($ProfileIntervalSec -gt 0) {
     Write-Host "Profile samples: every ${ProfileIntervalSec}s -> $profilePath"
 }
+if ($RpcAdversarialRequests -gt 0 -and -not (Test-Path -LiteralPath $rpcProbeScript)) {
+    throw "Missing RPC adversarial probe: $rpcProbeScript"
+}
 $laneRpcUrls = @($ProtectedRpcNodes | ForEach-Object { $urls[$_ - 1] })
 
 try {
@@ -894,7 +909,9 @@ try {
                     '--rpc',
                     $urls[0],
                     '--dev-password',
-                    $Password
+                    $Password,
+                    '--commit-timeout-sec',
+                    $FundingCommitTimeoutSec
                 )
                 $fundProcess = Start-Process `
                     -FilePath $kanariExe `
@@ -930,7 +947,9 @@ try {
                     '--amount',
                     $FaucetAmount,
                     '--rpc',
-                    $urls[0]
+                    $urls[0],
+                    '--commit-timeout-sec',
+                    $FundingCommitTimeoutSec
                 )
                 $fanoutProcess = Start-Process `
                     -FilePath $kanariExe `
@@ -1096,6 +1115,20 @@ try {
         throw "$laneFailures tx lane(s) failed; inspect lane*.tx.*.log in $runRoot"
     }
     Invoke-RecoveryAudit -Rounds $RecoveryAuditRounds -ProcessesByNode $processes -Urls $urls
+    if ($RpcAdversarialRequests -gt 0) {
+        Write-Host "Running RPC adversarial probes while four-node network is live"
+        foreach ($url in $urls) {
+            & $rpcProbeScript `
+                -RpcUrl $url `
+                -Requests $RpcAdversarialRequests `
+                -Concurrency $RpcAdversarialConcurrency `
+                -IncludeMalformed `
+                -IncludeOversized:$IncludeOversizedRpcAdversarial
+        }
+        Wait-StatsConverged -Urls $urls
+        Assert-NativeSupplyConverged -Urls $urls
+        Write-ProfileSample -Phase 'post-rpc-adversarial' -ProcessesByNode $processes -Urls $urls -Path $profilePath
+    }
     Write-FlamegraphTargets -ProcessesByNode $processes -Path $flamegraphTargetsPath
     Write-ProfileSample -Phase 'post-recovery-audit' -ProcessesByNode $processes -Urls $urls -Path $profilePath
     Write-LogProfileSummary -Path $profileSummaryPath

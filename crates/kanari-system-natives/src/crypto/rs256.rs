@@ -32,6 +32,7 @@ pub const E_INVALID_MESSAGE_LENGTH: u64 = 4;
 
 // Constants from Move module
 const RSASSA_PKCS1_V1_5_MINIMUM_MODULUS_LENGTH: u64 = 2048; // bits
+const RSASSA_PKCS1_V1_5_MAXIMUM_MODULUS_LENGTH: u64 = 8192; // bits
 const RSASSA_PKCS1_V1_5_MINIMUM_EXPONENT_LENGTH: u64 = 1; // bytes
 const RSASSA_PKCS1_V1_5_MAXIMUM_EXPONENT_LENGTH: u64 = 512; // bytes
 const SHA256_MESSAGE_LENGTH: u64 = 32; // bytes
@@ -90,8 +91,11 @@ pub fn make_verify_native(gas_cost: InternalGas) -> NativeFunction {
             ));
         }
 
-        // Check modulus length (must be >= 2048 bits = 256 bytes)
-        if n_bytes.len() < (RSASSA_PKCS1_V1_5_MINIMUM_MODULUS_LENGTH / 8) as usize {
+        // Check modulus length (support normal 2048/3072/4096-bit keys while
+        // rejecting oversized attacker-controlled inputs before RSA parsing).
+        if n_bytes.len() < (RSASSA_PKCS1_V1_5_MINIMUM_MODULUS_LENGTH / 8) as usize
+            || n_bytes.len() > (RSASSA_PKCS1_V1_5_MAXIMUM_MODULUS_LENGTH / 8) as usize
+        {
             return Ok(NativeResult::err(context.gas_used(), E_INVALID_PUBKEY));
         }
 
@@ -150,8 +154,11 @@ pub fn make_verify_prehash_native(gas_cost: InternalGas) -> NativeFunction {
             ));
         }
 
-        // Check modulus length (must be >= 2048 bits = 256 bytes)
-        if n_bytes.len() < (RSASSA_PKCS1_V1_5_MINIMUM_MODULUS_LENGTH / 8) as usize {
+        // Check modulus length (support normal 2048/3072/4096-bit keys while
+        // rejecting oversized attacker-controlled inputs before RSA parsing).
+        if n_bytes.len() < (RSASSA_PKCS1_V1_5_MINIMUM_MODULUS_LENGTH / 8) as usize
+            || n_bytes.len() > (RSASSA_PKCS1_V1_5_MAXIMUM_MODULUS_LENGTH / 8) as usize
+        {
             return Ok(NativeResult::err(context.gas_used(), E_INVALID_PUBKEY));
         }
 

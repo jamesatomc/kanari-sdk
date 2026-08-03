@@ -10,7 +10,8 @@ use kanari_rpc_api::{CanonicalStateSnapshotResponse, CompareCanonicalStateSnapsh
 use kanari_rpc_server::start_server_with_transaction_broadcaster;
 use kanari_types::address::Address as KanariAddress;
 use kanari_types::gas_coin::GasModule;
-use libp2p::identity::Keypair;
+use libp2p_core::Multiaddr;
+use libp2p_identity::Keypair;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -543,7 +544,7 @@ pub async fn run_node(
 
         if let Some(bootstrap_list) = bootstrap_peers {
             for bootstrap_addr in bootstrap_list {
-                match bootstrap_addr.parse::<libp2p::Multiaddr>() {
+                match bootstrap_addr.parse::<Multiaddr>() {
                     Ok(addr) => {
                         tracing::info!("Connecting to bootstrap peer: {}", addr);
                         if let Err(e) = p2p_network.swarm.dial(addr.clone()) {

@@ -739,7 +739,7 @@ impl StateManager {
         }
 
         // Apply NFT capability creations/updates
-        for (_owner, token_type, nft_cap) in &changeset.nft_caps {
+        for (_, token_type, nft_cap) in &changeset.nft_caps {
             let mut key = b"nft:".to_vec();
             key.extend_from_slice(token_type.as_bytes());
             self.save_internal(&key, nft_cap)?;
@@ -1154,7 +1154,6 @@ impl StateManager {
                 .map(|change| change.balance_delta)
                 .unwrap_or(0i128);
             let native_object_changed = native_object_changed_owners.contains(&owner);
-            let adjusted_gas = native_object_gas_adjusted.get(&owner).copied().unwrap_or(0);
             let native_gas_credit = changeset
                 .native_gas_credits
                 .get(&owner)
@@ -1201,7 +1200,6 @@ impl StateManager {
                 owner,
                 native_delta,
                 native_object_changed,
-                adjusted_gas,
                 native_gas_credit,
                 native_ledger_before,
                 native_object_before,

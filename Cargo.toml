@@ -58,7 +58,7 @@ categories = ["development-tools"]                                              
 keywords = ["blockchain", "sdk", "move", "rust", "ifps", "storage", "wallet", "framework"]     # Keywords for crates.io search.
 homepage = "https://kanarinetwork.site"                                                                                # Project homepage.
 documentation = "https://docs.kanarinetwork.site"                                                                      # Link to project documentation.
-version = "0.2.4"                                                                                                  # Current version of the SDK.
+version = "0.2.5"                                                                                                  # Current version of the SDK.
 authors = ["Kanari Network"]                                                                                       # Authors of the SDK.
 license = "Apache-2.0"                                                                                             # License information.
 repository = "https://github.com/kanari-network/kanari-sdk"                                                        # Link to the code repository.
@@ -74,12 +74,24 @@ description = "Kanari Network SDK"                                              
 tokio = { version = "1.53.1", features = ["full"] }
 rayon = "1.12.0"
 crossbeam-channel = "0.5.16"
+futures = "0.3.33"
 
 # ============================================================================
 # Networking & Communication
 # ============================================================================
 ## P2P Networking
-libp2p = { version = "0.56.0", features = ["tcp", "noise", "yamux", "gossipsub", "kad", "identify", "macros", "tokio", "relay", "dcutr", "ping"] }
+libp2p-core = "0.43.2"
+libp2p-dcutr = "0.14.1"
+libp2p-gossipsub = "0.49.5"
+libp2p-identify = "0.47.0"
+libp2p-identity = { version = "0.2.14", features = ["ed25519", "peerid", "rand"] }
+libp2p-kad = "0.48.0"
+libp2p-noise = "0.46.1"
+libp2p-ping = "0.47.0"
+libp2p-relay = "0.21.1"
+libp2p-swarm = { version = "0.47.1", features = ["macros", "tokio"] }
+libp2p-tcp = { version = "0.44.1", features = ["tokio"] }
+libp2p-yamux = "0.47.0"
 
 ## HTTP/Web APIs
 reqwest = { version = "0.13.4", features = ["json"] }
@@ -133,10 +145,8 @@ primitive-types = { version = "0.14.0", default-features = true }               
 # ============================================================================
 # Cryptography - Post-Quantum (PQC)
 # ============================================================================
-pqcrypto-dilithium = "0.5.0"                                                       # Digital signatures (NIST finalist)
-pqcrypto-kyber = "0.8.1"                                                           # Key encapsulation (NIST selected)
-pqcrypto-sphincsplus = "0.7.2"                                                     # Stateless hash-based signatures
-pqcrypto-traits = "0.3.5"                                                          # Common PQC traits
+ml-dsa = { version = "0.1.1", features = ["zeroize"] }                             # Pure Rust FIPS 204 ML-DSA signatures
+slh-dsa = { version = "0.2.0-rc.5", features = ["zeroize"] }                       # Pure Rust FIPS 205 SLH-DSA signatures
 
 # ============================================================================
 # Memory Security & Timing Attack Prevention
@@ -156,7 +166,7 @@ zstd = "0.13.3"                                                                 
 # Caching & Performance Optimization
 # ============================================================================
 moka = { version = "0.12.15", features = ["sync"] }                                 # Thread-safe caching
-lru = "0.18.1"                                                                      # LRU cache
+lru = "0.18.2"                                                                      # LRU cache
 dashmap = "6.2.1"                                                                   # Concurrent HashMap
 ahash = "0.8.12"                                                                    # Fast non-cryptographic hasher
 siphasher = "1.0.3"                                                                 # SipHash implementation
@@ -204,7 +214,7 @@ arbitrary = { version = "1.4.2", features = ["derive"] }                        
 # ============================================================================
 totp-rs = { version = "5.7.2", features = ["gen_secret", "otpauth"] }               # TOTP for 2FA
 qrcode = "0.14.1"                                                                   # QR code generation
-data-encoding = "2.11.0"                                                            # Data encoding utilities
+data-encoding = "2.11.1"                                                            # Data encoding utilities
 
 # ============================================================================
 # Time & Date Handling

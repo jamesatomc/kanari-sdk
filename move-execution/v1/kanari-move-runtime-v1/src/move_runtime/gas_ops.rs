@@ -6,18 +6,15 @@ use crate::changeset::ChangeSet;
 use anyhow::Result;
 use kanari_types::GasConfig;
 use kanari_types::gas::{GasMeter, GasOperation};
-use move_core_types::account_address::AccountAddress;
-
 use move_core_types::language_storage::ModuleId;
 
 impl super::MoveRuntime {
     /// Helper to apply gas accounting to a ChangeSet. Handles sender debit + sequence increment
     /// metadata only. Monetary gas charging is owned by the engine layer so every
-    /// execution path debits exactly once. `sender` is still accepted for API stability.
+    /// execution path debits exactly once.
     pub(crate) fn apply_gas_info(
         &self,
         cs: &mut ChangeSet,
-        _sender: Option<AccountAddress>,
         gas_limit: u64,
         gas_price: u64,
         gas_op: GasOperation,
@@ -33,23 +30,6 @@ impl super::MoveRuntime {
         // Charge storage gas
         meter.charge_storage(storage_written, &config)?;
         meter.rebate_storage(storage_deleted);
-
-        // Calculate total cost: execution (in Mist) + net storage fee (in Mist)
-        // execution cost = meter.total_cost()
-        // net storage fee = meter.net_storage_fee(&config)
-        let execution_cost = meter.total_cost();
-        let storage_fee = meter.net_storage_fee(&config);
-
-        // Total cost can't be negative overall (though storage rebate could exceed storage cost)
-        // But execution cost should usually cover it. If total < 0, we cap at 0.
-        let total_cost_signed = (execution_cost as i128) + (storage_fee as i128);
-        let total_cost = if total_cost_signed < 0 {
-            0
-        } else {
-            total_cost_signed as u64
-        };
-
-        let _ = total_cost;
 
         // Report gas units derived from GasOperation. The VM-internal KanariGasMeter
         // is still used as an execution cap, but monetary debit/credit happens later
@@ -112,7 +92,7 @@ impl super::MoveRuntime {
         }
 
         // 2. Kanari Objects (Created/Modified)
-        for (_id, obj) in &kanari_cs.created_objects {
+        for (_, obj) in &kanari_cs.created_objects {
             written += obj.data.len() as u64;
             // Add some overhead for type name and owner
             written += obj.type_.len() as u64 + 32;

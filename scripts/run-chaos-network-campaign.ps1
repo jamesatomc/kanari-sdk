@@ -33,6 +33,9 @@ param(
     [ValidateRange(30, 7200)]
     [int]$LaneTimeoutSec = 900,
 
+    [ValidateRange(20, 7200)]
+    [int]$FundingCommitTimeoutSec = 180,
+
     [switch]$AutoCoinFanout,
 
     [ValidateRange(0, 20)]
@@ -79,6 +82,18 @@ param(
     [ValidateRange(1, 300)]
     [int]$RootSyncTimeoutSec = 300,
 
+    [int]$BaseP2pPort = 23000,
+
+    [int]$BaseRpcPort = 23001,
+
+    [ValidateRange(0, 100000)]
+    [int]$RpcAdversarialRequestsPerNode = 0,
+
+    [ValidateRange(1, 512)]
+    [int]$RpcAdversarialConcurrency = 32,
+
+    [switch]$IncludeOversizedRpcAdversarial,
+
     [ValidateSet('release', 'debug')]
     [string]$BuildProfile = 'release',
 
@@ -107,11 +122,12 @@ Write-Host "  senders=$($Senders -join ', ')"
 Write-Host "  count_per_sender=$CountPerSender chaos_rounds=$ChaosRoundsPerIteration"
 Write-Host "  crash_during_load_rounds=$CrashDuringLoadRoundsPerIteration pattern=$CrashDuringLoadPattern recovery_audit_rounds=$RecoveryAuditRoundsPerIteration"
 Write-Host "  p2p_delay_ms=$P2pPublishDelayMs duplicate_publishes=$P2pDuplicatePublishes"
+Write-Host "  rpc_adversarial_requests_per_node=$RpcAdversarialRequestsPerNode concurrency=$RpcAdversarialConcurrency oversized=$IncludeOversizedRpcAdversarial"
 
 while ((Get-Date) -lt $deadline) {
     $iteration += 1
-    $baseP2pPort = 23000 + (($iteration - 1) * 100)
-    $baseRpcPort = $baseP2pPort + 1
+    $baseP2pPort = $BaseP2pPort + (($iteration - 1) * 100)
+    $baseRpcPort = $BaseRpcPort + (($iteration - 1) * 100)
     Write-Host "[$(Get-Date -Format o)] chaos iteration $iteration base_p2p=$baseP2pPort base_rpc=$baseRpcPort"
 
     & $chaosScript `
@@ -124,6 +140,7 @@ while ((Get-Date) -lt $deadline) {
         -FaucetCoinsPerSender $FaucetCoinsPerSender `
         -FanoutBatchSize $FanoutBatchSize `
         -LaneTimeoutSec $LaneTimeoutSec `
+        -FundingCommitTimeoutSec $FundingCommitTimeoutSec `
         -AutoCoinFanout:$AutoCoinFanout `
         -P2pChannelCapacity $P2pChannelCapacity `
         -MaxConcurrentSyncMessages $MaxConcurrentSyncMessages `
@@ -142,6 +159,9 @@ while ((Get-Date) -lt $deadline) {
         -PerfSampleHz $PerfSampleHz `
         -PerfDurationSec $PerfDurationSec `
         -RootSyncTimeoutSec $RootSyncTimeoutSec `
+        -RpcAdversarialRequests $RpcAdversarialRequestsPerNode `
+        -RpcAdversarialConcurrency $RpcAdversarialConcurrency `
+        -IncludeOversizedRpcAdversarial:$IncludeOversizedRpcAdversarial `
         -BaseP2pPort $baseP2pPort `
         -BaseRpcPort $baseRpcPort `
         -BuildProfile $BuildProfile `

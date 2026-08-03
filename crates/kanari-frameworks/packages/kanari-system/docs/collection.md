@@ -14,6 +14,7 @@
 -  [Function `cap_collection_id`](#0x2_collection_cap_collection_id)
 -  [Function `collection_creator`](#0x2_collection_collection_creator)
 -  [Function `max_supply`](#0x2_collection_max_supply)
+-  [Function `update_metadata`](#0x2_collection_update_metadata)
 -  [Function `remaining`](#0x2_collection_remaining)
 -  [Function `issued`](#0x2_collection_issued)
 -  [Function `consume_for_mint`](#0x2_collection_consume_for_mint)
@@ -187,6 +188,15 @@ Event emitted when a collection is created (for off-chain indexing)
 ## Constants
 
 
+<a name="0x2_collection_E_NOT_COLLECTION_CREATOR"></a>
+
+
+
+<pre><code><b>const</b> <a href="collection.md#0x2_collection_E_NOT_COLLECTION_CREATOR">E_NOT_COLLECTION_CREATOR</a>: u64 = 2;
+</code></pre>
+
+
+
 <a name="0x2_collection_E_NO_SUPPLY"></a>
 
 
@@ -349,6 +359,40 @@ Returns the collection id stored in an <code><a href="collection.md#0x2_collecti
 
 <pre><code><b>public</b> <b>fun</b> <a href="collection.md#0x2_collection_max_supply">max_supply</a>(c: &<a href="collection.md#0x2_collection_Collection">Collection</a>): u64 {
     c.max_supply
+}
+</code></pre>
+
+
+
+</details>
+
+<a name="0x2_collection_update_metadata"></a>
+
+## Function `update_metadata`
+
+Updates collection display metadata. Only the original collection creator
+may perform this mutation; supply and ownership are intentionally unchanged.
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="collection.md#0x2_collection_update_metadata">update_metadata</a>(c: &<b>mut</b> <a href="collection.md#0x2_collection_Collection">collection::Collection</a>, banner_url: <a href="dependencies/move-stdlib/vector.md#0x1_vector">vector</a>&lt;u8&gt;, website_url: <a href="dependencies/move-stdlib/vector.md#0x1_vector">vector</a>&lt;u8&gt;, ctx: &<a href="tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>)
+</code></pre>
+
+
+
+<details>
+<summary>Implementation</summary>
+
+
+<pre><code><b>public</b> <b>fun</b> <a href="collection.md#0x2_collection_update_metadata">update_metadata</a>(
+    c: &<b>mut</b> <a href="collection.md#0x2_collection_Collection">Collection</a>,
+    banner_url: <a href="dependencies/move-stdlib/vector.md#0x1_vector">vector</a>&lt;u8&gt;,
+    website_url: <a href="dependencies/move-stdlib/vector.md#0x1_vector">vector</a>&lt;u8&gt;,
+    ctx: &TxContext,
+) {
+    <b>assert</b>!(<a href="tx_context.md#0x2_tx_context_sender">tx_context::sender</a>(ctx) == c.creator, <a href="collection.md#0x2_collection_E_NOT_COLLECTION_CREATOR">E_NOT_COLLECTION_CREATOR</a>);
+    c.banner_url = kanari_system::url::new_unsafe_from_bytes(banner_url);
+    c.website_url = kanari_system::url::new_unsafe_from_bytes(website_url);
+    <a href="object.md#0x2_object_save_object">object::save_object</a>(c);
 }
 </code></pre>
 

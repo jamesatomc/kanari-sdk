@@ -168,6 +168,17 @@ async fn rpc_call_response(
     serde_json::from_slice(&body).invariant("rpc json body")
 }
 
+async fn raw_rpc_request(app: Router, body: impl Into<Body>) -> Response {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/rpc")
+        .header("content-type", "application/json")
+        .body(body.into())
+        .invariant("build raw rpc request");
+
+    app.oneshot(request).await.invariant("raw rpc response")
+}
+
 #[tokio::test]
 async fn rpc_runtime_backed_endpoints_smoke() {
     let guard = test_guard().await;
@@ -319,6 +330,68 @@ async fn rpc_runtime_backed_endpoints_smoke() {
             .iter()
             .all(|object| object["version"].as_u64().is_some())
     );
+    drop(guard);
+}
+
+#[tokio::test]
+async fn rpc_adversarial_inputs_are_rejected_without_server_error() {
+    let guard = test_guard().await;
+    let app = build_test_router();
+
+    let malformed = raw_rpc_request(
+        app.clone(),
+        Body::from(r#"{"jsonrpc":"2.0","method":"kanari_getStats","params":"#),
+    )
+    .await;
+    assert!(
+        malformed.status().is_client_error(),
+        "malformed JSON should be rejected before handler, got {}",
+        malformed.status()
+    );
+
+    let unknown = rpc_call_response(
+        app.clone(),
+        "kanari_debugUnlockEverything",
+        serde_json::json!({ "admin": true }),
+        9_001,
+    )
+    .await;
+    assert_eq!(unknown["error"]["code"], -32601);
+    assert!(unknown["result"].is_null());
+
+    let invalid_params = rpc_call_response(
+        app.clone(),
+        methods::GET_OBJECT,
+        serde_json::json!({ "object_id": ["not", "a", "string"] }),
+        9_002,
+    )
+    .await;
+    assert_eq!(invalid_params["error"]["code"], -32602);
+    assert!(invalid_params["result"].is_null());
+
+    let oversized_params = rpc_call_response(
+        app.clone(),
+        methods::GET_STATS,
+        serde_json::json!({ "blob": "x".repeat(1024 * 1024) }),
+        9_003,
+    )
+    .await;
+    assert!(
+        oversized_params["error"].is_null() || oversized_params["error"]["code"].is_i64(),
+        "oversized but valid JSON must not panic or produce malformed response: {oversized_params}"
+    );
+
+    let get_on_rpc = Request::builder()
+        .method(Method::GET)
+        .uri("/rpc")
+        .body(Body::empty())
+        .invariant("build GET /rpc request");
+    let get_response: Response = app.oneshot(get_on_rpc).await.invariant("GET /rpc response");
+    assert!(
+        get_response.status().is_client_error(),
+        "GET /rpc should not be accepted as JSON-RPC POST"
+    );
+
     drop(guard);
 }
 

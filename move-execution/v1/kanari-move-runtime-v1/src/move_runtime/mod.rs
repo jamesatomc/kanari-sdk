@@ -520,7 +520,7 @@ impl MoveRuntime {
         move_cs: move_core_types::effects::ChangeSet,
     ) -> Result<()> {
         let store = self.state.store();
-        let _transaction_guard = store.transaction_guard();
+        let transaction_guard = store.transaction_guard();
         let mut updates = Vec::<(Vec<u8>, Vec<u8>)>::new();
         let mut deletes = Vec::<Vec<u8>>::new();
         let mut module_index = store
@@ -596,6 +596,7 @@ impl MoveRuntime {
         for module_id in published_module_deletes {
             modules.remove(&module_id);
         }
+        drop(transaction_guard);
         Ok(())
     }
 
@@ -684,16 +685,16 @@ impl MoveRuntime {
         module_bytes: Vec<u8>,
         sender: AccountAddress,
         gas_info: Option<(u64, u64)>,
-        _timestamp: Option<u64>,
-        _tx_hash: Option<Vec<u8>>,
+        timestamp: Option<u64>,
+        tx_hash: Option<Vec<u8>>,
         persist_runtime_state: bool,
     ) -> Result<ChangeSet> {
         self.publish_module_with_intent_and_persistence(
             module_bytes,
             sender,
             gas_info,
-            _timestamp,
-            _tx_hash,
+            timestamp,
+            tx_hash,
             persist_runtime_state,
             ModulePublishIntent::Publish,
         )
@@ -704,12 +705,15 @@ impl MoveRuntime {
         module_bytes: Vec<u8>,
         sender: AccountAddress,
         gas_info: Option<(u64, u64)>,
-        _timestamp: Option<u64>,
-        _tx_hash: Option<Vec<u8>>,
+        timestamp: Option<u64>,
+        tx_hash: Option<Vec<u8>>,
         persist_runtime_state: bool,
         intent: ModulePublishIntent,
     ) -> Result<ChangeSet> {
-        let _publish_guard = self
+        // The caller provides these context fields for API compatibility. The
+        // bytecode publish path has no TxContext and must not fabricate them.
+        let _ = (timestamp, tx_hash);
+        let publish_guard = self
             .module_publish_lock
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -746,15 +750,7 @@ impl MoveRuntime {
                 module_size: module_bytes.len(),
             };
             let (written, deleted) = self.calculate_storage_impact(&move_changeset, &cs, None)?;
-            self.apply_gas_info(
-                &mut cs,
-                Some(sender),
-                gas_limit,
-                gas_price,
-                gas_op,
-                written,
-                deleted,
-            )?;
+            self.apply_gas_info(&mut cs, gas_limit, gas_price, gas_op, written, deleted)?;
         }
         cs.set_gas_used(cs.gas_used.max(vm_gas_used));
 
@@ -763,6 +759,7 @@ impl MoveRuntime {
             self.reload_vm_cache()?;
         }
 
+        drop(publish_guard);
         Ok(cs)
     }
 
@@ -771,16 +768,16 @@ impl MoveRuntime {
         modules: Vec<(String, Vec<u8>)>,
         sender: AccountAddress,
         gas_info: Option<(u64, u64)>,
-        _timestamp: Option<u64>,
-        _tx_hash: Option<Vec<u8>>,
+        timestamp: Option<u64>,
+        tx_hash: Option<Vec<u8>>,
         persist_runtime_state: bool,
     ) -> Result<ChangeSet> {
         self.publish_package_with_intent_and_persistence(
             modules,
             sender,
             gas_info,
-            _timestamp,
-            _tx_hash,
+            timestamp,
+            tx_hash,
             persist_runtime_state,
             ModulePublishIntent::Publish,
         )
@@ -811,12 +808,14 @@ impl MoveRuntime {
         modules: Vec<(String, Vec<u8>)>,
         sender: AccountAddress,
         gas_info: Option<(u64, u64)>,
-        _timestamp: Option<u64>,
-        _tx_hash: Option<Vec<u8>>,
+        timestamp: Option<u64>,
+        tx_hash: Option<Vec<u8>>,
         persist_runtime_state: bool,
         intent: ModulePublishIntent,
     ) -> Result<ChangeSet> {
-        let _publish_guard = self
+        // Package publishing shares the same context rule as single modules.
+        let _ = (timestamp, tx_hash);
+        let publish_guard = self
             .module_publish_lock
             .lock()
             .unwrap_or_else(|p| p.into_inner());
@@ -869,15 +868,7 @@ impl MoveRuntime {
                 module_size: total_module_size,
             };
             let (written, deleted) = self.calculate_storage_impact(&move_changeset, &cs, None)?;
-            self.apply_gas_info(
-                &mut cs,
-                Some(sender),
-                gas_limit,
-                gas_price,
-                gas_op,
-                written,
-                deleted,
-            )?;
+            self.apply_gas_info(&mut cs, gas_limit, gas_price, gas_op, written, deleted)?;
         }
         cs.set_gas_used(cs.gas_used.max(vm_gas_used));
 
@@ -886,6 +877,7 @@ impl MoveRuntime {
             self.reload_vm_cache()?;
         }
 
+        drop(publish_guard);
         Ok(cs)
     }
 
@@ -1699,7 +1691,7 @@ impl MoveRuntime {
                     )
                 };
 
-                let (res, _new_storage) = session.finish();
+                let (res, _) = session.finish();
                 let (move_changeset, events) = res.require("exec error")?;
 
                 for (addr, account_changes) in move_changeset.accounts() {
@@ -1715,7 +1707,7 @@ impl MoveRuntime {
 
                 let mut processed_ids = std::collections::HashSet::new();
 
-                for (idx, data, _layout) in return_values.mutable_reference_outputs {
+                for (idx, data, _) in return_values.mutable_reference_outputs {
                     if let Some((_, id, owner, owner_kind, type_name, version)) =
                         loaded_mutable_objects
                             .iter()
@@ -1827,9 +1819,7 @@ impl MoveRuntime {
                         &cs,
                         state_overlay.as_ref(),
                     )?;
-                    self.apply_gas_info(
-                        &mut cs, sender, gas_limit, gas_price, gas_op, written, deleted,
-                    )?;
+                    self.apply_gas_info(&mut cs, gas_limit, gas_price, gas_op, written, deleted)?;
                 }
                 cs.set_gas_used(cs.gas_used.max(vm_gas_used));
 
@@ -1855,7 +1845,6 @@ impl MoveRuntime {
                     let penalty_complexity = 5;
                     let _ = self.apply_gas_info(
                         &mut cs,
-                        sender,
                         gas_limit,
                         gas_price,
                         GasOperation::ExecuteFunction {
@@ -2012,8 +2001,8 @@ impl MoveRuntime {
         );
 
         // Finish the session without persisting any writes.
-        let (res, _new_storage) = session.finish();
-        let (_move_changeset, _events) = res.require("Session error")?;
+        let (res, _) = session.finish();
+        let (_, _) = res.require("Session error")?;
 
         match execution_result {
             Ok(return_values) => {
@@ -2021,7 +2010,7 @@ impl MoveRuntime {
                 let results: Vec<serde_json::Value> = return_values
                     .return_values
                     .into_iter()
-                    .map(|(bytes, _layout)| Self::bytes_to_json_fast(&bytes))
+                    .map(|(bytes, _)| Self::bytes_to_json_fast(&bytes))
                     .collect();
 
                 if results.len() == 1 {

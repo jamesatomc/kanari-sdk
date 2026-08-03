@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use kanari_core::{read_json_file, write_json_pretty_atomically};
-use libp2p::{Multiaddr, PeerId};
+use libp2p_core::{Multiaddr, PeerId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;

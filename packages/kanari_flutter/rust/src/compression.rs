@@ -53,19 +53,5 @@ pub fn decompress_data(data: &[u8]) -> Result<Vec<u8>, io::Error> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_compression_roundtrip() {
-        let original = b"This is some test data that should compress well due to repetition. \
-                         This is some test data that should compress well due to repetition.";
-
-        let compressed = compress_data(original).unwrap();
-        let decompressed = decompress_data(&compressed).unwrap();
-
-        assert_eq!(decompressed, original);
-        // Verify compression actually reduces size
-        assert!(compressed.len() < original.len());
-    }
-}
+#[path = "../tests/unit/compression_test.rs"]
+mod tests;

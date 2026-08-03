@@ -5,10 +5,17 @@ use ed25519_dalek::{
     Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey, Verifier,
     VerifyingKey as Ed25519VerifyingKey,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use zeroize::Zeroize;
 
 use crate::{SignatureError, signatures::ED25519_PUBLIC_KEY_LEN};
+
+thread_local! {
+    static ED25519_VERIFYING_KEY_CACHE: RefCell<HashMap<String, Ed25519VerifyingKey>> =
+        RefCell::new(HashMap::new());
+}
 
 /// Verify a signature using Ed25519
 ///
@@ -50,7 +57,22 @@ pub fn verify_signature_ed25519(
     sig_array.zeroize();
 
     // Normalize and decode public key
-    let raw_key = crate::keys::extract_raw_key(address_hex);
+    let raw_key = crate::keys::extract_raw_key(address_hex).to_string();
+    let verifying_key = ed25519_verifying_key_from_cache(&raw_key)?;
+
+    match verifying_key.verify(message, &signature) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+fn ed25519_verifying_key_from_cache(raw_key: &str) -> Result<Ed25519VerifyingKey, SignatureError> {
+    if let Some(key) =
+        ED25519_VERIFYING_KEY_CACHE.with(|cache| cache.borrow().get(raw_key).copied())
+    {
+        return Ok(key);
+    }
+
     let decoded_hex = hex::decode(raw_key)
         .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
@@ -65,10 +87,13 @@ pub fn verify_signature_ed25519(
     let verifying_key = Ed25519VerifyingKey::from_bytes(&key_array)
         .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
-    match verifying_key.verify(message, &signature) {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
-    }
+    ED25519_VERIFYING_KEY_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(raw_key.to_string(), verifying_key);
+    });
+
+    Ok(verifying_key)
 }
 
 /// Sign a message using Ed25519 private key

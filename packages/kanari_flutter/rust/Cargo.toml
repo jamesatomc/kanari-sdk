@@ -12,7 +12,7 @@ repository.workspace = true
 description.workspace = true
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 bip39.workspace = true
@@ -27,10 +27,8 @@ zstd.workspace = true
 hmac.workspace = true
 
 # Post-Quantum Cryptography (PQC) - NIST Standards
-pqcrypto-dilithium = { workspace = true, optional = true } # Post-quantum signatures
-# pqcrypto-kyber = { workspace = true, optional = true }       # Post-quantum key encapsulation
-pqcrypto-sphincsplus = { workspace = true, optional = true } # Hash-based signatures (ultra-secure)
-pqcrypto-traits = { workspace = true, optional = true }      # Common traits for PQC
+ml-dsa = { workspace = true, optional = true } # Pure Rust FIPS 204 ML-DSA provider
+slh-dsa = { workspace = true, optional = true } # Pure Rust FIPS 205 SLH-DSA provider
 
 # Make blake3 optional and enabled via the blake3 feature
 blake3 = { workspace = true, optional = true }
@@ -39,7 +37,6 @@ blake3 = { workspace = true, optional = true }
 bip32.workspace = true
 
 rand.workspace = true
-rand_core.workspace = true
 hex.workspace = true
 serde_json = { workspace = true, default-features = true }
 lazy_static.workspace = true
@@ -72,11 +69,7 @@ tempfile = { workspace = true }
 [features]
 # keep blake3 optional in Cargo.toml but enable it in the crate default features
 default = ["blake3", "pqc"]
-# Enable optional PQC crates when `pqc` feature is activated
-pqc = [
-	# "pqcrypto-kyber",
-	"pqcrypto-traits",
-	"pqcrypto-dilithium",
-	"pqcrypto-sphincsplus",
-]
+# Enable maintained PQC providers when `pqc` feature is activated
+pqc = ["ml-dsa"]
+experimental-slh-dsa = ["slh-dsa"]
 hybrid = ["pqc"] # Hybrid classical + PQC schemes

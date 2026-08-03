@@ -15,7 +15,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct KanariMoveResolver {
     pub(crate) state: MoveVMState,
-    pub(crate) _object_storage: Arc<dyn ObjectStore>,
+    /// Keeps the backing object store alive for the lifetime of this resolver.
+    pub(crate) object_storage: Arc<dyn ObjectStore>,
     read_trace: Option<Arc<Mutex<BTreeSet<Vec<u8>>>>>,
 }
 
@@ -23,7 +24,7 @@ impl KanariMoveResolver {
     pub(crate) fn without_trace(state: MoveVMState, object_storage: Arc<dyn ObjectStore>) -> Self {
         Self {
             state,
-            _object_storage: object_storage,
+            object_storage,
             read_trace: None,
         }
     }
@@ -36,7 +37,7 @@ impl KanariMoveResolver {
         (
             Self {
                 state: self.state.with_overlay(overlay),
-                _object_storage: self._object_storage.clone(),
+                object_storage: self.object_storage.clone(),
                 read_trace: Some(trace.clone()),
             },
             trace,

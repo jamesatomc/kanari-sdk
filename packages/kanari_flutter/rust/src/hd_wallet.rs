@@ -94,32 +94,6 @@ pub fn derive_keypair_from_path(
 }
 
 #[allow(clippy::items_after_test_module)]
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_derive_rejects_post_quantum_curve() {
-        // Known BIP-39 test mnemonic (do not use in production)
-        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let password = "";
-        let path = "m/44'/60'/0'/0/0";
-
-        let res = derive_keypair_from_path(mnemonic, password, path, CurveType::Dilithium3);
-
-        match res {
-            Err(HdError::DerivationFailed(msg)) => {
-                assert!(
-                    msg.contains("Post-quantum"),
-                    "unexpected error message: {}",
-                    msg
-                );
-            }
-            other => panic!("expected DerivationFailed for PQC curve, got: {:?}", other),
-        }
-    }
-}
-
 /// Derive multiple addresses using a path template that contains `{index}`.
 /// Includes rate limiting to prevent DoS attacks via repeated calls.
 pub fn derive_multiple_addresses(
@@ -222,3 +196,7 @@ pub fn derive_multiple_addresses(
 
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/hd_wallet_test.rs"]
+mod tests;

@@ -1,7 +1,8 @@
 use std::{io::Write, time::Duration};
 
 use flate2::{Compression, write::GzEncoder};
-use libp2p::{PeerId, identity::Keypair};
+use libp2p_core::PeerId;
+use libp2p_identity::Keypair;
 use proptest::prelude::*;
 use tokio::sync::mpsc;
 

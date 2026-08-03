@@ -1,72 +1,70 @@
-use pqcrypto_sphincsplus::sphincssha2256fsimple;
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
 
-use pqcrypto_traits::sign::SecretKey as PqcSecretKeyTrait;
-use pqcrypto_traits::sign::{
-    DetachedSignature as PqcDetachedTrait, PublicKey as PqcPublicKeyTrait,
-};
+#[cfg(feature = "experimental-slh-dsa")]
 use zeroize::Zeroizing;
 
 use crate::SignatureError;
 
-/// Verify a signature using SPHINCS+ (PQC)
-///
-/// **✅ NIST STANDARD COMPLIANT - Direct Signing (NO Pre-Hashing)**
-///
-/// This function strictly adheres to SPHINCS+ standard:
-/// - Signatures are verified DIRECTLY against the original message (no pre-hashing)
-/// - Compatible with SPHINCS+ signatures from NIST-standard implementations
-/// - Uses constant-time verification where possible
-///
-/// **⚠️ CRITICAL DIFFERENCE FROM K256/P256:**
-/// - K256: Message → SHA3-256 hash → Sign hash ← Kanari-specific
-/// - P256: Message → SHA3-256 hash → Sign hash ← Kanari-specific  
-/// - SPHINCS+: Message → Sign directly ← NIST standard
-///
-/// **Public Key Format:**
-/// - Expected: 64-byte public key in hex format
-/// - Address derivation: SHA3-256 of public key bytes
+#[cfg(feature = "experimental-slh-dsa")]
+use crate::signatures::slh_dsa_provider::{
+    self, SLH_DSA_SHA2_256F_PUBLIC_KEY_BYTES, SLH_DSA_SHA2_256F_SIGNATURE_BYTES,
+};
+
+/// Verify a signature using SLH-DSA-SHA2-256f (FIPS 205; formerly SPHINCS+).
 pub fn verify_signature_sphincs(
     address_hex: &str,
     message: &[u8],
     signature: &[u8],
 ) -> Result<bool, SignatureError> {
-    // Strip known prefixes (e.g., "kanapqc") then decode
-    let pqc_pub_raw = crate::keys::extract_raw_key(address_hex);
-    let pub_bytes = hex::decode(pqc_pub_raw)
-        .map_err(|_| SignatureError::InvalidPublicKey("Invalid public key hex".to_string()))?;
-    // Validate key length (SPHINCS+ public key is 64 bytes)
-    if pub_bytes.len() != 64 {
-        return Err(SignatureError::InvalidPublicKey(
-            "Invalid SPHINCS+ public key".to_string(),
-        ));
+    #[cfg(feature = "experimental-slh-dsa")]
+    {
+        let pqc_pub_raw = crate::keys::extract_raw_key(address_hex);
+        let pub_bytes = hex::decode(pqc_pub_raw)
+            .map_err(|_| SignatureError::InvalidPublicKey("Invalid public key hex".to_string()))?;
+        if pub_bytes.len() != SLH_DSA_SHA2_256F_PUBLIC_KEY_BYTES {
+            return Err(SignatureError::InvalidPublicKey(
+                "Invalid SLH-DSA-SHA2-256f public key".to_string(),
+            ));
+        }
+        if signature.len() != SLH_DSA_SHA2_256F_SIGNATURE_BYTES {
+            return Err(SignatureError::InvalidFormat(
+                "Invalid SLH-DSA-SHA2-256f signature length".to_string(),
+            ));
+        }
+        slh_dsa_provider::verify_slh_dsa_sha2_256f(&pub_bytes, message, signature)
     }
-    let pk = sphincssha2256fsimple::PublicKey::from_bytes(&pub_bytes)
-        .map_err(|_| SignatureError::InvalidPublicKey("Invalid SPHINCS+ public key".to_string()))?;
-    let sig_obj =
-        sphincssha2256fsimple::DetachedSignature::from_bytes(signature).map_err(|_| {
-            SignatureError::InvalidFormat("Invalid signature bytes for SPHINCS+".to_string())
-        })?;
-    match sphincssha2256fsimple::verify_detached_signature(&sig_obj, message, &pk) {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
+
+    #[cfg(not(feature = "experimental-slh-dsa"))]
+    {
+        let _ = (address_hex, message, signature);
+        Err(SignatureError::InvalidFormat(
+            "SphincsPlusSha256Robust requires experimental-slh-dsa feature".to_string(),
+        ))
     }
 }
 
-/// Sign a message using SPHINCS+ private key (PQC)
+/// Sign a message using an SLH-DSA-SHA2-256f private key.
 pub fn sign_message_sphincs(
     private_key_hex: &str,
     message: &[u8],
 ) -> Result<Vec<u8>, SignatureError> {
-    let raw = crate::keys::extract_raw_key(private_key_hex);
-    // Accept formats: "<secret_hex>" or "<secret_hex>:<public_hex>"
-    let secret_hex = raw.split_once(':').map(|(s, _)| s).unwrap_or(raw);
-    let sk_bytes: Zeroizing<Vec<u8>> =
-        Zeroizing::new(hex::decode(secret_hex).map_err(|_| {
-            SignatureError::InvalidPrivateKey("Invalid private key hex".to_string())
-        })?);
-    let sk = sphincssha2256fsimple::SecretKey::from_bytes(&sk_bytes).map_err(|_| {
-        SignatureError::InvalidPrivateKey("Invalid SPHINCS+ private key".to_string())
-    })?;
-    let sig = sphincssha2256fsimple::detached_sign(message, &sk);
-    Ok(sig.as_bytes().to_vec())
+    #[cfg(feature = "experimental-slh-dsa")]
+    {
+        let raw = crate::keys::extract_raw_key(private_key_hex);
+        let secret_hex = raw.split_once(':').map(|(secret, _)| secret).unwrap_or(raw);
+        let sk_bytes: Zeroizing<Vec<u8>> =
+            Zeroizing::new(hex::decode(secret_hex).map_err(|_| {
+                SignatureError::InvalidPrivateKey("Invalid private key hex".to_string())
+            })?);
+        slh_dsa_provider::sign_slh_dsa_sha2_256f(&sk_bytes, message)
+    }
+
+    #[cfg(not(feature = "experimental-slh-dsa"))]
+    {
+        let _ = (private_key_hex, message);
+        Err(SignatureError::InvalidPrivateKey(
+            "SphincsPlusSha256Robust requires experimental-slh-dsa feature".to_string(),
+        ))
+    }
 }

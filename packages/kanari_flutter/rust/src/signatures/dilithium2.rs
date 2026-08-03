@@ -1,70 +1,42 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// PQC crates
-use pqcrypto_dilithium::dilithium2;
-
-use pqcrypto_traits::sign::SecretKey as PqcSecretKeyTrait;
-use pqcrypto_traits::sign::{
-    DetachedSignature as PqcDetachedTrait, PublicKey as PqcPublicKeyTrait,
-};
 use zeroize::Zeroizing;
 
-use crate::SignatureError;
+use crate::{SignatureError, signatures::ml_dsa_provider};
 
-/// Verify a signature using Dilithium2 (PQC)
-///
-/// **✅ NIST STANDARD COMPLIANT - Direct Signing (NO Pre-Hashing)**
-///
-/// This function strictly adheres to Dilithium2 standard:
-/// - Signatures are verified DIRECTLY against the original message (no pre-hashing)
-/// - Compatible with Dilithium2 signatures from NIST-standard implementations
-/// - Uses constant-time verification where possible
-///
-/// **Public Key Format:**
-/// - Expected: 1312-byte public key in hex format
-/// - Address derivation: SHA3-256 of public key bytes
+/// Verify a signature using Dilithium2-compatible ML-DSA-44 (FIPS 204).
 pub fn verify_signature_dilithium2(
     address_hex: &str,
     message: &[u8],
     signature: &[u8],
 ) -> Result<bool, SignatureError> {
-    // Strip known prefixes (e.g., "kanapqc") then decode
     let pqc_pub_raw = crate::keys::extract_raw_key(address_hex);
     let pub_bytes = hex::decode(pqc_pub_raw)
         .map_err(|_| SignatureError::InvalidPublicKey("Invalid public key hex".to_string()))?;
-    // Validate key length (Dilithium2 public key is 1312 bytes)
-    if pub_bytes.len() != 1312 {
+    if pub_bytes.len() != ml_dsa_provider::ML_DSA_44_PUBLIC_KEY_BYTES {
         return Err(SignatureError::InvalidPublicKey(
-            "Invalid Dilithium2 public key".to_string(),
+            "Invalid ML-DSA-44 public key".to_string(),
         ));
     }
-    let pk = dilithium2::PublicKey::from_bytes(&pub_bytes).map_err(|_| {
-        SignatureError::InvalidPublicKey("Invalid Dilithium2 public key".to_string())
-    })?;
-    let sig_obj = dilithium2::DetachedSignature::from_bytes(signature).map_err(|_| {
-        SignatureError::InvalidFormat("Invalid signature bytes for Dilithium2".to_string())
-    })?;
-    match dilithium2::verify_detached_signature(&sig_obj, message, &pk) {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
+    if signature.len() != ml_dsa_provider::ML_DSA_44_SIGNATURE_BYTES {
+        return Err(SignatureError::InvalidFormat(
+            "Invalid ML-DSA-44 signature length".to_string(),
+        ));
     }
+    ml_dsa_provider::verify_mldsa44(&pub_bytes, message, signature)
 }
 
-/// Sign a message using Dilithium2 private key (PQC)
+/// Sign a message using an ML-DSA-44 seed private key.
 pub fn sign_message_dilithium2(
     private_key_hex: &str,
     message: &[u8],
 ) -> Result<Vec<u8>, SignatureError> {
     let raw = crate::keys::extract_raw_key(private_key_hex);
-    // Accept formats: "<secret_hex>" or "<secret_hex>:<public_hex>"
-    let secret_hex = raw.split_once(':').map(|(s, _)| s).unwrap_or(raw);
-    let sk_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(hex::decode(secret_hex).map_err(|_| {
-        SignatureError::InvalidPrivateKey("Invalid Dilithium2 private key".to_string())
-    })?);
-    let sk = dilithium2::SecretKey::from_bytes(&sk_bytes).map_err(|_| {
-        SignatureError::InvalidPrivateKey("Invalid Dilithium2 private key".to_string())
-    })?;
-    let sig = dilithium2::detached_sign(message, &sk);
-    Ok(sig.as_bytes().to_vec())
+    let secret_hex = raw.split_once(':').map(|(secret, _)| secret).unwrap_or(raw);
+    let sk_bytes: Zeroizing<Vec<u8>> =
+        Zeroizing::new(hex::decode(secret_hex).map_err(|_| {
+            SignatureError::InvalidPrivateKey("Invalid private key hex".to_string())
+        })?);
+    ml_dsa_provider::sign_mldsa44(&sk_bytes, message)
 }

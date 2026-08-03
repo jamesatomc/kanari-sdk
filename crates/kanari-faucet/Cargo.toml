@@ -12,8 +12,6 @@ repository.workspace = true
 description.workspace = true
 
 [dependencies]
-move-core-types = { workspace = true }
-bcs = { workspace = true }
 anyhow = { workspace = true }
 kanari-rpc-client = { workspace = true }
 kanari-rpc-api = { workspace = true }
