@@ -31,6 +31,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "hybrid_signature_verify"
+path = "fuzz_targets/hybrid_signature_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "encryption_roundtrip"
 path = "fuzz_targets/encryption_roundtrip.rs"
 test = false

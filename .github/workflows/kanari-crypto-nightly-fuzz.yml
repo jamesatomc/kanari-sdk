@@ -1,0 +1,79 @@
+name: Kanari Crypto Nightly Fuzz
+
+on:
+  schedule:
+    # Run during low-traffic UTC hours. This is intentionally separate from
+    # normal PR checks because fuzzing is heavier and probabilistic.
+    - cron: "17 20 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds per fuzz target"
+        required: false
+        default: "900"
+
+permissions:
+  contents: read
+
+jobs:
+  crypto-fuzz:
+    name: kanari-crypto fuzz targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      RUST_BACKTRACE: "1"
+      FUZZ_SECONDS: ${{ github.event.inputs.fuzz_seconds || '900' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            crates/kanari-crypto/fuzz/target
+          key: kanari-crypto-fuzz-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'crates/kanari-crypto/fuzz/Cargo.toml') }}
+          restore-keys: |
+            kanari-crypto-fuzz-${{ runner.os }}-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run deterministic crypto regression suite first
+        run: cargo test -p kanari-crypto
+
+      - name: Fuzz signature verification
+        working-directory: crates/kanari-crypto
+        run: cargo fuzz run signature_verify -- -max_total_time=${FUZZ_SECONDS}
+
+      - name: Fuzz hybrid K256/Ed25519 + Dilithium3 verification
+        working-directory: crates/kanari-crypto
+        run: cargo fuzz run hybrid_signature_verify -- -max_total_time=${FUZZ_SECONDS}
+
+      - name: Fuzz encryption roundtrip
+        working-directory: crates/kanari-crypto
+        run: cargo fuzz run encryption_roundtrip -- -max_total_time=${FUZZ_SECONDS}
+
+      - name: Fuzz key generation
+        working-directory: crates/kanari-crypto
+        run: cargo fuzz run key_generation -- -max_total_time=${FUZZ_SECONDS}
+
+      - name: Fuzz password hashing
+        working-directory: crates/kanari-crypto
+        run: cargo fuzz run password_hash -- -max_total_time=${FUZZ_SECONDS}
+
+      - name: Upload fuzz artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kanari-crypto-fuzz-artifacts
+          path: |
+            crates/kanari-crypto/fuzz/artifacts
+            crates/kanari-crypto/fuzz/corpus

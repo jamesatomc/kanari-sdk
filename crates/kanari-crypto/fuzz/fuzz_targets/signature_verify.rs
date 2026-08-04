@@ -2,11 +2,11 @@
 // Disabled: Windows MSVC requires LLVM/ASAN which is not available
 // Use `cargo test --test fuzz_*` instead for property-based testing
 
-use libfuzzer_sys::fuzz_target;
 use kanari_crypto::{
-    sign_message, verify_signature, verify_signature_with_curve,
-    generate_keypair, CurveType,
+    CurveType, generate_keypair,
+    signatures::{sign_message, verify_signature},
 };
+use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // Split input into message and curve type indicator
@@ -48,7 +48,7 @@ fuzz_target!(|data: &[u8]| {
     if !signature.is_empty() {
         let mut corrupted_sig = signature.clone();
         corrupted_sig[0] = corrupted_sig[0].wrapping_add(1);
-        
+
         if let Ok(result) = verify_signature(&tagged_addr, message, &corrupted_sig) {
             // Corrupted signature should NOT verify successfully
             assert!(!result, "Corrupted signature should fail verification");
@@ -59,7 +59,7 @@ fuzz_target!(|data: &[u8]| {
     if !message.is_empty() {
         let mut wrong_message = message.to_vec();
         wrong_message[0] = wrong_message[0].wrapping_add(1);
-        
+
         if let Ok(result) = verify_signature(&tagged_addr, &wrong_message, &signature) {
             // Wrong message should NOT verify successfully
             assert!(!result, "Signature should not verify for different message");

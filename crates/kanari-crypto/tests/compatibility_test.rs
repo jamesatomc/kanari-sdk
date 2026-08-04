@@ -5,6 +5,7 @@ use kanari_crypto::{
 };
 use move_core_types::account_address::AccountAddress;
 use serde_json::{Value, json};
+use std::path::Path;
 use std::str::FromStr;
 
 const PASSWORD: &str = "StrongPassw0rd!";
@@ -131,4 +132,67 @@ fn current_wallet_toml_without_derivation_path_stays_compatible() {
     assert_eq!(parsed.address, wallet.address);
     assert_eq!(parsed.curve_type, wallet.curve_type);
     assert!(parsed.derivation_path.is_none());
+}
+
+fn load_keystore_fixture_into_temp(fixture: &str) -> Keystore {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().join("kanari.keystore");
+    std::fs::write(&path, fixture).unwrap();
+    let loaded = Keystore::load_from_path(&path).unwrap();
+    loaded.validate().unwrap();
+    loaded
+}
+
+#[test]
+fn corpus_legacy_keystore_fixtures_load_validate_and_upgrade() {
+    let fixtures = [
+        include_str!("fixtures/legacy_keystore_v0_2_3_minimal.json"),
+        include_str!("fixtures/legacy_keystore_v0_2_4_metadata.json"),
+    ];
+
+    for fixture in fixtures {
+        let loaded = load_keystore_fixture_into_temp(fixture);
+        assert!(
+            !loaded.version.is_empty(),
+            "legacy keystore corpus must be upgraded with a version"
+        );
+        assert!(loaded.keys.is_empty());
+    }
+}
+
+#[test]
+fn corpus_legacy_wallet_fixtures_parse_with_safe_defaults() {
+    let fixtures = [
+        include_str!("fixtures/legacy_wallet_v0_2_3_minimal.toml"),
+        include_str!("fixtures/legacy_wallet_v0_2_4_with_empty_secrets.toml"),
+    ];
+
+    for fixture in fixtures {
+        let wallet: Wallet = toml::from_str(fixture).unwrap();
+        assert_ne!(wallet.address, AccountAddress::ZERO);
+        assert!(
+            wallet.private_key.is_empty(),
+            "legacy corpus must not inject unexpected private key material"
+        );
+        assert!(
+            wallet.seed_phrase.is_empty(),
+            "legacy corpus must not inject unexpected mnemonic material"
+        );
+        assert!(wallet.derivation_path.is_none());
+    }
+}
+
+#[test]
+fn compatibility_fixture_paths_are_kept_in_repo() {
+    for path in [
+        "tests/fixtures/legacy_keystore_v0_2_3_minimal.json",
+        "tests/fixtures/legacy_keystore_v0_2_4_metadata.json",
+        "tests/fixtures/legacy_wallet_v0_2_3_minimal.toml",
+        "tests/fixtures/legacy_wallet_v0_2_4_with_empty_secrets.toml",
+    ] {
+        assert!(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(path).exists(),
+            "missing compatibility corpus fixture: {path}"
+        );
+    }
 }
