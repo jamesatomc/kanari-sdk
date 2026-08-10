@@ -49,6 +49,9 @@ pub struct GasParameters {
     pub dilithium2_verify: InternalGas,
     pub dilithium3_verify: InternalGas,
     pub dilithium5_verify: InternalGas,
+    pub sphincs_plus_sha256_robust_verify: InternalGas,
+    pub falcon512_verify: InternalGas,
+    pub falcon1024_verify: InternalGas,
     pub ed25519_dilithium3_verify: InternalGas,
     pub k256_dilithium3_verify: InternalGas,
     pub rs256_verify: InternalGas,
@@ -65,6 +68,9 @@ impl GasParameters {
             dilithium2_verify: 0.into(),
             dilithium3_verify: 0.into(),
             dilithium5_verify: 0.into(),
+            sphincs_plus_sha256_robust_verify: 0.into(),
+            falcon512_verify: 0.into(),
+            falcon1024_verify: 0.into(),
             ed25519_dilithium3_verify: 0.into(),
             k256_dilithium3_verify: 0.into(),
             rs256_verify: 0.into(),
@@ -121,6 +127,22 @@ pub fn make_dilithium5(
     gas_params: GasParameters,
 ) -> impl Iterator<Item = (String, NativeFunction)> {
     pqc::make_dilithium5(gas_params.dilithium5_verify)
+}
+
+pub fn make_sphincs_plus_sha256_robust(
+    gas_params: GasParameters,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_sphincs_plus_sha256_robust(gas_params.sphincs_plus_sha256_robust_verify)
+}
+
+pub fn make_falcon512(gas_params: GasParameters) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_falcon512(gas_params.falcon512_verify)
+}
+
+pub fn make_falcon1024(
+    gas_params: GasParameters,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    pqc::make_falcon1024(gas_params.falcon1024_verify)
 }
 
 pub fn make_ed25519_dilithium3(

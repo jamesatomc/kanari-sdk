@@ -9,7 +9,9 @@ use kanari_crypto::signatures::{
     dilithium2::verify_signature_dilithium2,
     dilithium3::verify_signature_dilithium3,
     dilithium5::verify_signature_dilithium5,
+    falcon::{verify_signature_falcon512, verify_signature_falcon1024},
     hybrid::{verify_ed25519dilithium3, verify_k256dilithium3},
+    sphincs::verify_signature_sphincs,
 };
 use move_core_types::gas_algebra::InternalGas;
 use move_vm_runtime::{native_charge_gas_early_exit, native_functions::NativeFunction};
@@ -24,7 +26,7 @@ use smallvec::smallvec;
 use crate::{crypto::make_native, helpers::expect_native_signature};
 
 const MAX_MESSAGE_BYTES: usize = 1_000_000;
-const MAX_SIGNATURE_BYTES: usize = 16_384;
+const MAX_SIGNATURE_BYTES: usize = 64 * 1024;
 const MAX_PUBLIC_KEY_BYTES: usize = 4_096;
 
 type Verifier = fn(&str, &[u8], &[u8]) -> Result<bool, kanari_crypto::signatures::SignatureError>;
@@ -100,6 +102,29 @@ pub fn make_dilithium5(gas_cost: InternalGas) -> impl Iterator<Item = (String, N
     crate::helpers::make_module_natives(vec![(
         "verify".to_string(),
         make_pqc_verify(gas_cost, verify_signature_dilithium5),
+    )])
+}
+
+pub fn make_sphincs_plus_sha256_robust(
+    gas_cost: InternalGas,
+) -> impl Iterator<Item = (String, NativeFunction)> {
+    crate::helpers::make_module_natives(vec![(
+        "verify".to_string(),
+        make_pqc_verify(gas_cost, verify_signature_sphincs),
+    )])
+}
+
+pub fn make_falcon512(gas_cost: InternalGas) -> impl Iterator<Item = (String, NativeFunction)> {
+    crate::helpers::make_module_natives(vec![(
+        "verify".to_string(),
+        make_pqc_verify(gas_cost, verify_signature_falcon512),
+    )])
+}
+
+pub fn make_falcon1024(gas_cost: InternalGas) -> impl Iterator<Item = (String, NativeFunction)> {
+    crate::helpers::make_module_natives(vec![(
+        "verify".to_string(),
+        make_pqc_verify(gas_cost, verify_signature_falcon1024),
     )])
 }
 

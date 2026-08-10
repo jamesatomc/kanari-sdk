@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use ml_dsa::{
     EncodedVerifyingKey, Generate, Keypair as _, MlDsa44, MlDsa65, MlDsa87, Signature, Signer,
     SigningKey, Verifier, VerifyingKey,
@@ -9,6 +12,7 @@ use crate::SignatureError;
 pub const ML_DSA_44_PUBLIC_KEY_BYTES: usize = 1_312;
 pub const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
 pub const ML_DSA_87_PUBLIC_KEY_BYTES: usize = 2_592;
+pub const ML_DSA_SEED_BYTES: usize = 32;
 pub const ML_DSA_44_SIGNATURE_BYTES: usize = 2_420;
 pub const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
 pub const ML_DSA_87_SIGNATURE_BYTES: usize = 4_627;
@@ -70,16 +74,51 @@ pub fn verify_mldsa87(
     verify::<MlDsa87>(public_key_bytes, message, signature, "ML-DSA-87")
 }
 
+pub fn derive_mldsa44_public_key(seed_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
+    derive_public_key::<MlDsa44>(seed_bytes, "ML-DSA-44")
+}
+
+pub fn derive_mldsa65_public_key(seed_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
+    derive_public_key::<MlDsa65>(seed_bytes, "ML-DSA-65")
+}
+
+pub fn derive_mldsa87_public_key(seed_bytes: &[u8]) -> Result<Vec<u8>, SignatureError> {
+    derive_public_key::<MlDsa87>(seed_bytes, "ML-DSA-87")
+}
+
 fn sign<P: ml_dsa::MlDsaParams>(
     seed_bytes: &[u8],
     message: &[u8],
     label: &str,
 ) -> Result<Vec<u8>, SignatureError> {
+    if seed_bytes.len() != ML_DSA_SEED_BYTES {
+        return Err(SignatureError::InvalidPrivateKey(format!(
+            "Invalid {label} seed length"
+        )));
+    }
     let seed = ml_dsa::Seed::try_from(seed_bytes)
         .map_err(|_| SignatureError::InvalidPrivateKey(format!("Invalid {label} seed length")))?;
     let signing_key = SigningKey::<P>::from_seed(&seed);
     let signature: Signature<P> = signing_key.sign(message);
     Ok(signature.encode().as_slice().to_vec())
+}
+
+fn derive_public_key<P: ml_dsa::MlDsaParams>(
+    seed_bytes: &[u8],
+    label: &str,
+) -> Result<Vec<u8>, SignatureError> {
+    if seed_bytes.len() != ML_DSA_SEED_BYTES {
+        return Err(SignatureError::InvalidPrivateKey(format!(
+            "Invalid {label} seed length"
+        )));
+    }
+    let seed = ml_dsa::Seed::try_from(seed_bytes)
+        .map_err(|_| SignatureError::InvalidPrivateKey(format!("Invalid {label} seed length")))?;
+    Ok(SigningKey::<P>::from_seed(&seed)
+        .verifying_key()
+        .encode()
+        .as_slice()
+        .to_vec())
 }
 
 fn verify<P: ml_dsa::MlDsaParams>(

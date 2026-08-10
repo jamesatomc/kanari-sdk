@@ -807,6 +807,9 @@ class HomeScreenState extends State<HomeScreen> {
 
   void _showCreateDialog(BuildContext context) {
     KanariCurve selectedCurve = KanariCurve.ed25519;
+    final derivationPathController = TextEditingController(
+      text: KanariWallet.defaultDerivationPath,
+    );
 
     showDialog(
       context: context,
@@ -836,6 +839,17 @@ class HomeScreenState extends State<HomeScreen> {
                 }).toList(),
                 onChanged: (val) => setState(() => selectedCurve = val!),
               ),
+              if (!selectedCurve.isPostQuantum) ...[
+                const SizedBox(height: 16),
+                TextField(
+                  controller: derivationPathController,
+                  decoration: const InputDecoration(
+                    labelText: 'HD Path',
+                    hintText: KanariWallet.defaultDerivationPath,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
             ],
           ),
           actions: [
@@ -846,6 +860,18 @@ class HomeScreenState extends State<HomeScreen> {
             FilledButton(
               onPressed: () async {
                 final walletState = context.read<WalletState>();
+                final derivationPath = selectedCurve.isPostQuantum
+                    ? KanariWallet.defaultDerivationPath
+                    : derivationPathController.text.trim();
+                if (!selectedCurve.isPostQuantum &&
+                    !KanariWallet.isValidDerivationPath(derivationPath)) {
+                  showAppErrorSnackBar(
+                    context,
+                    "Invalid HD path. Example: ${KanariWallet.defaultDerivationPath}",
+                  );
+                  return;
+                }
+
                 final authorized = await showAppPinVerificationSheet(
                   context: context,
                   onVerify: walletState.verifyPin,
@@ -859,6 +885,7 @@ class HomeScreenState extends State<HomeScreen> {
                 await walletState.createNewWallet(
                   curve: selectedCurve,
                   pin: '',
+                  derivationPath: derivationPath,
                 );
 
                 if (!mounted || !dialogContext.mounted) return;
@@ -880,7 +907,7 @@ class HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    );
+    ).whenComplete(derivationPathController.dispose);
   }
 }
 

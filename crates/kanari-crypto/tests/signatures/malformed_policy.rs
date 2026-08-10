@@ -1,6 +1,12 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use kanari_crypto::{
     CurveType, SignatureError, generate_keypair,
-    signatures::{sign_message, verify_signature, verify_signature_with_curve},
+    signatures::{
+        BatchVerificationItem, sign_message, verify_batch_with_curve, verify_signature,
+        verify_signature_with_curve,
+    },
 };
 use proptest::prelude::*;
 
@@ -27,7 +33,7 @@ fn untagged_verification_fails_closed_for_all_signature_curves() {
         CurveType::Dilithium5,
         CurveType::Ed25519Dilithium3,
         CurveType::K256Dilithium3,
-        #[cfg(feature = "experimental-slh-dsa")]
+        #[cfg(feature = "slh-dsa")]
         CurveType::SphincsPlusSha256Robust,
     ];
 
@@ -38,6 +44,62 @@ fn untagged_verification_fails_closed_for_all_signature_curves() {
             verify_signature(&keypair.address, b"message", &signature),
             Err(SignatureError::InvalidFormat(_))
         ));
+    }
+}
+
+#[test]
+fn ed25519_true_batch_rejects_mixed_valid_and_invalid_signature() {
+    let keypairs = [
+        generate_keypair(CurveType::Ed25519).unwrap(),
+        generate_keypair(CurveType::Ed25519).unwrap(),
+        generate_keypair(CurveType::Ed25519).unwrap(),
+    ];
+    let messages: [&[u8]; 3] = [b"ed-batch-0", b"ed-batch-1", b"ed-batch-2"];
+    let mut signatures: Vec<Vec<u8>> = keypairs
+        .iter()
+        .zip(messages)
+        .map(|(keypair, message)| {
+            sign_message(&keypair.private_key, message, CurveType::Ed25519).unwrap()
+        })
+        .collect();
+
+    signatures[1][7] ^= 0x40;
+
+    let items: Vec<BatchVerificationItem<'_>> = keypairs
+        .iter()
+        .zip(messages)
+        .zip(signatures.iter())
+        .map(|((keypair, message), signature)| {
+            BatchVerificationItem::new(&keypair.public_key, message, signature)
+        })
+        .collect();
+    assert!(!verify_batch_with_curve(&items, CurveType::Ed25519).unwrap());
+}
+
+#[test]
+fn ecdsa_vector_style_malformed_signatures_fail_closed() {
+    for curve in [CurveType::K256, CurveType::P256] {
+        let keypair = generate_keypair(curve).unwrap();
+        let message = b"ecdsa malformed vector";
+        let signature = sign_message(&keypair.private_key, message, curve).unwrap();
+
+        let truncated = &signature[..signature.len().saturating_sub(1)];
+        assert!(matches!(
+            verify_signature_with_curve(&keypair.public_key, message, truncated, curve),
+            Err(SignatureError::InvalidFormat(_)) | Ok(false)
+        ));
+
+        let mut mutated = signature.clone();
+        mutated[0] ^= 0x80;
+        assert!(matches!(
+            verify_signature_with_curve(&keypair.public_key, message, &mutated, curve),
+            Err(SignatureError::InvalidFormat(_)) | Ok(false)
+        ));
+
+        assert!(
+            !verify_signature_with_curve(&keypair.public_key, b"wrong message", &signature, curve)
+                .unwrap()
+        );
     }
 }
 

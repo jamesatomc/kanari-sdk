@@ -37,6 +37,15 @@ mod tests {
         assert_eq!(params.verify_k1, 0.into());
         assert_eq!(params.verify_r1, 0.into());
         assert_eq!(params.ed25519_verify, 0.into());
+        assert_eq!(params.dilithium2_verify, 0.into());
+        assert_eq!(params.dilithium3_verify, 0.into());
+        assert_eq!(params.dilithium5_verify, 0.into());
+        assert_eq!(params.sphincs_plus_sha256_robust_verify, 0.into());
+        assert_eq!(params.falcon512_verify, 0.into());
+        assert_eq!(params.falcon1024_verify, 0.into());
+        assert_eq!(params.ed25519_dilithium3_verify, 0.into());
+        assert_eq!(params.k256_dilithium3_verify, 0.into());
+        assert_eq!(params.rs256_verify, 0.into());
     }
 
     #[test]

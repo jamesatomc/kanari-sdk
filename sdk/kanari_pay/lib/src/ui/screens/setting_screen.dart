@@ -554,25 +554,34 @@ class SettingScreen extends StatelessWidget {
 
     if (confirmed != true || !context.mounted) return;
 
-    if (logoutAll) {
-      await authClient.logoutAll();
-    } else {
-      await authClient.logout();
+    Object? remoteLogoutError;
+    try {
+      if (logoutAll) {
+        await authClient.logoutAll();
+      } else {
+        await authClient.logout();
+      }
+    } catch (error) {
+      remoteLogoutError = error;
     }
 
+    authClient.clearSession();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('session_id');
     await prefs.remove('user_email');
     await prefs.remove('wallet_address');
 
-    walletState.logout();
+    await walletState.removeAuthenticatedAccountWallet();
 
     if (!context.mounted) return;
 
-    Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
     showAppInfoSnackBar(
       context,
-      logoutAll ? 'Logged out from all devices' : 'Logged out successfully',
+      remoteLogoutError == null
+          ? (logoutAll
+                ? 'Logged out from all devices'
+                : 'Logged out successfully')
+          : 'Logged out locally. Server session will expire automatically.',
     );
   }
 

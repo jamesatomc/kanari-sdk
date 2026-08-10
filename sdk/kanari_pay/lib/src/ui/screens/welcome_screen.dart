@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:kanari_pay/src/providers/wallet_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:kanari_pay/kanari_pay.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/app_ui.dart';
 import '../widgets/onboarding_sheets.dart';
 
@@ -27,17 +28,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     // ตรวจสอบสถานะหลังจาก widget ถูก mount
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-
-      final state = context.read<WalletState>();
-      final authClient = context.read<KanariAuthClient>();
-
-      debugPrint("🔍 WelcomeScreen didChangeDependencies:");
-      debugPrint("   - isAuthenticated: ${authClient.isAuthenticated}");
-      debugPrint("   - userEmail: ${authClient.userEmail}");
-      debugPrint("   - walletAddress: ${authClient.walletAddress}");
-      debugPrint("   - hasWallet: ${state.hasWallet}");
-      debugPrint("   - isUnlocked: ${state.isUnlocked}");
-      debugPrint("   - wallet != null: ${state.wallet != null}");
     });
   }
 
@@ -175,26 +165,24 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         onBiometricAuthenticate: state.unlockWithBiometric,
         biometricReason: 'Unlock your Kanari wallet',
         biometricHandlesPrompt: true,
+        onValidate: state.verifyPin,
         onComplete: (pin) async {
           await state.unlockWallet(pin);
 
           if (!context.mounted) return;
 
           if (state.isUnlocked && state.hasWallet) {
-            debugPrint("🔓 Wallet unlocked successfully");
             Navigator.of(context).pushReplacementNamed('/home');
-          } else {
-            showAppErrorSnackBar(context, state.error ?? 'Invalid PIN');
           }
         },
       ),
     );
 
-    if (!context.mounted || result != appPinBiometricResult) return;
+    if (!context.mounted || result == null) return;
 
     if (state.isUnlocked && state.hasWallet) {
       Navigator.of(context).pushReplacementNamed('/home');
-    } else if (state.error != null) {
+    } else if (result == appPinBiometricResult && state.error != null) {
       showAppErrorSnackBar(context, state.error!);
     }
   }
@@ -223,10 +211,14 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       context: context,
       showDragHandle: true,
       builder: (sheetContext) => AppCurveSelectionSheet(
-        onConfirm: (selectedCurve) async {
+        onConfirm: (selectedCurve, derivationPath) async {
           Navigator.pop(sheetContext);
           _showBusyDialog(context, message: 'Creating wallet...');
-          await walletState.createNewWallet(curve: selectedCurve, pin: pin);
+          await walletState.createNewWallet(
+            curve: selectedCurve,
+            pin: pin,
+            derivationPath: derivationPath,
+          );
 
           if (!context.mounted) return;
           Navigator.of(context, rootNavigator: true).pop();
@@ -255,14 +247,26 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
       context: context,
       showDragHandle: true,
       builder: (context) => AppImportWalletSheet(
-        onContinue: (String data, KanariCurve curve, bool isMnemonic) {
-          // พอรับข้อมูลมาแล้ว ให้เปิดหน้าใส่ PIN ทันที
-          Future.delayed(const Duration(milliseconds: 150), () {
-            if (context.mounted) {
-              _showImportPinSheet(context, data, curve, isMnemonic);
-            }
-          });
-        },
+        onContinue:
+            (
+              String data,
+              KanariCurve curve,
+              bool isMnemonic,
+              String derivationPath,
+            ) {
+              // พอรับข้อมูลมาแล้ว ให้เปิดหน้าใส่ PIN ทันที
+              Future.delayed(const Duration(milliseconds: 150), () {
+                if (context.mounted) {
+                  _showImportPinSheet(
+                    context,
+                    data,
+                    curve,
+                    isMnemonic,
+                    derivationPath,
+                  );
+                }
+              });
+            },
       ),
     );
   }
@@ -273,6 +277,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     String data,
     KanariCurve curve,
     bool isMnemonic,
+    String derivationPath,
   ) {
     final parentContext = context;
     final walletState = context.read<WalletState>();
@@ -284,7 +289,12 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         onComplete: (pin) async {
           _showBusyDialog(parentContext, message: 'Importing wallet...');
           if (isMnemonic) {
-            await walletState.importFromMnemonic(data, curve: curve, pin: pin);
+            await walletState.importFromMnemonic(
+              data,
+              curve: curve,
+              pin: pin,
+              derivationPath: derivationPath,
+            );
           } else {
             await walletState.importFromPrivateKey(
               data,
@@ -333,6 +343,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
   void _showLogoutDialog(BuildContext context) {
     final authClient = context.read<KanariAuthClient>();
+    final walletState = context.read<WalletState>();
     showDialog(
       context: context,
       builder: (_) => const AppConfirmationDialog(
@@ -341,9 +352,27 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
         confirmLabel: 'Logout',
         isDestructive: true,
       ),
-    ).then((confirmed) {
+    ).then((confirmed) async {
       if (confirmed == true) {
-        authClient.logout();
+        Object? remoteLogoutError;
+        try {
+          await authClient.logout();
+        } catch (error) {
+          remoteLogoutError = error;
+        }
+        authClient.clearSession();
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('session_id');
+        await prefs.remove('user_email');
+        await prefs.remove('wallet_address');
+        await walletState.removeAuthenticatedAccountWallet();
+        if (!context.mounted) return;
+        showAppInfoSnackBar(
+          context,
+          remoteLogoutError == null
+              ? 'Logged out successfully'
+              : 'Logged out locally. Server session will expire automatically.',
+        );
       }
     });
   }

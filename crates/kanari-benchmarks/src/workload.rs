@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::config::HarnessConfig;
 use anyhow::{Context, Result};
 use kanari_core::BlockchainEngine;

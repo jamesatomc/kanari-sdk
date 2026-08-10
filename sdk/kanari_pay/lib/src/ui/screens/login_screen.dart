@@ -90,14 +90,16 @@ class _KanariLoginScreenState extends State<KanariLoginScreen> {
         var matchedLocalWallet = false;
 
         final walletState = context.read<WalletState>();
-        if (walletAddress != null && walletAddress.isNotEmpty) {
-          matchedLocalWallet = await walletState.syncWalletWithAddress(
-            walletAddress,
-          );
+
+        if (walletAddress == null || walletAddress.isEmpty) {
+          widget.authClient.clearSession();
+          setState(() {
+            _errorMessage = 'Login succeeded, but no account wallet was found.';
+          });
+          return;
         }
 
-        if (!matchedLocalWallet &&
-            response.data?.encryptedPrivateKey != null &&
+        if (response.data?.encryptedPrivateKey != null &&
             response.data!.encryptedPrivateKey!.isNotEmpty &&
             response.data?.curveType != null) {
           try {
@@ -130,28 +132,30 @@ class _KanariLoginScreenState extends State<KanariLoginScreen> {
               pin = await showAppPinEntrySheet(
                 context: context,
                 title: 'Set PIN',
-                subtitle: 'Set a 6-digit PIN to secure this wallet.',
+                subtitle:
+                    'Set a 6-digit PIN to secure your Kanari account wallet.',
               );
               if (!mounted || pin == null) return;
             }
 
-            await walletState.importFromPrivateKey(
-              privateKey,
-              curve: curve,
-              pin: pin,
-            );
-
-            if (walletAddress != null && walletAddress.isNotEmpty) {
-              matchedLocalWallet = await walletState.syncWalletWithAddress(
-                walletAddress,
-              );
-            }
+            matchedLocalWallet = await walletState
+                .upsertAuthenticatedWalletFromPrivateKey(
+                  privateKey,
+                  curve: curve,
+                  expectedAddress: walletAddress,
+                  pin: pin,
+                  name: 'Kanari Account Wallet',
+                );
           } catch (e) {
             if (!mounted) return;
             setState(() {
               _errorMessage = 'Wallet import failed: $e';
             });
           }
+        } else {
+          matchedLocalWallet = await walletState.syncWalletWithAddress(
+            walletAddress,
+          );
         }
 
         if (!mounted) return;
@@ -186,6 +190,7 @@ class _KanariLoginScreenState extends State<KanariLoginScreen> {
       });
     }
   }
+
   @override
   Widget build(BuildContext context) {
     Theme.of(context);
@@ -344,14 +349,19 @@ class _KanariLoginScreenState extends State<KanariLoginScreen> {
     final encryptedBytes = base64Decode(payload['ciphertext'] as String);
     final nonce = base64Decode(payload['nonce'] as String);
     final salt = base64Decode(payload['salt'] as String);
-    final iterations =
-        (payload['iterations'] as num?)?.toInt() ?? _defaultKdfIterations;
+    final version = (payload['version'] as num?)?.toInt() ?? 1;
 
     if (encryptedBytes.length < 16) {
       throw Exception('Encrypted payload is invalid');
     }
 
-    final keyBytes = await _deriveKey(password, salt, iterations);
+    final keyBytes = version == 2
+        ? await _deriveArgon2idKey(password, salt, payload)
+        : await _deriveLegacyKey(
+            password,
+            salt,
+            (payload['iterations'] as num?)?.toInt() ?? _defaultKdfIterations,
+          );
     final algorithm = AesGcm.with256bits();
     final cipherText = encryptedBytes.sublist(0, encryptedBytes.length - 16);
     final macBytes = encryptedBytes.sublist(encryptedBytes.length - 16);
@@ -360,12 +370,46 @@ class _KanariLoginScreenState extends State<KanariLoginScreen> {
     final clearText = await algorithm.decrypt(
       secretBox,
       secretKey: SecretKey(keyBytes),
+      aad: version == 2 ? _argon2idAad(payload) : const <int>[],
     );
 
     return utf8.decode(clearText);
   }
 
-  Future<List<int>> _deriveKey(
+  Future<List<int>> _deriveArgon2idKey(
+    String password,
+    List<int> salt,
+    Map<String, dynamic> payload,
+  ) async {
+    final kdf = payload['kdf'] as String?;
+    if (kdf != 'argon2id') {
+      throw Exception('Unsupported encrypted wallet KDF');
+    }
+
+    final memoryKiB = (payload['memory_kib'] as num?)?.toInt() ?? 65536;
+    final timeCost = (payload['time_cost'] as num?)?.toInt() ?? 3;
+    final parallelism = (payload['parallelism'] as num?)?.toInt() ?? 1;
+
+    final key = await Argon2id(
+      memory: memoryKiB,
+      iterations: timeCost,
+      parallelism: parallelism,
+      hashLength: 32,
+    ).deriveKey(secretKey: SecretKey(utf8.encode(password)), nonce: salt);
+
+    return key.extractBytes();
+  }
+
+  List<int> _argon2idAad(Map<String, dynamic> payload) {
+    final memoryKiB = (payload['memory_kib'] as num?)?.toInt() ?? 65536;
+    final timeCost = (payload['time_cost'] as num?)?.toInt() ?? 3;
+    final parallelism = (payload['parallelism'] as num?)?.toInt() ?? 1;
+    return utf8.encode(
+      'kanari-auth-key-v2:argon2id:m=$memoryKiB:t=$timeCost:p=$parallelism',
+    );
+  }
+
+  Future<List<int>> _deriveLegacyKey(
     String password,
     List<int> salt,
     int iterations,

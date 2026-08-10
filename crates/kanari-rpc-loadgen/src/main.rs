@@ -1,4 +1,6 @@
 #![allow(clippy::print_stdout)]
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;

@@ -1,6 +1,6 @@
 # Key and Signature Path Audit
 
-Last checked: 2026-08-02
+Last checked: 2026-08-09
 
 This audit maps where `kanari-crypto` key and signature APIs are consumed
 outside the crate.
@@ -26,6 +26,16 @@ outside the crate.
 - `slh-dsa`/SPHINCS+ support is available only behind the explicit
   `experimental-slh-dsa` feature while the upstream crate remains release-candidate/unaudited.
 - Hybrid/PQC dispatch preserves formatted key metadata so provider prefixes are not stripped before signing.
+- Direct, explicit-curve, keypair, and batch verification paths now share
+  resource-exhaustion guards for oversized public-key/address text, messages,
+  signatures, empty batches, and excessive batch item counts.
+- Ed25519 batch verification uses `ed25519-dalek` native batch verification.
+  K256/P256 and PQC/hybrid batch APIs use parallel per-signature verification
+  rather than unsafe ECDSA/PQC aggregation.
+- Official Wycheproof JSON corpus coverage is vendored for Ed25519, ECDSA
+  P-256 SHA-256, and ECDSA secp256k1 SHA-256. The ECDSA files validate the
+  underlying SHA-256 curve verifiers and do not redefine Kanari account
+  K256/P256 SHA3-256 prehash semantics.
 
 ## Migration rule
 
@@ -40,3 +50,16 @@ The safe migration path is:
 3. Preserve provider metadata through signing dispatch and hybrid private-key packing.
 4. Treat old `kanapqc` imports as legacy material that must be re-keyed/migrated before production signing.
 5. Add wallet/app/node submit tests for old-wallet import rejection, new-wallet signing, and mixed verification.
+
+## Batch verification policy
+
+- Empty batches are rejected, not treated as success.
+- Oversized batches are rejected before curve-specific parsing.
+- Every item is validated for address/message/signature resource limits before
+  dispatch.
+- `Ed25519` may use native randomized batch verification.
+- `K256` and `P256` intentionally do not use custom ECDSA aggregate batch math
+  in this crate. Until a formally reviewed provider is adopted, the safe
+  optimized path is parallel independent verification.
+- Tagged batch verification requires tagged addresses and remains fail-closed
+  for untagged or malformed addresses.

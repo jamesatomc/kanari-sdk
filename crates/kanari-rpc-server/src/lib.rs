@@ -8,9 +8,10 @@
 use anyhow::Result;
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Request, State, connect_info::ConnectInfo},
     http::{StatusCode, header},
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use kanari_core::BlockchainEngine;
@@ -18,7 +19,10 @@ use kanari_rpc_api::*;
 use kanari_types::transaction::SignedTransaction;
 use kanari_types::{GAS_MODEL, GasConfig, effective_gas_price};
 
-use std::{sync::Arc, time::Instant};
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::{limit::RequestBodyLimitLayer, timeout::TimeoutLayer};
 
@@ -182,6 +186,106 @@ fn respond_with_serialize<T: serde::Serialize>(id: u64, v: T) -> RpcResponse {
     }
 }
 
+// Per-IP fixed-window request rate limiter. With a zero-fee gas model there is
+// no economic spam barrier, so the RPC edge must bound how many requests a
+// single source can issue per window independently of transaction economics.
+#[derive(Clone, Default)]
+struct RpcRateLimiter {
+    windows: Arc<Mutex<HashMap<IpAddr, RateWindow>>>,
+}
+
+#[derive(Clone, Copy)]
+struct RateWindow {
+    started_at: Instant,
+    request_count: u32,
+}
+
+const RPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
+const RPC_RATE_LIMIT_PER_WINDOW: u32 = 200;
+const RPC_RATE_LIMITER_MAX_TRACKED_IPS: usize = 10_000;
+
+impl RpcRateLimiter {
+    fn allow(&self, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        let mut windows = self
+            .windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if windows.len() >= RPC_RATE_LIMITER_MAX_TRACKED_IPS && !windows.contains_key(&ip) {
+            // Opportunistically drop expired windows so a long-lived public
+            // node does not accumulate one entry per source address forever.
+            windows
+                .retain(|_, window| now.duration_since(window.started_at) < RPC_RATE_LIMIT_WINDOW);
+            // A distributed flood can keep every tracked window active within
+            // the same second, so expired-window pruning alone cannot shrink
+            // the map. Evict the oldest source so memory stays hard-bounded
+            // regardless of how many distinct addresses arrive.
+            while windows.len() >= RPC_RATE_LIMITER_MAX_TRACKED_IPS {
+                let oldest = windows
+                    .iter()
+                    .min_by_key(|(_, window)| window.started_at)
+                    .map(|(addr, _)| *addr);
+                match oldest {
+                    Some(addr) => {
+                        windows.remove(&addr);
+                    }
+                    None => break,
+                }
+            }
+        }
+        let window = windows.entry(ip).or_insert(RateWindow {
+            started_at: now,
+            request_count: 0,
+        });
+        if now.duration_since(window.started_at) >= RPC_RATE_LIMIT_WINDOW {
+            *window = RateWindow {
+                started_at: now,
+                request_count: 0,
+            };
+        }
+        if window.request_count >= RPC_RATE_LIMIT_PER_WINDOW {
+            return false;
+        }
+        window.request_count += 1;
+        true
+    }
+}
+
+/// Reject requests from a single source that exceed the per-window budget.
+/// Falls back to a loopback identity when the server is not served with
+/// [`SocketAddr`] connect info (e.g. in unit tests), which still rate-limits
+/// but cannot attribute requests per source.
+async fn rate_limit_by_ip(
+    State(limiter): State<RpcRateLimiter>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|connect_info| connect_info.0.ip())
+        .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]));
+    if !limiter.allow(ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32005,
+                    "message": "Rate limit exceeded; retry later",
+                },
+                // RpcResponse.id is a non-optional u64 in the client schema, so
+                // a JSON-RPC null here breaks every client that hits the limit.
+                // Echoing a literal id is the pragmatic choice without buffering
+                // and re-serializing the request body to read the real id.
+                "id": 0,
+            })),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 /// Create RPC server router
 pub fn create_router(state: RpcServerState) -> Router {
     let cors = CorsLayer::new()
@@ -201,6 +305,17 @@ pub fn create_router(state: RpcServerState) -> Router {
         ))
         .layer(cors)
         .with_state(state)
+}
+
+/// Create the RPC router with per-IP rate limiting enabled. Production servers
+/// should use this entry point: with a zero-fee gas model there is no economic
+/// spam barrier, so request volume must be bounded at the network edge. Tests
+/// keep using [`create_router`] so bursty unit tests are not throttled.
+pub fn create_router_with_anti_spam(state: RpcServerState) -> Router {
+    create_router(state).layer(middleware::from_fn_with_state(
+        RpcRateLimiter::default(),
+        rate_limit_by_ip,
+    ))
 }
 
 /// Handle RPC request
@@ -334,11 +449,15 @@ async fn handle_metrics(State(state): State<RpcServerState>) -> impl IntoRespons
 /// Start RPC server
 pub async fn start_server(engine: Arc<BlockchainEngine>, addr: &str) -> Result<()> {
     let state = RpcServerState::new(engine);
-    let app = create_router(state);
+    let app = create_router_with_anti_spam(state);
 
     info!("Starting RPC server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -349,11 +468,15 @@ pub async fn start_server_with_transaction_broadcaster(
     broadcaster: impl Fn(SignedTransaction) -> Result<()> + Send + Sync + 'static,
 ) -> Result<()> {
     let state = RpcServerState::with_transaction_broadcaster(engine, broadcaster);
-    let app = create_router(state);
+    let app = create_router_with_anti_spam(state);
 
     info!("Starting RPC server on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

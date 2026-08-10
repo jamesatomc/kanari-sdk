@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use bip39::{Language, Mnemonic};
 use ed25519_dalek::{SigningKey as Ed25519SigningKey, VerifyingKey as Ed25519VerifyingKey};
 use k256::{
@@ -23,7 +26,7 @@ pub(super) fn generate_k256_keypair() -> Result<KeyPair, KeyError> {
     let mut seed = [0u8; 32];
     SysRng
         .try_fill_bytes(&mut seed)
-        .expect("Failed to get OS randomness");
+        .map_err(|e| KeyError::GenerationFailed(format!("Failed to get OS randomness: {e}")))?;
 
     let secret_key = K256SecretKey::from_slice(&seed)
         .map_err(|_| KeyError::GenerationFailed("Invalid K256 seed".to_string()))?;
@@ -54,7 +57,7 @@ pub(super) fn generate_p256_keypair() -> Result<KeyPair, KeyError> {
     let mut seed = [0u8; 32];
     SysRng
         .try_fill_bytes(&mut seed)
-        .expect("Failed to get OS randomness");
+        .map_err(|e| KeyError::GenerationFailed(format!("Failed to get OS randomness: {e}")))?;
 
     let secret_key = P256SecretKey::from_slice(&seed)
         .map_err(|_| KeyError::GenerationFailed("Invalid P256 seed".to_string()))?;
@@ -84,7 +87,7 @@ pub fn generate_ed25519_keypair() -> Result<KeyPair, KeyError> {
     let mut seed = [0u8; 32];
     SysRng
         .try_fill_bytes(&mut seed)
-        .expect("Failed to get OS randomness");
+        .map_err(|e| KeyError::GenerationFailed(format!("Failed to get OS randomness: {e}")))?;
 
     if seed.iter().all(|&b| b == 0) {
         return Err(KeyError::GenerationFailed(

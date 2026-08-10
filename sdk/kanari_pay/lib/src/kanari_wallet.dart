@@ -4,10 +4,13 @@ import 'dart:typed_data';
 import 'package:kanari_pay/src/kanaricurve.dart';
 
 class KanariWallet {
+  static const String defaultDerivationPath = "m/44'/637'/0'/0/0";
+
   final KeyPairData _keyPair;
   final String? mnemonic;
+  final String? derivationPath;
 
-  KanariWallet(this._keyPair, {this.mnemonic});
+  KanariWallet(this._keyPair, {this.mnemonic, this.derivationPath});
 
   String get address => _keyPair.address;
   String get taggedAddress => _keyPair.taggedAddress;
@@ -15,19 +18,38 @@ class KanariWallet {
   String get privateKey => _keyPair.privateKey;
   String get curveType => _keyPair.curveType;
 
+  static String normalizeDerivationPath(String? derivationPath) {
+    final trimmed = derivationPath?.trim();
+    return trimmed == null || trimmed.isEmpty ? defaultDerivationPath : trimmed;
+  }
+
+  static bool isValidDerivationPath(String? derivationPath) {
+    final path = normalizeDerivationPath(derivationPath);
+    return RegExp(r"^m(\/[0-9]+'?)+$").hasMatch(path);
+  }
+
   /// Generate a new wallet with a specific curve and random mnemonic
-  static Future<KanariWallet> generate({required KanariCurve curve}) async {
+  static Future<KanariWallet> generate({
+    required KanariCurve curve,
+    String derivationPath = defaultDerivationPath,
+  }) async {
+    final normalizedPath = normalizeDerivationPath(derivationPath);
     if (curve.isPostQuantum) {
       // PQC curves use direct random generation as they don't support BIP39 yet
       final keyPair = await generateKeypairApi(curveName: curve.name);
       return KanariWallet(keyPair);
     } else {
       final mnemonic = await generateMnemonicApi(wordCount: BigInt.from(12));
-      final keyPair = await deriveKeypairFromMnemonic(
+      final keyPair = await deriveKeypairFromPathApi(
         mnemonic: mnemonic,
+        derivationPath: normalizedPath,
         curveName: curve.name,
       );
-      return KanariWallet(keyPair, mnemonic: mnemonic);
+      return KanariWallet(
+        keyPair,
+        mnemonic: mnemonic,
+        derivationPath: normalizedPath,
+      );
     }
   }
 
@@ -35,12 +57,19 @@ class KanariWallet {
   static Future<KanariWallet> fromMnemonic(
     String mnemonic, {
     required KanariCurve curve,
+    String derivationPath = defaultDerivationPath,
   }) async {
-    final keyPair = await deriveKeypairFromMnemonic(
+    final normalizedPath = normalizeDerivationPath(derivationPath);
+    final keyPair = await deriveKeypairFromPathApi(
       mnemonic: mnemonic,
+      derivationPath: normalizedPath,
       curveName: curve.name,
     );
-    return KanariWallet(keyPair, mnemonic: mnemonic);
+    return KanariWallet(
+      keyPair,
+      mnemonic: mnemonic,
+      derivationPath: normalizedPath,
+    );
   }
 
   /// Create a wallet from a private key

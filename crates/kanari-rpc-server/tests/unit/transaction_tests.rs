@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::{
     apply_committed_effect, base_transaction_details, classify_transaction_error_data,
     derive_transaction_state_flags, select_native_coin_consolidation_step,

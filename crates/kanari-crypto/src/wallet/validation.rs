@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::keys::{
     KANAHYBRID_PREFIX, KANAMLDSA_PREFIX, KANAPQC_PREFIX, KANARI_KEY_PREFIX, KANASLHDSA_PREFIX,
 };

@@ -26,6 +26,14 @@ This crate provides a production-ready HTTP API wrapper around the `kanari-auth`
 cp crates/run-auth/.env.example crates/run-auth/.env
 cargo run -p run-auth
 
+# LAN development, reachable as http://192.168.1.101:3000 from another device.
+# Keep this behind a trusted firewall and use HTTPS/reverse proxy for production.
+export AUTH_ALLOW_INSECURE_HTTP=true
+export AUTH_BIND_ADDRESS=0.0.0.0
+export AUTH_ALLOWED_ORIGIN=http://192.168.1.101:3000
+export AUTH_API_PORT=3000
+cargo run -p run-auth
+
 # Production behind a local HTTPS reverse proxy.
 export AUTH_DB_PATH=data/auth.db
 export AUTH_ALLOWED_ORIGIN=https://auth.example.com
@@ -40,7 +48,8 @@ cargo run -p run-auth
 | `AUTH_DB_PATH` | Path to SQLite database file | `data/auth.db` |
 | `AUDIT_LOG_DIR` | Protected audit log directory | `logs` |
 | `AUTH_API_PORT` | HTTP server port | `3000` |
-| `AUTH_BIND_ADDRESS` | Bind address; keep loopback when proxy is on the same host | `127.0.0.1` |
+| `AUTH_BIND_ADDRESS` | Bind address; use `0.0.0.0` only for trusted LAN/reverse-proxy exposure | `127.0.0.1` |
+| `AUTH_HOST` | Alias for `AUTH_BIND_ADDRESS` when `AUTH_BIND_ADDRESS` is unset | None |
 | `AUTH_ALLOWED_ORIGIN` | Exact browser origin; required in secure mode and cannot be `*` | None |
 | `AUTH_TRUSTED_PROXY_IPS` | Comma-separated reverse-proxy IPs allowed to assert HTTPS | Loopback only |
 | `AUTH_ALLOW_INSECURE_HTTP` | Explicit local-development override | `false` |

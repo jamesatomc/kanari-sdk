@@ -310,8 +310,11 @@ impl AuthManager {
 
         // Sign the transaction
         let mut signed_tx = SignedTransaction::new(transaction);
+        let signing_curve = wallet
+            .validated_signing_curve()
+            .map_err(AuthError::WalletError)?;
         signed_tx
-            .sign(&wallet.private_key, wallet.curve_type)
+            .sign(&wallet.private_key, signing_curve)
             .map_err(|e| AuthError::SigningError(format!("Transaction signing failed: {}", e)))?;
 
         log::info!(

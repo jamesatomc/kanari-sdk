@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use axum::{
     body::{Body, to_bytes},
@@ -13,7 +16,9 @@ use kanari_types::error::KanariUnwrapExt;
 use kanari_types::gas_coin::GAS_COIN;
 use kanari_types::transaction::{SignedTransaction, Transaction};
 use move_core_types::account_address::AccountAddress;
+use std::net::IpAddr;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::sync::{Mutex, MutexGuard};
 use tower::util::ServiceExt;
 
@@ -91,7 +96,7 @@ fn seed_runtime_state(state: &mut StateManager) {
     );
 }
 
-fn build_test_router() -> Router {
+fn build_test_engine() -> Arc<BlockchainEngine> {
     let mut engine = BlockchainEngine::new_in_memory().invariant("in-memory engine");
     engine.set_authorities(
         "0x1".to_string(),
@@ -102,7 +107,15 @@ fn build_test_router() -> Router {
         let mut state = engine.state_write();
         seed_runtime_state(&mut state);
     }
-    create_router(RpcServerState::new(engine))
+    engine
+}
+
+fn build_test_router() -> Router {
+    create_router(RpcServerState::new(build_test_engine()))
+}
+
+fn build_anti_spam_test_router() -> Router {
+    create_router_with_anti_spam(RpcServerState::new(build_test_engine()))
 }
 
 async fn rpc_call(
@@ -622,6 +635,103 @@ async fn submit_transaction_rejects_missing_signature() {
     assert_eq!(response["error"]["code"], -32602);
     assert_eq!(response["error"]["message"], "Missing or empty signature");
     assert!(response["result"].is_null());
+
+    drop(guard);
+}
+
+#[tokio::test]
+async fn rate_limiter_allows_budget_then_rejects_within_window() {
+    let limiter = RpcRateLimiter::default();
+    let ip = IpAddr::from([203, 0, 113, 7]);
+    for _ in 0..RPC_RATE_LIMIT_PER_WINDOW {
+        assert!(limiter.allow(ip), "request within budget must be allowed");
+    }
+    assert!(!limiter.allow(ip), "request over budget must be rejected");
+}
+
+#[tokio::test]
+async fn rate_limiter_resets_after_window_elapses() {
+    let limiter = RpcRateLimiter::default();
+    let ip = IpAddr::from([203, 0, 113, 8]);
+    for _ in 0..RPC_RATE_LIMIT_PER_WINDOW {
+        assert!(limiter.allow(ip));
+    }
+    assert!(!limiter.allow(ip));
+    tokio::time::sleep(RPC_RATE_LIMIT_WINDOW + Duration::from_millis(50)).await;
+    assert!(
+        limiter.allow(ip),
+        "budget must reset once the window elapses"
+    );
+}
+
+#[tokio::test]
+async fn rate_limiter_hard_bounds_ip_map_under_distributed_flood() {
+    let limiter = RpcRateLimiter::default();
+    // Keep every window active within the same second so expired-window
+    // pruning alone cannot shrink the map; oldest-entry eviction must bound it.
+    for i in 0..RPC_RATE_LIMITER_MAX_TRACKED_IPS + 1024 {
+        let ip = IpAddr::from([10, (i >> 8) as u8, (i & 0xff) as u8, 1]);
+        assert!(
+            limiter.allow(ip),
+            "a fresh source must still be admitted exactly once at capacity"
+        );
+    }
+    let tracked = limiter
+        .windows
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .len();
+    assert!(
+        tracked <= RPC_RATE_LIMITER_MAX_TRACKED_IPS,
+        "tracked IP map grew past its hard bound: {tracked}"
+    );
+}
+
+#[tokio::test]
+async fn anti_spam_router_rejects_over_budget_requests_with_429() {
+    let guard = test_guard().await;
+    let app = build_anti_spam_test_router();
+
+    let build_request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/rpc")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": methods::GET_GAS_INFO,
+                    "params": [],
+                    "id": 1
+                })
+                .to_string(),
+            ))
+            .invariant("build rpc request")
+    };
+
+    for _ in 0..RPC_RATE_LIMIT_PER_WINDOW {
+        let response: Response = app
+            .clone()
+            .oneshot(build_request())
+            .await
+            .invariant("rpc response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let response: Response = app
+        .oneshot(build_request())
+        .await
+        .invariant("rate limited response");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .invariant("rate limit body bytes");
+    let json: serde_json::Value = serde_json::from_slice(&body).invariant("rate limit json body");
+    assert_eq!(json["error"]["code"], -32005);
+    assert_eq!(
+        json["id"], 0,
+        "rate limit response must carry a numeric id (client RpcResponse.id is u64)"
+    );
 
     drop(guard);
 }

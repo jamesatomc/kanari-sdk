@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../kanaricurve.dart';
+import '../../kanari_wallet.dart';
 import 'app_ui.dart';
 
 class AppCurveSelectionSheet extends StatefulWidget {
   final String title;
   final String subtitle;
   final String confirmLabel;
-  final ValueChanged<KanariCurve> onConfirm;
+  final void Function(KanariCurve curve, String derivationPath) onConfirm;
 
   const AppCurveSelectionSheet({
     super.key,
@@ -23,6 +24,15 @@ class AppCurveSelectionSheet extends StatefulWidget {
 
 class _AppCurveSelectionSheetState extends State<AppCurveSelectionSheet> {
   KanariCurve _selectedCurve = KanariCurve.ed25519;
+  final _derivationPathController = TextEditingController(
+    text: KanariWallet.defaultDerivationPath,
+  );
+
+  @override
+  void dispose() {
+    _derivationPathController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,6 +72,14 @@ class _AppCurveSelectionSheetState extends State<AppCurveSelectionSheet> {
                 }).toList(),
                 onChanged: (val) => setState(() => _selectedCurve = val!),
               ),
+              if (!_selectedCurve.isPostQuantum) ...[
+                const SizedBox(height: AppUiTokens.cardPadding),
+                AppTextInput(
+                  controller: _derivationPathController,
+                  label: 'HD Path',
+                  hintText: KanariWallet.defaultDerivationPath,
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 24),
@@ -72,7 +90,20 @@ class _AppCurveSelectionSheetState extends State<AppCurveSelectionSheet> {
                 borderRadius: BorderRadius.circular(20),
               ),
             ),
-            onPressed: () => widget.onConfirm(_selectedCurve),
+            onPressed: () {
+              final derivationPath = _selectedCurve.isPostQuantum
+                  ? KanariWallet.defaultDerivationPath
+                  : _derivationPathController.text.trim();
+              if (!_selectedCurve.isPostQuantum &&
+                  !KanariWallet.isValidDerivationPath(derivationPath)) {
+                showAppErrorSnackBar(
+                  context,
+                  "Invalid HD path. Example: ${KanariWallet.defaultDerivationPath}",
+                );
+                return;
+              }
+              widget.onConfirm(_selectedCurve, derivationPath);
+            },
             child: Text(
               widget.confirmLabel,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -85,7 +116,12 @@ class _AppCurveSelectionSheetState extends State<AppCurveSelectionSheet> {
 }
 
 class AppImportWalletSheet extends StatefulWidget {
-  final void Function(String data, KanariCurve curve, bool isMnemonic)
+  final void Function(
+    String data,
+    KanariCurve curve,
+    bool isMnemonic,
+    String derivationPath,
+  )
   onContinue;
 
   const AppImportWalletSheet({super.key, required this.onContinue});
@@ -98,6 +134,9 @@ class _AppImportWalletSheetState extends State<AppImportWalletSheet>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final _dataController = TextEditingController();
+  final _derivationPathController = TextEditingController(
+    text: KanariWallet.defaultDerivationPath,
+  );
   KanariCurve _curve = KanariCurve.ed25519;
 
   @override
@@ -110,6 +149,7 @@ class _AppImportWalletSheetState extends State<AppImportWalletSheet>
   void dispose() {
     _tabController.dispose();
     _dataController.dispose();
+    _derivationPathController.dispose();
     super.dispose();
   }
 
@@ -195,6 +235,14 @@ class _AppImportWalletSheetState extends State<AppImportWalletSheet>
                 hintText: hintText,
                 maxLines: 3,
               ),
+              if (isMnemonic && !_curve.isPostQuantum) ...[
+                const SizedBox(height: AppUiTokens.cardPadding),
+                AppTextInput(
+                  controller: _derivationPathController,
+                  label: 'HD Path',
+                  hintText: KanariWallet.defaultDerivationPath,
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 24),
@@ -220,7 +268,29 @@ class _AppImportWalletSheetState extends State<AppImportWalletSheet>
       return;
     }
 
+    if (isMnemonic && _curve.isPostQuantum) {
+      showAppErrorSnackBar(
+        context,
+        'Post-quantum curves do not support mnemonic HD paths yet.',
+      );
+      return;
+    }
+
+    if (isMnemonic &&
+        !KanariWallet.isValidDerivationPath(_derivationPathController.text)) {
+      showAppErrorSnackBar(
+        context,
+        "Invalid HD path. Example: ${KanariWallet.defaultDerivationPath}",
+      );
+      return;
+    }
+
     Navigator.pop(context);
-    widget.onContinue(_dataController.text.trim(), _curve, isMnemonic);
+    widget.onContinue(
+      _dataController.text.trim(),
+      _curve,
+      isMnemonic,
+      _derivationPathController.text.trim(),
+    );
   }
 }

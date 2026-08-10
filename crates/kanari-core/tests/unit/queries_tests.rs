@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use crate::{CheckpointSyncData, consensus::Checkpoint};
 use kanari_crypto::keys::{CurveType, generate_keypair};

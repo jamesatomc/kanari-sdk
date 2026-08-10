@@ -6,18 +6,20 @@
 //! This module provides secure backup and restore capabilities for the keystore,
 //! including encryption and verification.
 
-use serde::{Deserialize, Serialize};
 use std::fs::{self};
 use std::io::{self};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::Keystore;
-use crate::encryption::{EncryptedData, decrypt_data, encrypt_data};
-use hmac::{Hmac, KeyInit, Mac};
-use sha3::Sha3_256;
+use crate::encryption::{decrypt_data, encrypt_data};
+use hmac::{KeyInit, Mac, SimpleHmac};
+use sha3::{Digest, Sha3_256};
 
-type HmacSha3_256 = Hmac<Sha3_256>;
+mod types;
+pub use types::{BackupInfo, BackupMetadata, EncryptedBackup};
+
+type HmacSha3_256 = SimpleHmac<Sha3_256>;
 
 /// Errors related to backup/restore operations
 #[derive(Error, Debug)]
@@ -45,54 +47,6 @@ pub enum BackupError {
 
     #[error("Backup file not found: {0}")]
     NotFound(String),
-}
-
-/// Backup metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackupMetadata {
-    /// Backup creation timestamp (Unix timestamp)
-    pub created_at: u64,
-    /// Version of the backup format
-    pub version: String,
-    /// Number of keys in the backup
-    pub key_count: usize,
-    /// Whether mnemonic is included
-    pub has_mnemonic: bool,
-    /// Checksum for verification (SHA3-256)
-    pub checksum: String,
-    /// Optional description
-    pub description: Option<String>,
-}
-
-impl BackupMetadata {
-    /// Create new backup metadata
-    pub fn new(key_count: usize, has_mnemonic: bool, checksum: String) -> Self {
-        let timestamp = crate::get_current_timestamp();
-
-        Self {
-            created_at: timestamp,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            key_count,
-            has_mnemonic,
-            checksum,
-            description: None,
-        }
-    }
-
-    /// Set description
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-}
-
-/// Encrypted backup structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncryptedBackup {
-    /// Metadata about the backup
-    pub metadata: BackupMetadata,
-    /// Encrypted keystore data
-    pub encrypted_data: EncryptedData,
 }
 
 /// Backup manager
@@ -142,7 +96,6 @@ impl BackupManager {
         let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
 
         // Use HKDF to derive a proper HMAC key
-        use sha3::Digest;
         let hkdf_salt = b"kanari-backup-hmac-v1"; // Version-specific salt
         let mut derived_key = vec![0u8; 32]; // 256-bit key
         let mut hasher = Sha3_256::new();
@@ -266,7 +219,6 @@ impl BackupManager {
             // Derive HMAC key from password using HKDF (same as create_backup)
             let password_zero = zeroize::Zeroizing::new(password.as_bytes().to_vec());
 
-            use sha3::Digest;
             let hkdf_salt = b"kanari-backup-hmac-v1";
             let mut derived_key = vec![0u8; 32];
             let mut hasher = Sha3_256::new();
@@ -358,37 +310,17 @@ impl BackupManager {
             if path.extension().and_then(|s| s.to_str()) == Some("kbak") {
                 // Check file size before reading
                 if metadata.len() > MAX_BACKUP_READ_SIZE {
-                    eprintln!(
-                        "Warning: Skipping oversized backup file: {}",
-                        path.display()
-                    );
                     continue; // Skip oversized files
                 }
 
-                match fs::read_to_string(&path) {
-                    Ok(data) => match serde_json::from_str::<EncryptedBackup>(&data) {
-                        Ok(backup) => {
-                            backups.push(BackupInfo {
-                                path: path.clone(),
-                                metadata: backup.metadata,
-                                file_size: metadata.len(),
-                            });
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "Warning: Failed to parse backup file {}: {}",
-                                path.display(),
-                                e
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to read backup file {}: {}",
-                            path.display(),
-                            e
-                        );
-                    }
+                if let Ok(data) = fs::read_to_string(&path)
+                    && let Ok(backup) = serde_json::from_str::<EncryptedBackup>(&data)
+                {
+                    backups.push(BackupInfo {
+                        path: path.clone(),
+                        metadata: backup.metadata,
+                        file_size: metadata.len(),
+                    });
                 }
             }
         }
@@ -431,38 +363,6 @@ impl BackupManager {
         }
 
         Ok(deleted_count)
-    }
-}
-
-/// Backup information
-#[derive(Debug, Clone)]
-pub struct BackupInfo {
-    /// Path to backup file
-    pub path: PathBuf,
-    /// Backup metadata
-    pub metadata: BackupMetadata,
-    /// File size in bytes
-    pub file_size: u64,
-}
-
-impl BackupInfo {
-    /// Get formatted creation time
-    pub fn created_at_formatted(&self) -> String {
-        chrono::DateTime::from_timestamp(self.metadata.created_at as i64, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| format!("timestamp:{}", self.metadata.created_at))
-    }
-
-    /// Get human-readable file size
-    pub fn file_size_formatted(&self) -> String {
-        let size = self.file_size as f64;
-        if size < 1024.0 {
-            format!("{:.0} B", size)
-        } else if size < 1024.0 * 1024.0 {
-            format!("{:.2} KB", size / 1024.0)
-        } else {
-            format!("{:.2} MB", size / (1024.0 * 1024.0))
-        }
     }
 }
 

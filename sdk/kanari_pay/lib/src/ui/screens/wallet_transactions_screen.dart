@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:kanari_pay/kanari_pay.dart';
@@ -339,10 +337,7 @@ class _TransactionDetailsSheet extends StatelessWidget {
                 ),
               if (transaction.gasUsed != null)
                 _DetailRow(label: 'Gas Used', value: '${transaction.gasUsed}'),
-              _DetailRow(
-                label: 'Nonce',
-                value: '${transaction.nonce}',
-              ),
+              _DetailRow(label: 'Nonce', value: '${transaction.nonce}'),
               _DetailRow(label: 'Gas Limit', value: '${transaction.gasLimit}'),
               _DetailRow(label: 'Gas Price', value: '${transaction.gasPrice}'),
               if (transaction.module != null)

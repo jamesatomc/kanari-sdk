@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 #[cfg(test)]
 mod tests {
 
@@ -206,6 +209,75 @@ mod tests {
         assert!(verified, "Ed25519 signature should verify");
     }
 
+    #[cfg(feature = "falcon")]
+    #[test]
+    fn test_sign_and_verify_falcon512() {
+        let keypair = generate_keypair(CurveType::Falcon512).unwrap();
+        let message = b"Hello, FN-DSA-512!";
+
+        assert!(keypair.private_key.starts_with("kanafalcon"));
+        let signature = sign_message(&keypair.private_key, message, CurveType::Falcon512).unwrap();
+        let verified = verify_signature_with_curve(
+            &keypair.public_key,
+            message,
+            &signature,
+            CurveType::Falcon512,
+        )
+        .unwrap();
+
+        assert!(verified, "Falcon512 signature should verify");
+    }
+
+    #[cfg(feature = "falcon")]
+    #[test]
+    fn test_sign_and_verify_falcon1024() {
+        let keypair = generate_keypair(CurveType::Falcon1024).unwrap();
+        let message = b"Hello, FN-DSA-1024!";
+
+        assert!(keypair.private_key.starts_with("kanafalcon"));
+        let signature = sign_message(&keypair.private_key, message, CurveType::Falcon1024).unwrap();
+        let verified = verify_signature_with_curve(
+            &keypair.public_key,
+            message,
+            &signature,
+            CurveType::Falcon1024,
+        )
+        .unwrap();
+
+        assert!(verified, "Falcon1024 signature should verify");
+    }
+
+    #[cfg(feature = "falcon")]
+    #[test]
+    fn test_falcon_aliases_parse_and_sign() {
+        let aliases = [
+            ("Falcon512", CurveType::Falcon512),
+            ("FnDsa512", CurveType::Falcon512),
+            ("FN-DSA-512", CurveType::Falcon512),
+            ("Falcon1024", CurveType::Falcon1024),
+            ("FnDsa1024", CurveType::Falcon1024),
+            ("FN-DSA-1024", CurveType::Falcon1024),
+        ];
+        let message = b"falcon alias compatibility";
+
+        for (alias, expected_curve) in aliases {
+            let parsed_curve: CurveType = alias
+                .parse()
+                .unwrap_or_else(|err| panic!("failed to parse Falcon alias {alias}: {err}"));
+            assert_eq!(parsed_curve, expected_curve);
+
+            let keypair = generate_keypair(parsed_curve).unwrap();
+            let signature = sign_message(&keypair.private_key, message, parsed_curve)
+                .unwrap_or_else(|err| panic!("failed to sign with {alias}: {err}"));
+
+            assert!(
+                verify_signature_with_curve(&keypair.public_key, message, &signature, parsed_curve)
+                    .unwrap_or(false),
+                "signature made through alias {alias} should verify"
+            );
+        }
+    }
+
     #[test]
     fn test_signature_fails_with_wrong_message() {
         let keypair = generate_keypair(CurveType::K256).unwrap();
@@ -347,6 +419,80 @@ mod tests {
     }
 
     #[test]
+    fn test_sign_and_verify_sphincs_plus_sha256_robust() {
+        let keypair = generate_keypair(CurveType::SphincsPlusSha256Robust).unwrap();
+        let message = b"Hello, SLH-DSA/SphincsPlusSha256Robust!";
+
+        assert!(keypair.private_key.starts_with("kanaslh"));
+        let signature = sign_message(
+            &keypair.private_key,
+            message,
+            CurveType::SphincsPlusSha256Robust,
+        )
+        .unwrap();
+        let verified = verify_signature_with_curve(
+            &keypair.public_key,
+            message,
+            &signature,
+            CurveType::SphincsPlusSha256Robust,
+        )
+        .unwrap();
+
+        assert!(verified, "SphincsPlusSha256Robust signature should verify");
+    }
+
+    #[test]
+    fn test_pqc_signatures_reject_truncated_bytes() {
+        let cases = vec![
+            CurveType::Dilithium2,
+            CurveType::Dilithium3,
+            CurveType::Dilithium5,
+            #[cfg(feature = "falcon")]
+            CurveType::Falcon512,
+            #[cfg(feature = "falcon")]
+            CurveType::Falcon1024,
+            #[cfg(feature = "slh-dsa")]
+            CurveType::SphincsPlusSha256Robust,
+        ];
+        let message = b"truncated pqc signature should fail closed";
+
+        for curve in cases {
+            let keypair = generate_keypair(curve).unwrap();
+            let mut signature = sign_message(&keypair.private_key, message, curve)
+                .unwrap_or_else(|err| panic!("signing failed for {curve:?}: {err}"));
+
+            assert!(!signature.is_empty(), "test requires a non-empty signature");
+            signature.truncate(signature.len() - 1);
+
+            let verified =
+                verify_signature_with_curve(&keypair.public_key, message, &signature, curve)
+                    .unwrap_or(false);
+            assert!(
+                !verified,
+                "truncated signature unexpectedly verified for {curve:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "falcon")]
+    #[test]
+    fn test_falcon_signature_fails_with_wrong_falcon_curve() {
+        let keypair = generate_keypair(CurveType::Falcon512).unwrap();
+        let message = b"wrong Falcon parameter set must not verify";
+        let signature = sign_message(&keypair.private_key, message, CurveType::Falcon512).unwrap();
+
+        let verified = verify_signature_with_curve(
+            &keypair.public_key,
+            message,
+            &signature,
+            CurveType::Falcon1024,
+        )
+        .unwrap_or(false);
+
+        assert!(!verified);
+    }
+
+    #[test]
     fn test_sign_message_preserves_pqc_and_hybrid_key_metadata() {
         let cases = vec![
             CurveType::Dilithium2,
@@ -354,7 +500,11 @@ mod tests {
             CurveType::Dilithium5,
             CurveType::Ed25519Dilithium3,
             CurveType::K256Dilithium3,
-            #[cfg(feature = "experimental-slh-dsa")]
+            #[cfg(feature = "falcon")]
+            CurveType::Falcon512,
+            #[cfg(feature = "falcon")]
+            CurveType::Falcon1024,
+            #[cfg(feature = "slh-dsa")]
             CurveType::SphincsPlusSha256Robust,
         ];
         let message = b"formatted provider metadata must survive dispatch";

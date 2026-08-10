@@ -13,10 +13,7 @@ use move_vm_types::{
 use sha2::Digest;
 use smallvec::smallvec;
 
-use rsa::BigUint;
-use rsa::RsaPublicKey;
-use rsa::pkcs1v15::{Signature, VerifyingKey};
-
+use kanari_crypto::cryptos::verify_rs256_prehash_native;
 use sha2::Sha256;
 
 use move_core_types::gas_algebra::InternalGas;
@@ -40,32 +37,6 @@ const SHA256_HASH_TYPE: u8 = 0;
 
 // Maximum message length accepted by natives (prevent large-memory DoS)
 const MAX_MSG_BYTES: usize = 1_000_000; // 1 MB
-
-/// Verifies RS256 signature using RSA public key components (n, e)
-fn verify_rs256(n_bytes: &[u8], e_bytes: &[u8], msg_hash: &[u8], sig_bytes: &[u8]) -> bool {
-    // Construct RSA public key from modulus (n) and exponent (e)
-    let pubkey = match RsaPublicKey::new(
-        BigUint::from_bytes_be(n_bytes),
-        BigUint::from_bytes_be(e_bytes),
-    ) {
-        Ok(key) => key,
-        Err(_) => return false,
-    };
-
-    // Create verifying key with SHA256 digest
-    // Note: We use the sha2 from rsa's re-export to avoid version conflicts
-    let verifying_key = VerifyingKey::<rsa::sha2::Sha256>::new(pubkey);
-
-    // Parse signature
-    let signature = match Signature::try_from(sig_bytes) {
-        Ok(sig) => sig,
-        Err(_) => return false,
-    };
-
-    // Verify the signature against the pre-hashed message
-    use rsa::signature::hazmat::PrehashVerifier;
-    verifying_key.verify_prehash(msg_hash, &signature).is_ok()
-}
 
 /// Native function for RS256 signature verification (with internal hashing)
 pub fn make_verify_native(gas_cost: InternalGas) -> NativeFunction {
@@ -115,7 +86,7 @@ pub fn make_verify_native(gas_cost: InternalGas) -> NativeFunction {
         let hashed_msg = Sha256::digest(&msg_bytes);
 
         // Verify RS256 signature
-        let result = verify_rs256(&n_bytes, &e_bytes, &hashed_msg, &sig_bytes);
+        let result = verify_rs256_prehash_native(&n_bytes, &e_bytes, &hashed_msg, &sig_bytes);
 
         Ok(NativeResult::ok(
             context.gas_used(),
@@ -175,7 +146,7 @@ pub fn make_verify_prehash_native(gas_cost: InternalGas) -> NativeFunction {
         }
 
         // Verify signature with pre-hashed message
-        let result = verify_rs256(&n_bytes, &e_bytes, &msg_bytes, &sig_bytes);
+        let result = verify_rs256_prehash_native(&n_bytes, &e_bytes, &msg_bytes, &sig_bytes);
 
         Ok(NativeResult::ok(
             context.gas_used(),
@@ -219,7 +190,7 @@ mod tests {
         let signature = signing_key.sign(msg);
         let signature_bytes: Box<[u8]> = signature.into();
 
-        let result = verify_rs256(
+        let result = verify_rs256_prehash_native(
             public_key.n().to_bytes_be().as_slice(),
             public_key.e().to_bytes_be().as_slice(),
             hashed_msg.as_slice(),
@@ -244,7 +215,7 @@ mod tests {
         let mut bad_signature = signature_bytes.to_vec();
         bad_signature[0] ^= 0xff;
 
-        let result = verify_rs256(
+        let result = verify_rs256_prehash_native(
             public_key.n().to_bytes_be().as_slice(),
             public_key.e().to_bytes_be().as_slice(),
             hashed_msg.as_slice(),
@@ -269,7 +240,7 @@ mod tests {
         let invalid_n = vec![0u8; 16];
         let invalid_e = vec![0u8; 1];
 
-        let result = verify_rs256(
+        let result = verify_rs256_prehash_native(
             invalid_n.as_slice(),
             invalid_e.as_slice(),
             hashed_msg.as_slice(),

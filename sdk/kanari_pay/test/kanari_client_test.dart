@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -8,7 +7,14 @@ import 'package:kanari_crypto/kanari_crypto.dart';
 import 'package:kanari_pay/kanari_pay.dart';
 import 'package:kanari_pay/src/core/bcs_utils.dart';
 
+late KanariWallet _testWallet;
+
 void main() {
+  setUpAll(() async {
+    await initKanariCrypto();
+    _testWallet = KanariWallet(await generateKeypairApi(curveName: 'Ed25519'));
+  });
+
   group('KanariClient', () {
     test('coin type extraction only accepts actual Coin objects', () {
       expect(
@@ -73,7 +79,7 @@ void main() {
 
     test('fromEnvironment uses correct URL', () {
       final clientDev = KanariClient.fromEnvironment(KanariEnvironment.dev);
-      expect(clientDev.url, 'http://192.168.1.101:19001/rpc');
+      expect(clientDev.url, 'http://192.168.1.102:19001/rpc');
 
       final clientLocal = KanariClient.fromEnvironment(KanariEnvironment.local);
       expect(clientLocal.url, 'http://127.0.0.1:6767/rpc');
@@ -166,7 +172,7 @@ void main() {
         'kanari_buildNativeTransfer',
         'kanari_submitObjectTransfer',
       ]);
-      expect(builtParams?['sender'], 'Ed25519:0x123');
+      expect(builtParams?['sender'], mockWallet.taggedAddress);
       expect(
         builtParams?['recipient'],
         '0x0000000000000000000000000000000000000000000000000000000000000456',
@@ -326,7 +332,7 @@ void main() {
 
       expect(result.hash, '0xpubhash');
       expect(methods, ['kanari_buildPublishModule', 'kanari_publishModule']);
-      expect(builtParams?['sender'], 'Ed25519:0x123');
+      expect(builtParams?['sender'], mockWallet.taggedAddress);
       expect(submittedParams?['nonce'], 10);
       expect(submittedParams?['signature'], isA<List>());
     });
@@ -617,14 +623,5 @@ void main() {
 }
 
 KanariWallet _wallet() {
-  return KanariWallet(
-    KeyPairData(
-      privateKey: 'priv',
-      publicKey: 'pub',
-      address: '0x123',
-      taggedAddress: 'Ed25519:0x123',
-      rawPublicKey: Uint8List(32),
-      curveType: 'Ed25519',
-    ),
-  );
+  return _testWallet;
 }

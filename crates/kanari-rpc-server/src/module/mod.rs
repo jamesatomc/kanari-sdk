@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use kanari_rpc_api::{
     GetObjectByRefRequest, GetObjectsRequest, ModuleInfo, ObjectInfo, RpcRequest, RpcResponse,
 };

@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 #![no_main]
 
 use kanari_crypto::{decrypt_data, encrypt_data, secure_erase};

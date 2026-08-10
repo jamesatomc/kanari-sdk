@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::config::HarnessMode;
 use kanari_core::CheckpointProductionInfo;
 use std::fmt;

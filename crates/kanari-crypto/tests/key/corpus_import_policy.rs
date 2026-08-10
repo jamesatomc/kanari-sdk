@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use kanari_crypto::keys::{
     CurveType, KANAHYBRID_PREFIX, KANAPQC_PREFIX, KeyError, keypair_from_private_key,
 };

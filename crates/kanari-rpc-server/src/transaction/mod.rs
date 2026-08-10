@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::{
     first_array_param, internal_error_response, invalid_params_response, parse_labeled_params,
     respond_with_serialize,

@@ -10,7 +10,12 @@ use std::collections::HashMap;
 
 use zeroize::Zeroize;
 
-use crate::{SignatureError, signatures::ED25519_PUBLIC_KEY_LEN};
+use crate::{
+    SignatureError,
+    signatures::{ED25519_PUBLIC_KEY_LEN, MAX_PUBLIC_KEY_OR_ADDRESS_SIZE},
+};
+
+const MAX_ED25519_VERIFYING_KEY_CACHE_ENTRIES: usize = 4_096;
 
 thread_local! {
     static ED25519_VERIFYING_KEY_CACHE: RefCell<HashMap<String, Ed25519VerifyingKey>> =
@@ -66,7 +71,48 @@ pub fn verify_signature_ed25519(
     }
 }
 
+/// True batch verification for Ed25519 using ed25519-dalek's batch verifier.
+pub fn verify_batch_ed25519_native(
+    items: &[crate::signatures::BatchVerificationItem<'_>],
+) -> Result<bool, SignatureError> {
+    if items.is_empty() {
+        return Err(SignatureError::InvalidFormat(
+            "Empty batch verification is not allowed".to_string(),
+        ));
+    }
+
+    let mut public_key_storage = Vec::with_capacity(items.len());
+    let mut signature_storage = Vec::with_capacity(items.len());
+    let mut messages = Vec::with_capacity(items.len());
+
+    for item in items {
+        if item.signature.len() != 64 {
+            return Err(SignatureError::InvalidSignatureLength);
+        }
+
+        let raw_key = crate::keys::extract_raw_key(item.public_key_or_address).to_string();
+        let verifying_key = ed25519_verifying_key_from_cache(&raw_key)?;
+
+        let mut sig_array = [0u8; 64];
+        sig_array.copy_from_slice(item.signature);
+        let signature = Ed25519Signature::from_bytes(&sig_array);
+        sig_array.zeroize();
+
+        public_key_storage.push(verifying_key);
+        signature_storage.push(signature);
+        messages.push(item.message);
+    }
+
+    Ok(ed25519_dalek::verify_batch(&messages, &signature_storage, &public_key_storage).is_ok())
+}
+
 fn ed25519_verifying_key_from_cache(raw_key: &str) -> Result<Ed25519VerifyingKey, SignatureError> {
+    if raw_key.len() > MAX_PUBLIC_KEY_OR_ADDRESS_SIZE {
+        return Err(SignatureError::InvalidPublicKey(
+            "Public key too large".to_string(),
+        ));
+    }
+
     if let Some(key) =
         ED25519_VERIFYING_KEY_CACHE.with(|cache| cache.borrow().get(raw_key).copied())
     {
@@ -88,9 +134,11 @@ fn ed25519_verifying_key_from_cache(raw_key: &str) -> Result<Ed25519VerifyingKey
         .map_err(|_| SignatureError::InvalidPublicKey("Invalid address format".to_string()))?;
 
     ED25519_VERIFYING_KEY_CACHE.with(|cache| {
-        cache
-            .borrow_mut()
-            .insert(raw_key.to_string(), verifying_key);
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= MAX_ED25519_VERIFYING_KEY_CACHE_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(raw_key.to_string(), verifying_key);
     });
 
     Ok(verifying_key)

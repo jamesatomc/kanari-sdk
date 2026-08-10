@@ -8,7 +8,7 @@ use kanari_rpc_api::{
     PublishModuleRequest, PublishPackageRequest, RpcRequest, RpcResponse, TransactionDetails,
     TransactionResult, TransactionStatus, methods,
 };
-use kanari_rpc_client::RpcClient;
+use kanari_rpc_client::{RpcClient, as_rpc_client_error};
 use kanari_types::transaction::{
     ObjectInput, ObjectOwnerKind, ObjectRef, PublishedModule, SignedTransaction, Transaction,
 };
@@ -58,8 +58,11 @@ pub fn sign_call_function_request(
     };
 
     let mut signed_tx = SignedTransaction::new(transaction);
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Wallet private key does not match its stored curve/address")?;
     signed_tx
-        .sign(&wallet.private_key, wallet.curve_type)
+        .sign(&wallet.private_key, signing_curve)
         .context("Failed to sign transaction")?;
     request.signature = Some(signed_tx.signature);
     Ok(request)
@@ -88,8 +91,11 @@ pub fn sign_publish_module_request(
     };
 
     let mut signed_tx = SignedTransaction::new(transaction);
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Wallet private key does not match its stored curve/address")?;
     signed_tx
-        .sign(&wallet.private_key, wallet.curve_type)
+        .sign(&wallet.private_key, signing_curve)
         .context("Failed to sign module transaction")?;
     request.signature = Some(signed_tx.signature);
     Ok(request)
@@ -145,8 +151,11 @@ pub fn sign_publish_package_request_as(
     };
 
     let mut signed_tx = SignedTransaction::new(transaction);
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Wallet private key does not match its stored curve/address")?;
     signed_tx
-        .sign(&wallet.private_key, wallet.curve_type)
+        .sign(&wallet.private_key, signing_curve)
         .context("Failed to sign package transaction")?;
     request.signature = Some(signed_tx.signature);
     Ok(request)
@@ -185,8 +194,11 @@ pub fn sign_object_transfer_request(
     }
 
     let mut signed_tx = SignedTransaction::new(transaction);
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Wallet private key does not match its stored curve/address")?;
     signed_tx
-        .sign(&wallet.private_key, wallet.curve_type)
+        .sign(&wallet.private_key, signing_curve)
         .context("Failed to sign object transfer transaction")?;
     request.signature = Some(signed_tx.signature);
     Ok(request)
@@ -384,6 +396,18 @@ fn status_from_details(details: TransactionDetails) -> TransactionStatus {
     }
 }
 
+/// JSON-RPC error code returned by the RPC server's per-source anti-spam
+/// middleware when a client exceeds its per-window request budget.
+const RPC_ERROR_CODE_RATE_LIMIT: i32 = -32005;
+
+/// True when `error` is a JSON-RPC rejection from the node's anti-spam
+/// rate limiter rather than a transaction-level failure.
+fn is_rate_limit_error(error: &anyhow::Error) -> bool {
+    as_rpc_client_error(error)
+        .map(|rpc_error| rpc_error.rpc_error().code == RPC_ERROR_CODE_RATE_LIMIT)
+        .unwrap_or(false)
+}
+
 pub async fn wait_for_transaction_commit(
     client: &RpcClient,
     tx_hash: &str,
@@ -393,10 +417,27 @@ pub async fn wait_for_transaction_commit(
     let started = std::time::Instant::now();
 
     loop {
-        let details = client
-            .get_transaction(tx_hash)
-            .await
-            .with_context(|| format!("Failed to fetch transaction {}", tx_hash))?;
+        let details = match client.get_transaction(tx_hash).await {
+            Ok(details) => details,
+            Err(error) if is_rate_limit_error(&error) => {
+                // The node rate-limits per source IP (200 req/s), so a burst
+                // of commit checks can exceed its own budget. Back off for
+                // one rate-limit window and retry: the transaction itself is
+                // unaffected by the rejected read.
+                if started.elapsed() >= timeout {
+                    return Err(error.context(format!(
+                        "RPC node kept rate-limiting poll for transaction {} past the {}s timeout",
+                        tx_hash,
+                        timeout.as_secs()
+                    )));
+                }
+                sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(error) => {
+                return Err(error.context(format!("Failed to fetch transaction {}", tx_hash)));
+            }
+        };
         let status = status_from_details(details);
 
         if status.committed || !status.success {
@@ -444,6 +485,17 @@ pub fn wait_for_transaction_commit_blocking(
             .context("Failed to parse getTransaction RPC response")?;
 
         if let Some(error) = rpc_resp.error {
+            if error.code == RPC_ERROR_CODE_RATE_LIMIT {
+                if started.elapsed() >= timeout {
+                    bail!(
+                        "RPC node kept rate-limiting poll for transaction {} past the {}s timeout",
+                        tx_hash,
+                        timeout.as_secs()
+                    );
+                }
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
             print_rpc_error("", &error);
             bail!("RPC did not return transaction info for {}", tx_hash);
         }

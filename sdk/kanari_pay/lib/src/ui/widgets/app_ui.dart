@@ -1106,6 +1106,7 @@ class AppPinEntrySheet extends StatefulWidget {
   final String title;
   final String subtitle;
   final ValueChanged<String>? onComplete;
+  final Future<bool> Function(String pin)? onValidate;
   final int pinLength;
   final Future<bool> Function()? onBiometricAuthenticate;
   final String biometricReason;
@@ -1116,6 +1117,7 @@ class AppPinEntrySheet extends StatefulWidget {
     required this.title,
     required this.subtitle,
     this.onComplete,
+    this.onValidate,
     this.pinLength = 6,
     this.onBiometricAuthenticate,
     this.biometricReason = 'Authenticate with biometrics',
@@ -1189,19 +1191,50 @@ class _AppPinEntrySheetState extends State<AppPinEntrySheet> {
     }
   }
 
-  void _handleNumberPressed(String number) {
+  Future<void> _handleNumberPressed(String number) async {
     if (_isChecking || _enteredPin.length >= widget.pinLength) return;
 
+    final pin = (_enteredPin + number);
     setState(() {
       _errorText = null;
-      _enteredPin += number;
+      _enteredPin = pin;
     });
-    if (_enteredPin.length == widget.pinLength) {
+
+    if (pin.length != widget.pinLength) return;
+
+    final validator = widget.onValidate;
+    if (validator == null) {
       Future.delayed(const Duration(milliseconds: 200), () {
-        if (mounted) {
-          Navigator.pop(context, _enteredPin);
-          widget.onComplete?.call(_enteredPin);
-        }
+        if (!mounted) return;
+        Navigator.pop(context, pin);
+        widget.onComplete?.call(pin);
+      });
+      return;
+    }
+
+    setState(() => _isChecking = true);
+
+    try {
+      final isValid = await validator(pin);
+      if (!mounted) return;
+
+      if (isValid) {
+        Navigator.pop(context, pin);
+        widget.onComplete?.call(pin);
+        return;
+      }
+
+      setState(() {
+        _enteredPin = '';
+        _isChecking = false;
+        _errorText = 'Invalid PIN';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _enteredPin = '';
+        _isChecking = false;
+        _errorText = 'Unable to verify PIN';
       });
     }
   }

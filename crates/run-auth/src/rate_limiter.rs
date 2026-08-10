@@ -182,4 +182,17 @@ mod tests {
             .unwrap();
         assert_eq!(limiter.buckets.lock().await.len(), 1);
     }
+
+    #[tokio::test]
+    async fn strict_limiter_rejects_bruteforce_burst() {
+        let limiter = RateLimiter::new(RateLimitConfig::strict());
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+
+        for _ in 0..limiter.config().max_requests {
+            assert!(limiter.check_rate_limit(ip).await.is_ok());
+        }
+
+        let err = limiter.check_rate_limit(ip).await.unwrap_err();
+        assert_eq!(err.retry_after_secs, limiter.config().interval_secs);
+    }
 }

@@ -128,14 +128,14 @@ class BcsUtils {
     return value;
   }
 
-  /// Decode the balance field from a Coin<T> object layout: UID (32 bytes)
-  /// followed by Balance<T>.value (u64 little-endian).
+  /// Decode the balance field from a `Coin<T>` object layout: UID (32 bytes)
+  /// followed by `Balance<T>.value` (u64 little-endian).
   static int? readCoinObjectBalance(List<int> data) {
     if (data.length < 40) return null;
     return decodeU64(data.sublist(32, 40));
   }
 
-  /// True only for actual Coin<T> object types.
+  /// True only for actual `Coin<T>` object types.
   static bool isCoinObjectType(String objectType) {
     final normalized = objectType.replaceAll(' ', '');
     return normalized.contains('::coin::Coin<');

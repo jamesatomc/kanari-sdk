@@ -164,6 +164,10 @@ pub struct CheckpointSyncData {
 const MAX_MEMPOOL_SIZE: usize = 100_000;
 const MAX_MEMPOOL_BYTES: usize = 256 * 1024 * 1024;
 pub(crate) const MAX_PENDING_PER_PRIMARY_ACCESS_LANE: u64 = 64;
+// Zero-fee gas models have no economic spam barrier, so admission must bound
+// how many pending transactions one sender can hold. The lane caps already
+// bound contention on shared objects; this bounds total per-sender footprint.
+pub(crate) const MAX_PENDING_PER_SENDER: u64 = 256;
 const MAX_PERSISTED_RECENT_TX_HASHES: usize = 100_000;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

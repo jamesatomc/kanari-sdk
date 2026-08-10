@@ -84,7 +84,7 @@ impl Address {
 
     /// DAO address that receives all gas fees
     pub const DAO_ADDRESS: &'static str =
-        "0x3141a487d7a5382bb435c0ad39a6060067765e60e45b50953a0050bcf24b03a3";
+        "0x7e669cf309e9761beb2083d12564895ccea1389f2851a479edcc0d1ad19e4350";
 
     /// Helper to get AccountAddress for STD (0x1) - cached at first use
     /// Uses lazy_static for zero-cost after initialization

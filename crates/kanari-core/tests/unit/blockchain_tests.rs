@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use kanari_types::error::KanariUnwrapExt;
 use kanari_types::transaction::{ObjectRef, Transaction};

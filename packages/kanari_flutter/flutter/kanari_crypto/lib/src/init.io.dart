@@ -25,7 +25,7 @@ Future<void> initKanariCrypto() async {
       final possiblePaths = [
         'rust.dll', // Current directory
         'kanari_crypto.dll', // Current directory (renamed)
-        '../../packages/kanari_flutter/flutter/kanari_crypto/lib/src/rust.dll', // Relative to sdk/kanari_kit
+        '../../packages/kanari_flutter/flutter/kanari_crypto/lib/rust.dll', // Monorepo package DLL
       ];
 
       bool loaded = false;

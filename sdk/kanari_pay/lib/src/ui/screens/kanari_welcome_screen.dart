@@ -161,23 +161,22 @@ class _KanariWelcomeScreenState extends State<KanariWelcomeScreen>
         onBiometricAuthenticate: state.unlockWithBiometric,
         biometricReason: 'Unlock your Kanari wallet',
         biometricHandlesPrompt: true,
+        onValidate: state.verifyPin,
         onComplete: (pin) async {
           await state.unlockWallet(pin);
           if (!context.mounted) return;
           if (state.isUnlocked && state.hasWallet) {
             Navigator.of(context).pushReplacementNamed('/home');
-          } else {
-            _showError(context, state.error ?? 'Invalid PIN');
           }
         },
       ),
     );
 
-    if (!context.mounted || result != appPinBiometricResult) return;
+    if (!context.mounted || result == null) return;
 
     if (state.isUnlocked && state.hasWallet) {
       Navigator.of(context).pushReplacementNamed('/home');
-    } else if (state.error != null) {
+    } else if (result == appPinBiometricResult && state.error != null) {
       _showError(context, state.error!);
     }
   }
@@ -202,10 +201,14 @@ class _KanariWelcomeScreenState extends State<KanariWelcomeScreen>
     showAppModalSheet(
       context: context,
       builder: (sheetContext) => AppCurveSelectionSheet(
-        onConfirm: (curve) async {
+        onConfirm: (curve, derivationPath) async {
           Navigator.pop(sheetContext);
           _showBusyDialog(context, message: 'Creating wallet...');
-          await state.createNewWallet(curve: curve, pin: pin);
+          await state.createNewWallet(
+            curve: curve,
+            pin: pin,
+            derivationPath: derivationPath,
+          );
           if (!context.mounted) return;
           Navigator.of(context, rootNavigator: true).pop();
           if (state.hasWallet) {
@@ -222,10 +225,10 @@ class _KanariWelcomeScreenState extends State<KanariWelcomeScreen>
     showAppModalSheet(
       context: context,
       builder: (_) => AppImportWalletSheet(
-        onContinue: (data, curve, isMnemonic) {
+        onContinue: (data, curve, isMnemonic, derivationPath) {
           Future.delayed(const Duration(milliseconds: 150), () {
             if (context.mounted) {
-              _showImportPin(context, data, curve, isMnemonic);
+              _showImportPin(context, data, curve, isMnemonic, derivationPath);
             }
           });
         },
@@ -238,6 +241,7 @@ class _KanariWelcomeScreenState extends State<KanariWelcomeScreen>
     String data,
     KanariCurve curve,
     bool isMnemonic,
+    String derivationPath,
   ) {
     final state = context.read<WalletState>();
     showAppModalSheet(
@@ -248,7 +252,12 @@ class _KanariWelcomeScreenState extends State<KanariWelcomeScreen>
         onComplete: (pin) async {
           _showBusyDialog(context, message: 'Importing wallet...');
           if (isMnemonic) {
-            await state.importFromMnemonic(data, curve: curve, pin: pin);
+            await state.importFromMnemonic(
+              data,
+              curve: curve,
+              pin: pin,
+              derivationPath: derivationPath,
+            );
           } else {
             await state.importFromPrivateKey(data, curve: curve, pin: pin);
           }

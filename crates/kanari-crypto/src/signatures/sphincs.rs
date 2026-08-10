@@ -1,12 +1,12 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(feature = "experimental-slh-dsa")]
+#[cfg(feature = "slh-dsa")]
 use zeroize::Zeroizing;
 
 use crate::SignatureError;
 
-#[cfg(feature = "experimental-slh-dsa")]
+#[cfg(feature = "slh-dsa")]
 use crate::signatures::slh_dsa_provider::{
     self, SLH_DSA_SHA2_256F_PUBLIC_KEY_BYTES, SLH_DSA_SHA2_256F_SIGNATURE_BYTES,
 };
@@ -17,7 +17,7 @@ pub fn verify_signature_sphincs(
     message: &[u8],
     signature: &[u8],
 ) -> Result<bool, SignatureError> {
-    #[cfg(feature = "experimental-slh-dsa")]
+    #[cfg(feature = "slh-dsa")]
     {
         let pqc_pub_raw = crate::keys::extract_raw_key(address_hex);
         let pub_bytes = hex::decode(pqc_pub_raw)
@@ -35,11 +35,11 @@ pub fn verify_signature_sphincs(
         slh_dsa_provider::verify_slh_dsa_sha2_256f(&pub_bytes, message, signature)
     }
 
-    #[cfg(not(feature = "experimental-slh-dsa"))]
+    #[cfg(not(feature = "slh-dsa"))]
     {
         let _ = (address_hex, message, signature);
         Err(SignatureError::InvalidFormat(
-            "SphincsPlusSha256Robust requires experimental-slh-dsa feature".to_string(),
+            "SphincsPlusSha256Robust requires slh-dsa or pqc feature".to_string(),
         ))
     }
 }
@@ -49,7 +49,7 @@ pub fn sign_message_sphincs(
     private_key_hex: &str,
     message: &[u8],
 ) -> Result<Vec<u8>, SignatureError> {
-    #[cfg(feature = "experimental-slh-dsa")]
+    #[cfg(feature = "slh-dsa")]
     {
         let raw = crate::keys::extract_raw_key(private_key_hex);
         let secret_hex = raw.split_once(':').map(|(secret, _)| secret).unwrap_or(raw);
@@ -60,11 +60,11 @@ pub fn sign_message_sphincs(
         slh_dsa_provider::sign_slh_dsa_sha2_256f(&sk_bytes, message)
     }
 
-    #[cfg(not(feature = "experimental-slh-dsa"))]
+    #[cfg(not(feature = "slh-dsa"))]
     {
         let _ = (private_key_hex, message);
         Err(SignatureError::InvalidPrivateKey(
-            "SphincsPlusSha256Robust requires experimental-slh-dsa feature".to_string(),
+            "SphincsPlusSha256Robust requires slh-dsa or pqc feature".to_string(),
         ))
     }
 }

@@ -7,7 +7,7 @@
 //! for enhanced security on user accounts.
 
 use serde::{Deserialize, Serialize};
-use totp_rs::{Algorithm, TOTP};
+use totp_rs::{Algorithm, Builder, Totp, TotpError};
 
 /// 2FA setup information returned after enabling 2FA
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,12 +80,8 @@ impl TotpManager {
         rng.try_fill_bytes(&mut secret_bytes)
             .expect("Failed to generate random bytes");
 
-        // Create TOTP instance with raw bytes
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,  // 6 digits
-            1,  // 1 step skew
-            30, // 30 second interval
+        // Create TOTP instance with raw bytes.
+        let totp = build_totp(
             secret_bytes.to_vec(),
             Some(self.issuer.clone()),
             email.to_string(),
@@ -109,7 +105,7 @@ impl TotpManager {
             .collect();
 
         // Get OTPAuth URL
-        let otpauth_url = totp.get_url();
+        let otpauth_url = totp.to_url().expect("Failed to create OTPAuth URL");
 
         // Encode secret as base32 for display
         let secret_b32 = data_encoding::BASE32_NOPAD.encode(&secret_bytes);
@@ -123,22 +119,18 @@ impl TotpManager {
 
     /// Verify a TOTP code against a secret
     pub fn verify_code(&self, secret: &str, code: &str) -> bool {
+        if !is_valid_totp_code(code) {
+            return false;
+        }
+
         // Parse the base32 secret back to bytes
         let secret_bytes = match data_encoding::BASE32_NOPAD.decode(secret.as_bytes()) {
             Ok(bytes) => bytes,
             Err(_) => return false,
         };
 
-        match TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
-            secret_bytes,
-            Some(self.issuer.clone()),
-            String::new(),
-        ) {
-            Ok(totp) => totp.check_current(code).unwrap_or(false),
+        match build_totp(secret_bytes, Some(self.issuer.clone()), String::new()) {
+            Ok(totp) => totp.check_current(code).is_some(),
             Err(_) => false,
         }
     }
@@ -171,6 +163,26 @@ impl TotpManager {
             Err("Invalid backup code")
         }
     }
+}
+
+fn is_valid_totp_code(code: &str) -> bool {
+    code.len() == 6 && code.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn build_totp(
+    secret: Vec<u8>,
+    issuer: Option<String>,
+    account_name: String,
+) -> Result<Totp, TotpError> {
+    Builder::new()
+        .with_algorithm(Algorithm::SHA1)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .with_issuer(issuer)
+        .with_account_name(account_name)
+        .build()
 }
 
 #[cfg(test)]
@@ -215,17 +227,13 @@ mod tests {
         let secret_bytes = data_encoding::BASE32_NOPAD
             .decode(setup.secret.as_bytes())
             .unwrap();
-        let totp = TOTP::new(
-            Algorithm::SHA1,
-            6,
-            1,
-            30,
+        let totp = build_totp(
             secret_bytes,
             Some("Test".to_string()),
             "test@example.com".to_string(),
         )
         .unwrap();
-        let code = totp.generate_current().unwrap();
+        let code = totp.generate_current().to_string();
 
         assert!(manager.verify_code(&setup.secret, &code));
 
@@ -235,5 +243,20 @@ mod tests {
             .unwrap();
         assert!(matches!(method, VerificationMethod::BackupCode));
         assert_eq!(backup_codes.len(), 9);
+        assert!(
+            manager
+                .consume_backup_code(&mut backup_codes, &setup.backup_codes[0])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_totp_codes_before_verification() {
+        let manager = TotpManager::new(Some("Test".to_string()));
+        let setup = manager.generate_setup("test@example.com");
+
+        for code in ["", "12345", "1234567", "12345a", "１２３４５６"] {
+            assert!(!manager.verify_code(&setup.secret, code));
+        }
     }
 }

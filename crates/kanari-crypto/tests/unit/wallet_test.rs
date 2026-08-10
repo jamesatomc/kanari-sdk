@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::{MIN_RECOMMENDED_PASSWORD_LENGTH, generate_keypair};
 
 use super::*;
@@ -156,6 +159,42 @@ fn test_wallet_sign_message() {
     let signature = wallet.sign(message, &password);
     assert!(signature.is_ok(), "Signing should succeed");
     assert!(!signature.unwrap().is_empty());
+}
+
+#[test]
+fn test_wallet_sign_repairs_stale_hybrid_curve_metadata_by_address() {
+    let keypair = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+    let wallet = Wallet::new(
+        AccountAddress::from_str(&keypair.address).unwrap(),
+        keypair.private_key.to_string(),
+        String::new(),
+        None,
+        // Simulate an old/corrupted wallet file that stored pure Dilithium3
+        // even though the private key is a kanahybrid key.
+        CurveType::Dilithium3,
+    );
+
+    assert_eq!(
+        wallet.validated_signing_curve().unwrap(),
+        CurveType::Ed25519Dilithium3
+    );
+    assert!(wallet.sign(b"hybrid wallet tx", "password").is_ok());
+}
+
+#[test]
+fn test_wallet_sign_fails_closed_when_curve_and_address_do_not_match() {
+    let keypair = generate_keypair(CurveType::Ed25519Dilithium3).unwrap();
+    let wrong_address = generate_keypair(CurveType::K256).unwrap().address;
+    let wallet = Wallet::new(
+        AccountAddress::from_str(&wrong_address).unwrap(),
+        keypair.private_key.to_string(),
+        String::new(),
+        None,
+        CurveType::Dilithium3,
+    );
+
+    let err = wallet.sign(b"hybrid wallet tx", "password").unwrap_err();
+    assert!(matches!(err, WalletError::KeyCurveMismatch(_)));
 }
 
 #[test]

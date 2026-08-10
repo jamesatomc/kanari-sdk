@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 #[cfg(test)]
 mod tests {
     use kanari_crypto::keys::{
@@ -224,7 +227,7 @@ mod tests {
             );
         }
 
-        #[cfg(feature = "experimental-slh-dsa")]
+        #[cfg(feature = "slh-dsa")]
         {
             let sphincs = generate_keypair(CurveType::SphincsPlusSha256Robust).unwrap();
             assert!(
@@ -233,10 +236,10 @@ mod tests {
             );
         }
 
-        #[cfg(not(feature = "experimental-slh-dsa"))]
+        #[cfg(not(feature = "slh-dsa"))]
         assert!(
             generate_keypair(CurveType::SphincsPlusSha256Robust).is_err(),
-            "SPHINCS+/SLH-DSA must stay behind experimental-slh-dsa by default"
+            "SPHINCS+/SLH-DSA must stay behind slh-dsa feature when PQC is disabled"
         );
     }
 

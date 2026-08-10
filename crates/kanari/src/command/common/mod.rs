@@ -134,8 +134,10 @@ pub fn get_sender_for_tx(
 ) -> Result<String> {
     // Re-derive public key from private key to get the tagged address format
     // Tagged addresses are required for signature verification in ALL scenarios
-    let keypair =
-        kanari_crypto::keys::keypair_from_private_key(&wallet.private_key, wallet.curve_type)
-            .context("Failed to derive public key from wallet")?;
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Wallet private key does not match its stored curve/address")?;
+    let keypair = kanari_crypto::keys::keypair_from_private_key(&wallet.private_key, signing_curve)
+        .context("Failed to derive public key from wallet")?;
     Ok(keypair.tagged_address())
 }

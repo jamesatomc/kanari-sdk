@@ -74,6 +74,18 @@ pub fn all_natives(move_addr: AccountAddress, gas_params: GasParameters) -> Nati
         crypto::make_dilithium5(gas_params.crypto.clone())
     );
     add_module_natives!(
+        "sphincs_plus_sha256_robust",
+        crypto::make_sphincs_plus_sha256_robust(gas_params.crypto.clone())
+    );
+    add_module_natives!(
+        "falcon512",
+        crypto::make_falcon512(gas_params.crypto.clone())
+    );
+    add_module_natives!(
+        "falcon1024",
+        crypto::make_falcon1024(gas_params.crypto.clone())
+    );
+    add_module_natives!(
         "ed25519_dilithium3",
         crypto::make_ed25519_dilithium3(gas_params.crypto.clone())
     );

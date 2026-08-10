@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::config::{DEFAULT_SENDER_COUNT, HarnessConfig, HarnessMode};
 use crate::execution::{
     execute_admission_path, execute_immediate, execute_owned_fast_path, execute_production_path,

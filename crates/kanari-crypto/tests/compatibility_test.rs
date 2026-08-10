@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use kanari_crypto::{
     CurveType, Keystore, Wallet,
     encryption::{decrypt_data, encrypt_data},

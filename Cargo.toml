@@ -117,8 +117,9 @@ bincode = { version = "2.0.1", features = ["serde", "alloc"] }
 # ============================================================================
 ## Hash Functions
 sha2 = "0.11.0"
-sha3 = "0.11.0"
-blake3 = { version = "1.8.5" }
+sha3 = "0.12.0"
+shake = "0.1.0"
+blake3 = { version = "1.8.6" }
 
 ## Elliptic Curve Cryptography (ECC)
 k256 = { version = "0.14.0", features = ["ecdsa", "std", "sha2"] }                 # secp256k1 (Bitcoin/Ethereum)
@@ -139,7 +140,7 @@ bip32 = "0.5.3"                                                                 
 
 ## Encoding Utilities
 hex = "0.4.3"
-base64 = "0.23.0"
+base64 = "0.23.1"
 primitive-types = { version = "0.14.0", default-features = true }                  # U256, H160, etc.
 
 # ============================================================================
@@ -147,6 +148,7 @@ primitive-types = { version = "0.14.0", default-features = true }               
 # ============================================================================
 ml-dsa = { version = "0.1.1", features = ["zeroize"] }                             # Pure Rust FIPS 204 ML-DSA signatures
 slh-dsa = { version = "0.2.0-rc.5", features = ["zeroize"] }                       # Pure Rust FIPS 205 SLH-DSA signatures
+falcon = { package = "falcon-rs", version = "0.2.4", features = ["std"] }           # Pure Rust FIPS 206 FN-DSA/Falcon signatures
 
 # ============================================================================
 # Memory Security & Timing Attack Prevention
@@ -175,7 +177,7 @@ siphasher = "1.0.3"                                                             
 # Error Handling & Result Types
 # ============================================================================
 anyhow = "1.0.104"
-thiserror = { version = "2.0.19", default-features = true }
+thiserror = { version = "2.0.20", default-features = true }
 better_any = { version = "0.2.1", features = ["derive"] }
 
 # ============================================================================
@@ -191,7 +193,7 @@ prometheus = "0.14.0"
 # ============================================================================
 # CLI, Configuration & Utilities
 # ============================================================================
-clap = { version = "4.6.4", features = ["derive"] }                                 # CLI argument parsing
+clap = { version = "4.6.6", features = ["derive"] }                                 # CLI argument parsing
 dirs = "6.0.0"                                                                      # Platform-specific directories
 walkdir = "2.5.0"                                                                   # Directory traversal
 num_cpus = "1.17.0"                                                                 # CPU core detection
@@ -212,7 +214,7 @@ arbitrary = { version = "1.4.2", features = ["derive"] }                        
 # ============================================================================
 # Authentication & 2FA
 # ============================================================================
-totp-rs = { version = "5.7.2", features = ["gen_secret", "otpauth"] }               # TOTP for 2FA
+totp-rs = { version = "6.0.0", features = ["gen_secret", "otpauth"] }               # TOTP for 2FA
 qrcode = "0.14.1"                                                                   # QR code generation
 data-encoding = "2.11.1"                                                            # Data encoding utilities
 
@@ -248,7 +250,7 @@ tikv-jemallocator = { git = "https://github.com/jamesatomc/jemallocator.git", fe
 # ============================================================================
 # Database
 # ============================================================================
-rusqlite = { version = "0.40.1", features = ["bundled", "chrono", "serde_json"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "chrono", "serde_json"] }
 
 # ============================================================================
 # Proc Macro Dependencies

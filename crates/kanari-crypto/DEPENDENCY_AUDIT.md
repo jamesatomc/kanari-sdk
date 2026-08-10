@@ -1,13 +1,16 @@
 # Kanari Crypto Dependency Audit
 
-Last checked: 2026-08-02
+Last checked: 2026-08-09
 
 Command highlights:
 
 ```text
+cargo audit
 cargo tree -p kanari-crypto --all-features
 cargo clippy -p kanari-crypto --all-features -- -D warnings
 cargo test -p kanari-crypto --all-features --quiet
+cargo clippy -p kanari-crypto --lib --tests --benches -- -D warnings
+cargo bench -p kanari-crypto --bench signature_schemes
 ```
 
 ## Result
@@ -36,6 +39,25 @@ Other workspace findings can still appear in workspace-wide `cargo audit`
 because unrelated workspace members/dependencies are outside this crate's
 provider path.
 
+## Current RustSec findings
+
+`cargo audit` currently reports `rsa 0.9.10` / `RUSTSEC-2023-0071`
+(`Marvin Attack: potential key recovery through timing sidechannels`) with no
+fixed upgrade available from the upstream crate at this time.
+
+Kanari's current `rsa` usage is restricted to RS256 public-key verification for
+Move/JWS compatibility through `verify_rs256_prehash_native`; it is not used for
+wallet private-key generation, account transaction signing, decryption, or any
+RSA private-key operation in `kanari-crypto`.
+
+Risk posture:
+
+- Public verification is materially lower risk than RSA private-key operations,
+  but the dependency remains a tracked audit finding until an upstream fix or a
+  reviewed replacement provider is available.
+- Do not add RSA signing/decryption APIs backed by this dependency.
+- Keep RS256 behind strict input-size checks in Move natives and Rust helpers.
+
 ## Current mitigation in this crate
 
 - New Dilithium-compatible keys are generated with `kanamldsa` provider metadata.
@@ -48,6 +70,10 @@ provider path.
 - PQC/hybrid import tests include deterministic malformed seed corpus and higher proptest case counts.
 - Signature verification tests include malformed tagged-address/signature corpus and oversized signature rejection coverage.
 - Wallet/keystore compatibility tests cover legacy missing metadata, legacy array-form encrypted data, and older wallet TOML.
+- Signature batch verification has bounded input validation and a benchmark
+  harness covering classical, PQC, and hybrid schemes.
+- `rayon` is used only to parallelize independent signature verifications; it
+  does not change signature semantics.
 
 ## Required production follow-up
 
@@ -55,3 +81,6 @@ provider path.
 - Re-evaluate `slh-dsa` before enabling it by default, after it leaves
   release-candidate status or receives an independent audit.
 - Continue running `cargo audit` in CI on dependency updates and block newly introduced vulnerabilities.
+- Continue expanding official Wycheproof corpus coverage beyond the currently
+  vendored Ed25519, ECDSA P-256 SHA-256, and ECDSA secp256k1 SHA-256 vectors
+  as additional Kanari-supported algorithms gain matching upstream vector files.

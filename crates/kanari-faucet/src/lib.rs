@@ -59,8 +59,11 @@ fn sign_object_transfer_request(
     }
 
     let mut signed_tx = SignedTransaction::new(transaction);
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Faucet wallet private key does not match its stored curve/address")?;
     signed_tx
-        .sign(&wallet.private_key, wallet.curve_type)
+        .sign(&wallet.private_key, signing_curve)
         .context("Failed to sign faucet transfer transaction")?;
     request.signature = Some(signed_tx.signature);
     Ok(request)
@@ -93,8 +96,11 @@ fn sign_call_function_request(
     };
 
     let mut signed_tx = SignedTransaction::new(transaction);
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Faucet wallet private key does not match its stored curve/address")?;
     signed_tx
-        .sign(&wallet.private_key, wallet.curve_type)
+        .sign(&wallet.private_key, signing_curve)
         .context("Failed to sign faucet call-function transaction")?;
     request.signature = Some(signed_tx.signature);
     Ok(request)
@@ -223,9 +229,11 @@ pub async fn request_from_dev(
     const MIST_PER_KANARI: f64 = 1_000_000_000.0;
     let amount_mist = (amount * MIST_PER_KANARI).round() as u64;
 
-    let keypair =
-        kanari_crypto::keys::keypair_from_private_key(&wallet.private_key, wallet.curve_type)
-            .context("Failed to derive public key from wallet")?;
+    let signing_curve = wallet
+        .validated_signing_curve()
+        .context("Faucet wallet private key does not match its stored curve/address")?;
+    let keypair = kanari_crypto::keys::keypair_from_private_key(&wallet.private_key, signing_curve)
+        .context("Failed to derive public key from wallet")?;
     let sender_for_tx = keypair.tagged_address();
     let gas_limit = 100_000;
     let gas_price = 1_000;

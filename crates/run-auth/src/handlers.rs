@@ -18,6 +18,23 @@ use crate::{
     },
 };
 
+const SECONDS_PER_HOUR: u64 = 3_600;
+const MAX_SESSION_TIMEOUT_HOURS: u64 = 24 * 7;
+
+fn parse_session_timeout_hours(hours: Option<u64>) -> Result<Option<std::time::Duration>, ()> {
+    let Some(hours) = hours else {
+        return Ok(None);
+    };
+    if hours == 0 || hours > MAX_SESSION_TIMEOUT_HOURS {
+        return Err(());
+    }
+    hours
+        .checked_mul(SECONDS_PER_HOUR)
+        .map(std::time::Duration::from_secs)
+        .map(Some)
+        .ok_or(())
+}
+
 fn internal_error<T: Serialize>(message: &'static str) -> Json<ApiResponse<T>> {
     Json(ApiResponse::error(message))
 }
@@ -247,9 +264,18 @@ pub async fn login(
         return build_rate_limit_response(rate_limit.retry_after_secs).into_response();
     }
 
-    let session_timeout = payload
-        .session_timeout_hours
-        .map(|hours| std::time::Duration::from_secs(hours * 3600));
+    let session_timeout = match parse_session_timeout_hours(payload.session_timeout_hours) {
+        Ok(timeout) => timeout,
+        Err(()) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<serde_json::Value>::error(
+                    "sessionTimeoutHours must be between 1 and 168",
+                )),
+            )
+                .into_response();
+        }
+    };
 
     let normalized_email = kanari_auth::email_validator::normalize_email(&payload.email);
     let mut auth = state.auth_manager.lock().await;
@@ -339,6 +365,7 @@ pub async fn login(
                     Ok(data) => data,
                     Err(e) => {
                         error!("Failed to fetch encrypted key after login: {:?}", e);
+                        let _ = auth.logout(&session.session_id);
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ApiResponse::<serde_json::Value>::error(
@@ -618,6 +645,7 @@ pub async fn get_user_info(
 /// SECURITY FIX #5: Now requires session validation to prevent unauthorized access
 pub async fn get_user_encrypted_key(
     State(state): State<AppState>,
+    ClientIp(client_ip): ClientIp,
     Json(payload): Json<crate::models::GetEncryptedKeyRequest>,
 ) -> (StatusCode, Json<ApiResponse<EncryptedKeyResponse>>) {
     info!(
@@ -631,12 +659,34 @@ pub async fn get_user_encrypted_key(
     if let Err(response) =
         validate_session_owner_for(&mut auth, &payload.session_id, &payload.email)
     {
+        state
+            .audit_logger
+            .log_failure(
+                crate::audit_logger::AuditEventType::EncryptedKeyAccess,
+                crate::audit_logger::AuditSeverity::Warning,
+                Some(payload.email.clone()),
+                Some(client_ip.to_string()),
+                None,
+                serde_json::json!({"action": "encrypted_key_access_denied"}),
+                "Invalid or unauthorized session".to_string(),
+            )
+            .await;
         return response;
     }
 
     match auth.get_user_encrypted_key(&payload.email) {
         Ok((email, wallet_address, curve_type, encrypted_key)) => {
             info!("Encrypted key retrieved successfully for: {}", email);
+            state
+                .audit_logger
+                .log_success(
+                    crate::audit_logger::AuditEventType::EncryptedKeyAccess,
+                    Some(email.clone()),
+                    Some(client_ip.to_string()),
+                    None,
+                    serde_json::json!({"action": "encrypted_key_access_granted"}),
+                )
+                .await;
             (
                 StatusCode::OK,
                 Json(ApiResponse::success(EncryptedKeyResponse {
@@ -650,6 +700,18 @@ pub async fn get_user_encrypted_key(
         }
         Err(e) => {
             error!("Encrypted key retrieval failed: {:?}", e);
+            state
+                .audit_logger
+                .log_failure(
+                    crate::audit_logger::AuditEventType::EncryptedKeyAccess,
+                    crate::audit_logger::AuditSeverity::Warning,
+                    Some(payload.email.clone()),
+                    Some(client_ip.to_string()),
+                    None,
+                    serde_json::json!({"action": "encrypted_key_access_failed"}),
+                    "Encrypted key retrieval failed".to_string(),
+                )
+                .await;
             let status_code = match e {
                 kanari_auth::AuthError::UserNotFound(_) => StatusCode::NOT_FOUND,
                 kanari_auth::AuthError::AccountLocked => StatusCode::FORBIDDEN,
@@ -1084,5 +1146,75 @@ pub async fn disable_2fa(
                 Json(ApiResponse::error("Failed to disable 2FA")),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_PASSWORD: &str = "SecurePass123!";
+
+    #[test]
+    fn session_timeout_rejects_zero_and_over_cap() {
+        assert!(parse_session_timeout_hours(Some(0)).is_err());
+        assert!(parse_session_timeout_hours(Some(MAX_SESSION_TIMEOUT_HOURS + 1)).is_err());
+    }
+
+    #[test]
+    fn session_timeout_rejects_overflow() {
+        assert!(parse_session_timeout_hours(Some(u64::MAX)).is_err());
+    }
+
+    #[test]
+    fn session_timeout_accepts_valid_bounds() {
+        assert_eq!(parse_session_timeout_hours(None).unwrap(), None);
+        assert_eq!(
+            parse_session_timeout_hours(Some(1)).unwrap(),
+            Some(std::time::Duration::from_secs(SECONDS_PER_HOUR))
+        );
+        assert_eq!(
+            parse_session_timeout_hours(Some(MAX_SESSION_TIMEOUT_HOURS)).unwrap(),
+            Some(std::time::Duration::from_secs(
+                MAX_SESSION_TIMEOUT_HOURS * SECONDS_PER_HOUR
+            ))
+        );
+    }
+
+    #[test]
+    fn session_owner_rejects_cross_account_reuse() {
+        let mut auth = kanari_auth::AuthManager::new();
+        auth.register_user("alice@example.com", TEST_PASSWORD, None)
+            .unwrap();
+        auth.register_user("bob@example.com", TEST_PASSWORD, None)
+            .unwrap();
+        let session = auth
+            .login("alice@example.com", TEST_PASSWORD, None)
+            .unwrap();
+
+        assert!(
+            validate_session_owner(&mut auth, &session.session_id, "alice@example.com").is_ok()
+        );
+        let err =
+            validate_session_owner(&mut auth, &session.session_id, "bob@example.com").unwrap_err();
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn logged_out_session_cannot_be_replayed() {
+        let mut auth = kanari_auth::AuthManager::new();
+        auth.register_user("alice@example.com", TEST_PASSWORD, None)
+            .unwrap();
+        let session_id = auth
+            .login("alice@example.com", TEST_PASSWORD, None)
+            .unwrap()
+            .session_id
+            .clone();
+
+        validate_session_owner(&mut auth, &session_id, "alice@example.com").unwrap();
+        auth.logout(&session_id).unwrap();
+
+        let err = validate_session_owner(&mut auth, &session_id, "alice@example.com").unwrap_err();
+        assert_eq!(err.0, StatusCode::UNAUTHORIZED);
     }
 }

@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 #![no_main]
 // Disabled: Windows MSVC requires LLVM/ASAN which is not available
 // Use `cargo test --test fuzz_*` instead for property-based testing

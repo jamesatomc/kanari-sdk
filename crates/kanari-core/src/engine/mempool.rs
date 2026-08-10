@@ -211,6 +211,21 @@ impl BlockchainEngine {
                 anyhow::bail!("Transaction {} already executed", tx_hash_hex);
             }
 
+            let current_sender_depth = mempool
+                .pending_sender_counts
+                .get(sender)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(accepted_counts_by_sender.get(sender).copied().unwrap_or(0));
+            if current_sender_depth >= MAX_PENDING_PER_SENDER {
+                anyhow::bail!(
+                    "Sender {} has too many pending transactions: {} pending, max {}",
+                    sender,
+                    current_sender_depth,
+                    MAX_PENDING_PER_SENDER
+                );
+            }
+
             let current_lane_depth = mempool
                 .pending_primary_access_counts
                 .get(primary_access)

@@ -137,7 +137,13 @@ class WalletState extends ChangeNotifier {
     if (data['mnemonic'] != null &&
         data['mnemonic'].toString().isNotEmpty &&
         !curve.isPostQuantum) {
-      return KanariWallet.fromMnemonic(data['mnemonic'], curve: curve);
+      return KanariWallet.fromMnemonic(
+        data['mnemonic'],
+        curve: curve,
+        derivationPath:
+            data['derivationPath']?.toString() ??
+            KanariWallet.defaultDerivationPath,
+      );
     }
 
     return KanariWallet.fromPrivateKey(data['privateKey'], curve: curve);
@@ -265,11 +271,15 @@ class WalletState extends ChangeNotifier {
   Future<void> createNewWallet({
     KanariCurve curve = KanariCurve.ed25519,
     required String pin,
+    String derivationPath = KanariWallet.defaultDerivationPath,
   }) async {
     await _withLoading(() async {
       _error = null;
       try {
-        final wallet = await KanariWallet.generate(curve: curve);
+        final wallet = await KanariWallet.generate(
+          curve: curve,
+          derivationPath: derivationPath,
+        );
         final walletData = {
           'id': DateTime.now().millisecondsSinceEpoch.toString(),
           'name': 'Wallet ${_wallets.length + 1}',
@@ -277,6 +287,7 @@ class WalletState extends ChangeNotifier {
           'mnemonic': wallet.mnemonic,
           'privateKey': wallet.privateKey,
           'curve': curve.name,
+          'derivationPath': wallet.derivationPath,
           'createdAt': DateTime.now().toIso8601String(),
         };
 
@@ -391,15 +402,105 @@ class WalletState extends ChangeNotifier {
     });
   }
 
+  Future<bool> upsertAuthenticatedWalletFromPrivateKey(
+    String pk, {
+    required KanariCurve curve,
+    required String expectedAddress,
+    String? pin,
+    String? name,
+  }) async {
+    try {
+      _error = null;
+      final wallet = await KanariWallet.fromPrivateKey(pk.trim(), curve: curve);
+      final normalizedWallet = _normalizeWalletAddress(wallet.address);
+      final normalizedExpected = _normalizeWalletAddress(expectedAddress);
+      if (normalizedWallet != normalizedExpected) {
+        _error = 'Login wallet address does not match this account.';
+        notifyListeners();
+        return false;
+      }
+
+      final hasPassword = await WalletStorage.hasPassword();
+      final hasValidPin = pin != null && RegExp(r'^\d{6}$').hasMatch(pin);
+      final effectivePin = hasValidPin ? pin : _sessionPin;
+      if (!hasPassword && !hasValidPin) {
+        _error = 'PIN is required before saving this account wallet.';
+        notifyListeners();
+        return false;
+      }
+
+      if (!hasPassword) {
+        await WalletStorage.savePassword(pin!);
+        _sessionPin = pin;
+      }
+
+      if (effectivePin == null) {
+        _error = 'Wallet is locked';
+        notifyListeners();
+        return false;
+      }
+
+      _wallets = await WalletStorage.loadAllWallets();
+      final existingIndex = _wallets.indexWhere((walletData) {
+        final address = walletData['address']?.toString();
+        return address != null &&
+            _normalizeWalletAddress(address) == normalizedExpected;
+      });
+
+      final walletId = existingIndex >= 0
+          ? _wallets[existingIndex]['id'] as String
+          : DateTime.now().millisecondsSinceEpoch.toString();
+      final walletData = {
+        'id': walletId,
+        'name': name ?? 'Kanari Account Wallet',
+        'address': wallet.address,
+        'mnemonic': wallet.mnemonic,
+        'privateKey': wallet.privateKey,
+        'curve': curve.name,
+        'derivationPath': wallet.derivationPath,
+        'createdAt': existingIndex >= 0
+            ? _wallets[existingIndex]['createdAt']
+            : DateTime.now().toIso8601String(),
+      };
+
+      if (existingIndex >= 0) {
+        _wallets[existingIndex] = walletData;
+      } else {
+        _wallets.add(walletData);
+      }
+
+      await WalletStorage.saveAllWallets(_wallets, pin: effectivePin);
+      await WalletStorage.setActiveWallet(walletId);
+      _wallets = await WalletStorage.loadAllWallets();
+      _decryptedWalletCache[walletId] = Map<String, dynamic>.from(walletData);
+      _activeWalletId = walletId;
+      _authenticatedWalletId = walletId;
+      _sessionPin = effectivePin;
+      await _instantiateWallet(walletData);
+      _isUnlocked = true;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = 'Account wallet import failed: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> importFromMnemonic(
     String mnemonic, {
     KanariCurve curve = KanariCurve.ed25519,
     String? pin,
+    String derivationPath = KanariWallet.defaultDerivationPath,
   }) async {
     await _withLoading(() async {
       _error = null;
       try {
-        final wallet = await KanariWallet.fromMnemonic(mnemonic, curve: curve);
+        final wallet = await KanariWallet.fromMnemonic(
+          mnemonic,
+          curve: curve,
+          derivationPath: derivationPath,
+        );
         final walletData = {
           'id': DateTime.now().millisecondsSinceEpoch.toString(),
           'name': 'Imported Wallet ${_wallets.length + 1}',
@@ -407,6 +508,7 @@ class WalletState extends ChangeNotifier {
           'mnemonic': mnemonic,
           'privateKey': wallet.privateKey,
           'curve': curve.name,
+          'derivationPath': wallet.derivationPath,
           'createdAt': DateTime.now().toIso8601String(),
         };
 
@@ -428,6 +530,18 @@ class WalletState extends ChangeNotifier {
     _decryptedWalletCache.clear();
     _clearBalances();
     notifyListeners();
+  }
+
+  Future<void> removeAuthenticatedAccountWallet() async {
+    final walletId = _authenticatedWalletId;
+    _error = null;
+
+    if (walletId == null) {
+      notifyListeners();
+      return;
+    }
+
+    await removeWallet(walletId);
   }
 
   Future<void> lockSession() async {
@@ -521,9 +635,7 @@ class WalletState extends ChangeNotifier {
           return coinType != null &&
               BcsUtils.tokenTypesEqual(coinType, kanariTokenType);
         })
-        .map(
-          (object) => BcsUtils.readCoinObjectBalance(object.data) ?? 0,
-        )
+        .map((object) => BcsUtils.readCoinObjectBalance(object.data) ?? 0)
         .where((balance) => balance > 0)
         .toList();
 

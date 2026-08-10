@@ -1223,9 +1223,16 @@ mod tests {
         )
     }
 
+    fn smt_prop_cases(default_cases: u32) -> u32 {
+        std::env::var("KANARI_SMT_PROPTEST_CASES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default_cases)
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig {
-            cases: 24,
+            cases: smt_prop_cases(24),
             max_shrink_iters: 32,
             .. ProptestConfig::default()
         })]

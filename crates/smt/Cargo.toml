@@ -14,7 +14,7 @@ description.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 rocksdb = { workspace = true }
-blake3 = { workspace = true }
+kanari-crypto = { workspace = true }
 kanari-db-common = { workspace = true }
 tracing = { workspace = true }
 once_cell = { workspace = true }
@@ -22,7 +22,6 @@ rayon = { workspace = true }
 
 [features]
 default = []
-blake3 = []
 
 [dev-dependencies]
 proptest = { workspace = true }

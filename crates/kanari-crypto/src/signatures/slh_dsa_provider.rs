@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use slh_dsa::{
     Sha2_256f, Signature, SigningKey, VerifyingKey,
     signature::{Keypair, Signer, Verifier},
@@ -57,4 +60,32 @@ pub fn verify_slh_dsa_sha2_256f(
     let signature = Signature::<Sha2_256f>::try_from(signature)
         .map_err(|_| SignatureError::InvalidFormat("Invalid SLH-DSA signature".to_string()))?;
     Ok(verifying_key.verify(message, &signature).is_ok())
+}
+
+pub fn validate_slh_dsa_sha2_256f_secret_public(
+    private_key_bytes: &[u8],
+    public_key_bytes: &[u8],
+) -> Result<(), SignatureError> {
+    if private_key_bytes.len() != SLH_DSA_SHA2_256F_PRIVATE_KEY_BYTES {
+        return Err(SignatureError::InvalidPrivateKey(
+            "Invalid SLH-DSA-SHA2-256f private key length".to_string(),
+        ));
+    }
+    if public_key_bytes.len() != SLH_DSA_SHA2_256F_PUBLIC_KEY_BYTES {
+        return Err(SignatureError::InvalidPublicKey(
+            "Invalid SLH-DSA-SHA2-256f public key length".to_string(),
+        ));
+    }
+
+    let signing_key = SigningKey::<Sha2_256f>::try_from(private_key_bytes).map_err(|_| {
+        SignatureError::InvalidPrivateKey("Invalid SLH-DSA-SHA2-256f private key".to_string())
+    })?;
+    let derived_public = signing_key.verifying_key().to_bytes();
+    if derived_public.as_slice() != public_key_bytes {
+        return Err(SignatureError::InvalidPublicKey(
+            "SLH-DSA-SHA2-256f public key does not match private key".to_string(),
+        ));
+    }
+
+    Ok(())
 }

@@ -14,11 +14,13 @@ use thiserror::Error;
 /// Maximum number of keys allowed in keystore to prevent DoS
 const MAX_KEYSTORE_KEYS: usize = 10_000;
 
-use kanari_common::{get_kanari_config_path, load_kanari_config};
-
 use crate::encryption::EncryptedData;
 
+mod path;
+mod statistics;
 mod storage;
+pub use path::{get_keystore_path, keystore_exists};
+pub use statistics::KeystoreStatistics;
 
 /// Errors related to keystore operations
 #[derive(Error, Debug)]
@@ -333,51 +335,6 @@ impl Default for Keystore {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Keystore statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeystoreStatistics {
-    pub total_keys: usize,
-    pub has_mnemonic: bool,
-    pub mnemonic_addresses: usize,
-    pub version: String,
-    pub last_modified: Option<u64>,
-}
-
-/// Get path to the keystore file
-pub fn get_keystore_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("KANARI_KEYSTORE_PATH")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-    {
-        return path;
-    }
-
-    if let Ok(config) = load_kanari_config()
-        && let Some(path) = config
-            .get("keystore_path")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-    {
-        return PathBuf::from(path);
-    }
-
-    default_keystore_path()
-}
-
-fn default_keystore_path() -> PathBuf {
-    let mut path = get_kanari_config_path();
-    // Remove 'kanari.yaml' from the path and add 'kanari.keystore'
-    path.pop();
-    path.push("kanari.keystore");
-    path
-}
-
-/// Check if keystore file exists
-pub fn keystore_exists() -> bool {
-    get_keystore_path().exists()
 }
 
 #[cfg(test)]

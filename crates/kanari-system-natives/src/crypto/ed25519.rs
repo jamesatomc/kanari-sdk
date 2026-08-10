@@ -12,7 +12,7 @@ use move_vm_types::{
 };
 use smallvec::smallvec;
 
-use ed25519_dalek::{Signature as EdSignature, Verifier, VerifyingKey as EdPublicKey};
+use kanari_crypto::cryptos::verify_ed25519_native;
 
 use move_core_types::gas_algebra::InternalGas;
 
@@ -54,37 +54,11 @@ fn make_ed25519_verify_native(gas_cost: InternalGas) -> NativeFunction {
             }
 
             // Wrap verification in panic catcher
-            let result = std::panic::catch_unwind(|| {
-                verify_ed25519_signature(&public_key, &signature, &msg)
-            });
+            let result =
+                std::panic::catch_unwind(|| verify_ed25519_native(&public_key, &signature, &msg));
 
             let verified: bool = result.unwrap_or_default();
             Ok(NR::ok(context.gas_used(), smallvec![Value::bool(verified)]))
         },
     )
-}
-
-/// Verifies an Ed25519 signature
-fn verify_ed25519_signature(public_key: &[u8], signature: &[u8], msg: &[u8]) -> bool {
-    if public_key.len() != 32 || signature.len() != 64 {
-        return false;
-    }
-
-    let pk_arr: [u8; 32] = match public_key.try_into() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
-
-    let pk = match EdPublicKey::from_bytes(&pk_arr) {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-
-    let sig_arr: [u8; 64] = match signature.try_into() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
-
-    let sig = EdSignature::from_bytes(&sig_arr);
-    pk.verify(msg, &sig).is_ok()
 }

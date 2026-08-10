@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 //! Property-based fuzzing tests for kanari-crypto using proptest
 //! These tests generate random inputs to find edge cases and bugs
 

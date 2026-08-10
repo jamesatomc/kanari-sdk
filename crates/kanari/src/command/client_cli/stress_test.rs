@@ -53,7 +53,8 @@ fn is_object_busy_or_unavailable(error: &anyhow::Error) -> bool {
 
 fn is_lane_saturated(error: &anyhow::Error) -> bool {
     let message = format!("{:#}", error);
-    message.contains("is saturated") && message.contains("primary access key")
+    message.contains("is saturated")
+        && (message.contains("primary access key") || message.contains("canonical access key"))
 }
 
 #[derive(Parser, Debug)]
@@ -483,7 +484,7 @@ impl StressTest {
 
 #[cfg(test)]
 mod tests {
-    use super::is_object_busy_or_unavailable;
+    use super::{is_lane_saturated, is_object_busy_or_unavailable};
 
     #[test]
     fn retries_distinct_native_coin_policy_while_prior_refs_are_pending() {
@@ -497,5 +498,27 @@ mod tests {
     fn does_not_retry_unrelated_transaction_errors() {
         let error = anyhow::anyhow!("RPC error: invalid signature");
         assert!(!is_object_busy_or_unavailable(&error));
+    }
+
+    #[test]
+    fn retries_primary_lane_saturation() {
+        let error = anyhow::anyhow!(
+            "RPC error: Transaction lane 0xabc is saturated: 300 pending transaction(s) already target this primary access key, max 256"
+        );
+        assert!(is_lane_saturated(&error));
+    }
+
+    #[test]
+    fn retries_congestion_lane_saturation() {
+        let error = anyhow::anyhow!(
+            "RPC error: Transaction congestion lane 0xabc is saturated: 300 pending transaction(s) already touch this canonical access key, max 256"
+        );
+        assert!(is_lane_saturated(&error));
+    }
+
+    #[test]
+    fn does_not_retry_unrelated_saturation_messages() {
+        let error = anyhow::anyhow!("RPC error: something else is saturated");
+        assert!(!is_lane_saturated(&error));
     }
 }

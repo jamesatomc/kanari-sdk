@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use base64::{Engine as _, engine::general_purpose};
 use kanari_crypto::{
     CurveType, MAX_PASSWORD_LEN, RateLimiter, SignatureError, StreamEncryptionHeader, decrypt_data,

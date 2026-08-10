@@ -290,6 +290,7 @@ class _TransferBottomSheetState extends State<TransferBottomSheet> {
         return;
       }
     }
+    if (!context.mounted) return;
 
     final authorized = await showAppPinVerificationSheet(
       context: context,

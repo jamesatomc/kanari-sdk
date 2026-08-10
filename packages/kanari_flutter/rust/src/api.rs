@@ -1,9 +1,11 @@
 // Copyright (c) KanariNetwork, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::hd_wallet;
-use crate::keys::{CurveType, generate_keypair, keypair_from_mnemonic, keypair_from_private_key};
-use crate::signatures::{sign_message, verify_signature_with_curve};
+use kanari_crypto::keys::{
+    CurveType, generate_keypair, keypair_from_mnemonic, keypair_from_private_key,
+};
+use kanari_crypto::signatures::{sign_message, verify_signature_with_curve};
+use kanari_crypto::{hash_data_blake3, hd_wallet, keys};
 use serde::{Deserialize, Serialize};
 
 /// Expose curve names safely for Dart
@@ -125,7 +127,7 @@ pub fn sign_message_api(
 
 /// Hash data using Blake3
 pub fn blake3_hash_api(data: Vec<u8>) -> Vec<u8> {
-    blake3::hash(&data).as_bytes().to_vec()
+    hash_data_blake3(&data)
 }
 
 /// Verify a signature
@@ -148,8 +150,7 @@ pub fn generate_mnemonic_api(word_count: usize) -> Result<String, String> {
         return Err("Only 12 or 24-word mnemonics are supported".to_string());
     }
 
-    crate::keys::generate_mnemonic(word_count)
-        .map_err(|e| format!("Mnemonic generation failed: {}", e))
+    keys::generate_mnemonic(word_count).map_err(|e| format!("Mnemonic generation failed: {}", e))
 }
 
 /// Derive a keypair from a mnemonic at a specific derivation path
@@ -232,6 +233,8 @@ pub fn list_supported_curves() -> Vec<CurveInfo> {
         Dilithium3,
         Dilithium5,
         SphincsPlusSha256Robust,
+        Falcon512,
+        Falcon1024,
         Ed25519Dilithium3,
         K256Dilithium3,
     ];
@@ -248,7 +251,6 @@ pub fn list_supported_curves() -> Vec<CurveInfo> {
 }
 
 // --- Helper Internals ---
-
 fn parse_curve_type(name: &str) -> Option<CurveType> {
     match name {
         "K256" => Some(CurveType::K256),
@@ -258,6 +260,8 @@ fn parse_curve_type(name: &str) -> Option<CurveType> {
         "Dilithium3" => Some(CurveType::Dilithium3),
         "Dilithium5" => Some(CurveType::Dilithium5),
         "SphincsPlusSha256Robust" => Some(CurveType::SphincsPlusSha256Robust),
+        "Falcon512" | "FnDsa512" | "FN-DSA-512" => Some(CurveType::Falcon512),
+        "Falcon1024" | "FnDsa1024" | "FN-DSA-1024" => Some(CurveType::Falcon1024),
         "Ed25519Dilithium3" => Some(CurveType::Ed25519Dilithium3),
         "K256Dilithium3" => Some(CurveType::K256Dilithium3),
         _ => None,

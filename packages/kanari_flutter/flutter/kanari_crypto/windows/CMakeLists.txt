@@ -20,10 +20,13 @@ target_compile_definitions(kanari_crypto_plugin PUBLIC
 target_link_libraries(kanari_crypto_plugin PRIVATE flutter)
 target_link_libraries(kanari_crypto_plugin PRIVATE flutter_wrapper_plugin)
 
-# Copy the rust.dll to the output directory
+# Copy the Rust FFI DLL to the output directory.
+set(KANARI_CRYPTO_RUST_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../lib/rust.dll")
+
 add_custom_command(
   TARGET kanari_crypto_plugin POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-  "${CMAKE_CURRENT_SOURCE_DIR}/../lib/src/rust.dll"
-  "$<TARGET_FILE_DIR:kanari_crypto_plugin>/rust.dll"
+    "${KANARI_CRYPTO_RUST_DLL}"
+    "$<TARGET_FILE_DIR:kanari_crypto_plugin>/rust.dll"
+  COMMENT "Copying Kanari Rust FFI library"
 )

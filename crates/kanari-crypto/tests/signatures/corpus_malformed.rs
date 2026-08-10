@@ -1,3 +1,6 @@
+// Copyright (c) KanariNetwork, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 use kanari_crypto::{
     CurveType, SignatureError, generate_keypair,
     signatures::{sign_message, verify_signature, verify_signature_with_curve},
@@ -42,7 +45,7 @@ fn oversized_signatures_are_rejected_before_curve_specific_parsing() {
         CurveType::Dilithium5,
         CurveType::Ed25519Dilithium3,
         CurveType::K256Dilithium3,
-        #[cfg(feature = "experimental-slh-dsa")]
+        #[cfg(feature = "slh-dsa")]
         CurveType::SphincsPlusSha256Robust,
     ];
 
