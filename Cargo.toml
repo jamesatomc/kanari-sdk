@@ -53,16 +53,16 @@ members = [
 # Workspace Package Configuration: Metadata for the entire workspace as a package.
 # This information is used when publishing the SDK as a crate.
 [workspace.package]
-edition = "2024"                                                                                                   # Use Rust 2024 edition.
-categories = ["development-tools"]                                                                                 # Categorize as development tools on crates.io.
+edition = "2024"                                                                               # Use Rust 2024 edition.
+categories = ["development-tools"]                                                             # Categorize as development tools on crates.io.
 keywords = ["blockchain", "sdk", "move", "rust", "ifps", "storage", "wallet", "framework"]     # Keywords for crates.io search.
-homepage = "https://kanarinetwork.site"                                                                                # Project homepage.
-documentation = "https://docs.kanarinetwork.site"                                                                      # Link to project documentation.
-version = "0.2.5"                                                                                                  # Current version of the SDK.
-authors = ["Kanari Network"]                                                                                       # Authors of the SDK.
-license = "Apache-2.0"                                                                                             # License information.
-repository = "https://github.com/kanari-network/kanari-sdk"                                                        # Link to the code repository.
-description = "Kanari Network SDK"                                                                                 # Short description of the SDK.
+homepage = "https://kanarinetwork.site"                                                        # Project homepage.
+documentation = "https://docs.kanarinetwork.site"                                              # Link to project documentation.
+version = "0.2.5"                                                                              # Current version of the SDK.
+authors = ["Kanari Network"]                                                                   # Authors of the SDK.
+license = "Apache-2.0"                                                                         # License information.
+repository = "https://github.com/kanari-network/kanari-sdk"                                    # Link to the code repository.
+description = "Kanari Network SDK"                                                             # Short description of the SDK.
 
 
 # Dependencies that should be kept in sync through the whole workspace
@@ -122,32 +122,32 @@ shake = "0.1.0"
 blake3 = { version = "1.8.6" }
 
 ## Elliptic Curve Cryptography (ECC)
-k256 = { version = "0.14.0", features = ["ecdsa", "std", "sha2"] }                 # secp256k1 (Bitcoin/Ethereum)
-p256 = { version = "0.14.0", features = ["ecdsa", "std", "sha2"] }                 # NIST P-256
-ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }                    # Ed25519 signatures
-curve25519-dalek = { version = "5.0.0", features = ["rand_core"] }                 # X25519 key exchange
-secp256k1 = { version = "0.31.1", features = ["recovery"] }                        # secp256k1 with recovery
-rsa = { version = "0.9.10", default-features = false, features = ["std"] }         # RSA signature verification
+k256 = { version = "0.14.0", features = ["ecdsa", "std", "sha2"] }                  # secp256k1 (Bitcoin/Ethereum)
+p256 = { version = "0.14.0", features = ["ecdsa", "std", "sha2"] }                  # NIST P-256
+ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }                     # Ed25519 signatures
+curve25519-dalek = { version = "5.0.0", features = ["rand_core"] }                  # X25519 key exchange
+secp256k1 = { version = "0.31.1", features = ["recovery"] }                         # secp256k1 with recovery
+rsa = { version = "0.9.10", default-features = false, features = ["std"] }          # RSA signature verification
 
 ## Symmetric Encryption & MAC
-aes-gcm = "0.11.0"                                                                 # Authenticated encryption
-hmac = { version = "0.13.0" }                                                      # HMAC for key derivation
+aes-gcm = "0.11.0"                                                                  # Authenticated encryption
+hmac = { version = "0.13.0" }                                                       # HMAC for key derivation
 
 ## Key Derivation & Password Hashing
-argon2 = { version = "0.5.3", default-features = true }                            # Password hashing
-bip39 = { version = "2.2.2", features = ["rand"] }                                 # Mnemonic phrases
-bip32 = "0.5.3"                                                                    # HD wallet derivation
+argon2 = { version = "0.5.3", default-features = true }                             # Password hashing
+bip39 = { version = "2.2.2", features = ["rand"] }                                  # Mnemonic phrases
+bip32 = "0.5.3"                                                                     # HD wallet derivation
 
 ## Encoding Utilities
 hex = "0.4.3"
 base64 = "0.23.1"
-primitive-types = { version = "0.14.0", default-features = true }                  # U256, H160, etc.
+primitive-types = { version = "0.14.0", default-features = true }                   # U256, H160, etc.
 
 # ============================================================================
 # Cryptography - Post-Quantum (PQC)
 # ============================================================================
-ml-dsa = { version = "0.1.1", features = ["zeroize"] }                             # Pure Rust FIPS 204 ML-DSA signatures
-slh-dsa = { version = "0.2.0-rc.5", features = ["zeroize"] }                       # Pure Rust FIPS 205 SLH-DSA signatures
+ml-dsa = { version = "0.1.1", features = ["zeroize"] }                              # Pure Rust FIPS 204 ML-DSA signatures
+slh-dsa = { version = "0.2.0-rc.5", features = ["zeroize"] }                        # Pure Rust FIPS 205 SLH-DSA signatures
 falcon = { package = "falcon-rs", version = "0.2.4", features = ["std"] }           # Pure Rust FIPS 206 FN-DSA/Falcon signatures
 
 # ============================================================================

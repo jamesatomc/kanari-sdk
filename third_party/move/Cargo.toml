@@ -31,14 +31,14 @@ members = [
 aes-gcm = "0.11.0"
 anyhow = "1.0.104"
 arbitrary = { version = "1.4.2", features = ["derive", "derive_arbitrary"] }
-async-trait = "0.1.91"
+async-trait = "0.1.92"
 bcs = "0.2.1"
 better_any = { version = "0.2.1", features = ["derive"] }
 bitvec = "1.1.1"
 byteorder = "1.5.0"
 bytes = "1.12.1"
 chrono = "0.4.45"
-clap = { version = "4.6.5", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive"] }
 codespan = "0.13.1"
 codespan-reporting = "0.13.1"
 colored = "3.1.1"
@@ -63,7 +63,7 @@ ed25519-dalek = { version = "0.1.0", package = "ed25519-dalek-fiat", default-fea
     "serde",
     "u64_backend",
 ] }
-blake3 = "1.8.5"
+blake3 = "1.8.6"
 blake2b_simd = "1.0.4"
 ethnum = "1.5.3"
 fail = "0.5.1"
@@ -121,23 +121,23 @@ sha2 = "0.11.0"
 sha3 = "0.12.0"
 shell-words = "1.1.1"
 simplelog = "0.12.2"
-similar = "=3.1.1"
+similar = "3.1.2"
 smallvec = "1.15.2"
 stacker = "0.1.25"
 static_assertions = "1.1.0"
 syn = { version = "3.0.3", features = ["derive"] }
 tempfile = "3.27.0"
 tera = "2.1.0"
-thiserror = "2.0.19"
+thiserror = "2.0.20"
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 tokio = { version = "1.53.1", features = ["full"] }
 toml = "1.1.4"
-toml_edit = { version = "0.25.13"}
+toml_edit = { version = "0.25.13" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 treeline = "0.1.0"
 tui = "0.19.0"
-uint = "0.10.0"
+uint = "0.10.1"
 url = "2.5.8"
 variant_count = "1.2.1"
 vfs = "0.13.0"
@@ -150,7 +150,10 @@ x25519-dalek = { version = "0.1.0", package = "x25519-dalek-fiat", default-featu
 z3tracer = "0.11.2"
 expect-test = "1.5.1"
 libc = "0.2.189"
-windows-sys = { version = "0.61.2", features = ["Win32_System_Threading", "Win32_Foundation"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
 
 bytecode-interpreter-crypto = { path = "crates/bytecode-interpreter-crypto" }
 enum-compat-util = { path = "crates/enum-compat-util" }
