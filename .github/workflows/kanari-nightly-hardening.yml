@@ -1,0 +1,68 @@
+name: Kanari Nightly State and Network Hardening
+
+on:
+  schedule:
+    - cron: "43 21 * * *"
+  workflow_dispatch:
+    inputs:
+      campaign_hours:
+        description: "Hours for repeated boundary/property campaign"
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  state-network-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      RUST_BACKTRACE: "1"
+      CAMPAIGN_HOURS: ${{ github.event.inputs.campaign_hours || '1' }}
+      KANARI_SMT_PROPTEST_CASES: "256"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: kanari-hardening-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            kanari-hardening-${{ runner.os }}-
+
+      - name: Run repeated BCS/RPC/object/consensus/SMT campaign
+        shell: pwsh
+        run: ./scripts/run-fuzz-campaign.ps1 -Hours ([int]$env:CAMPAIGN_HOURS) -Workers 2 -IncludeIgnoredLongRuns -SkipClippy
+
+      - name: Persistent SMT and storage tests
+        run: |
+          cargo test -p smt --all-targets
+          cargo test -p kanari-move-runtime-v1 --test state_tests compute_state_root_matches_materialized_sparse_root_for_rocksdb -- --test-threads=1
+          cargo test -p kanari-rpc-server rpc_adversarial_inputs_are_rejected_without_server_error -- --test-threads=1
+
+      - name: RustSec dependency audit (report-only)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --json > rustsec-audit.json
+
+      - name: Upload campaign logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kanari-nightly-hardening-logs
+          path: |
+            .codex-runlogs
+            target/**/build
+            rustsec-audit.json

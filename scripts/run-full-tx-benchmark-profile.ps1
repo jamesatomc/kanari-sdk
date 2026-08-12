@@ -4,6 +4,12 @@ param(
     [ValidateRange(2, 1000)]
     [int]$Wallets = 60,
 
+    [ValidateRange(1, 64)]
+    [int]$FanoutBatchSize = 64,
+
+    [ValidateRange(2, 1024)]
+    [int]$CoinReserveBuffer = 32,
+
     [Parameter(Mandatory = $true)]
     [string]$Password,
 
@@ -110,6 +116,8 @@ foreach ($target in $TxTargets) {
             -Amount $Amount `
             -FundSenders `
             -AutoCoinFanout `
+            -FanoutBatchSize $FanoutBatchSize `
+            -CoinReserveBuffer $CoinReserveBuffer `
             -P2pChannelCapacity $P2pChannelCapacity `
             -MaxConcurrentSyncMessages $MaxConcurrentSyncMessages `
             -ChaosRounds $ChaosRounds `

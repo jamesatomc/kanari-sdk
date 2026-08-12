@@ -58,7 +58,7 @@ categories = ["development-tools"]                                              
 keywords = ["blockchain", "sdk", "move", "rust", "ifps", "storage", "wallet", "framework"]     # Keywords for crates.io search.
 homepage = "https://kanarinetwork.site"                                                        # Project homepage.
 documentation = "https://docs.kanarinetwork.site"                                              # Link to project documentation.
-version = "0.2.5"                                                                              # Current version of the SDK.
+version = "0.2.6"                                                                              # Current version of the SDK.
 authors = ["Kanari Network"]                                                                   # Authors of the SDK.
 license = "Apache-2.0"                                                                         # License information.
 repository = "https://github.com/kanari-network/kanari-sdk"                                    # Link to the code repository.
@@ -74,7 +74,7 @@ description = "Kanari Network SDK"                                              
 tokio = { version = "1.53.1", features = ["full"] }
 rayon = "1.12.0"
 crossbeam-channel = "0.5.16"
-futures = "0.3.33"
+futures = "0.3.34"
 
 # ============================================================================
 # Networking & Communication
@@ -227,7 +227,7 @@ uuid = { version = "1.24.0", features = ["v4", "serde"] }
 # ============================================================================
 # Mathematics & Numerics
 # ============================================================================
-num-integer = { version = "0.1.46" }
+num-integer = { version = "0.1.47" }
 
 # ============================================================================
 # Compression & Data Optimization

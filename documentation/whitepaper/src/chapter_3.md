@@ -1,54 +1,39 @@
-## 3. MoveVM Execution Layer
+# 3. Move Execution and Object Model
 
-### 3.1 Why Move for Kanari
+## 3.1 Deterministic execution
 
-Kanari uses Move to express programmable state transitions with deterministic execution rules. This is useful for payment and asset workloads where ownership, balances, and module-level policy need to remain explicit.
+Move modules express typed resources and application state transitions. Ordered transactions execute deterministically and produce a changeset. Failed execution is atomic: no partial canonical state is accepted.
 
-### 3.2 Execution Model
+## 3.2 Owned and shared objects
 
-The execution path is intentionally simple:
+Independent owned-object transactions can be scheduled in parallel. Conflicting access sets, shared objects, and hot objects remain dependency-ordered. Object versions and digests prevent stale references from being reused.
 
-1. signed transactions enter the mempool
-2. ordered batches are selected for execution
-3. Move applies state changes deterministically
-4. committed effects are persisted into checkpoint history
+Native `Coin<KANARI>` inputs have strict runtime ownership. A mutable transfer coin must be distinct from the gas object, and a sender cannot mutate another owner's coin. DeFi objects may be passed explicitly across owners for escrow workflows; the Move contract must enforce buyer, seller, admin, and owner roles.
 
-Execution does not define consensus by itself. It consumes ordered work and produces state changes that can be verified and replayed.
+## 3.3 Gas metering
 
-### 3.3 Transaction-Driven Progress
+Gas accounts for bytecode, serialization, vectors, native calls, and value size. Native transfer, split, merge, burn, and gas adjustment paths share the same accounting and fail closed on overflow or insufficient balance.
 
-Kanari does not advance checkpoint height just because the network is alive. The Move layer participates only when there is real work to execute.
+## 3.4 Developer workflow
 
-Benefits of this model:
+Developers build and test Move packages, publish modules through the Kanari CLI, submit signed transactions through RPC, and inspect committed effects and object references.
 
-- no empty-checkpoint spam
-- clearer explorer semantics
-- state-root changes stay tied to actual transactions
+## 3.5 Access-set scheduling
 
-### 3.4 Performance Notes
+The scheduler classifies inputs as owned, shared, immutable, or gas objects. Independent owned-object transactions may run in parallel; transactions touching the same versioned object are ordered through a dependency lane. Parallel execution must remain equivalent to deterministic serial replay.
 
-Observed performance depends on:
+## 3.6 DeFi and escrow obligations
 
-- transaction mix
-- signer distribution
-- worker count
-- storage backend cost
-- state-root update strategy
+Runtime acceptance of a mutable object does not prove business authority. An escrow module must check buyer, seller, administrator, state transition, amount, and replay conditions on every public entry function. Tests must cover create, delivery, release, dispute, refund, and unauthorized cross-role calls.
 
-For that reason, benchmark numbers should always be published together with the exact command, code revision, and hardware profile used.
+## 3.7 Failure atomicity
 
-### 3.5 Developer Workflow
+Effects are staged as a changeset. Validation covers ownership, versions, duplicate mutable inputs, supply arithmetic, and gas. The applier commits an accepted set atomically from the perspective of canonical state; recovery must never expose a half-applied object graph.
 
-Typical development flow:
+## 3.8 Conflict rule
 
-```bash
-# Create or update a Move package
+For transactions `T_i` and `T_j`, parallel execution is valid only when their mutable access sets are disjoint:
 
-# Build modules
+`Mutable(T_i) ∩ Mutable(T_j) = ∅`
 
-# Run tests
-
-# Publish through the Kanari toolchain
-```
-
-Developers should treat the runtime as deterministic infrastructure, not as a source of synthetic chain activity.
+If the intersection is non-empty, the scheduler must impose a dependency order or reject the stale reference. This is a scheduling condition, not a replacement for Move-level authorization.

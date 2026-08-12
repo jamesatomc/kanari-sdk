@@ -3,7 +3,7 @@
   "info": {
     "title": "Kanari JSON-RPC",
     "description": "Kanari JSON-RPC API for interaction with kanari server.",
-    "version": "0.2.5",
+    "version": "0.2.6",
     "contact": {
       "name": "Kanari Network",
       "url": "https://kanarinetwork.site",

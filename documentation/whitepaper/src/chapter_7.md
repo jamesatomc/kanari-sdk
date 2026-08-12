@@ -1,47 +1,33 @@
-## 7. Roadmap & Conclusion
+# 7. Roadmap and Conclusion
 
-### 7.1 Current Engineering Priorities
+## 7.1 Near-term work
 
-The most important optimization areas are:
+1. Complete multi-hour and multi-day live validator soak with real wallets.
+2. Finish persistent 10K+ capacity campaigns after setup fanout is provisioned efficiently.
+3. Profile RocksDB compaction, flush, and write-stall behavior under sustained load.
+4. Expand nightly fuzz corpora for BCS/RPC, object authorization, consensus, and SMT.
+5. Audit every Move native and RPC build/submit path.
 
-- incremental state-root maintenance
-- reducing transaction cloning between execution and checkpoint paths
-- keeping checkpoint persistence compact
-- preserving deterministic replay and divergence visibility
+## 7.2 Longer-term work
 
-### 7.2 Operational Safety
+• migrate away from unmaintained dependencies where compatibility permits;
+• independently review PQC providers and signature batch verification;
+• add production metrics, alerting, backup verification, and operator runbooks;
+• add lane-specific schedulers for owned, shared, and hot objects;
+• add a streaming validator backup format with compatibility-preserving migration.
 
-Kanari should prefer explicit invariants over hidden automation. That means:
+## 7.3 Conclusion
 
-- do not generate checkpoints without transactions
-- do not hide state-root mismatches
-- do not treat sync traffic as committed execution
+Kanari keeps consensus, execution, storage, and application authorization explicit. The network advances only when real work is committed, and operators can verify that validators agree on state root and supply after failures. This supports continued testnet and product development while preserving an evidence-based path toward production readiness.
 
-These rules make debugging harder to ignore, but they keep the system honest.
+## 7.4 Release gates
 
-### 7.3 Performance Scaling
+A release candidate should have clean reproducible builds, migration tests for supported state and wallet formats, full unit/integration tests, adversarial RPC and Move authorization tests, four-node crash/restart convergence, persistent-load results with hardware metadata, dependency audit output, and an operator runbook. An unmet gate is recorded as a limitation, not hidden by a compatibility fallback.
 
-Performance work should be measured, not assumed. Useful benchmark reports include:
+## 7.5 Research directions
 
-- exact command line
-- validator count
-- sender distribution
-- CPU and RAM profile
-- workload mode
+Priorities include efficient owned-object batching, adaptive object lanes, streaming backup encryption, state-root batching with equivalence tests, ordering-fairness analysis, batch signature verification, and independently reviewed PQC providers. Each must preserve deterministic replay, supply conservation, and migration semantics.
 
-Without that context, a TPS number is only anecdotal.
+## 7.6 Closing statement
 
-### 7.4 Long-Term Direction
-
-The long-term goal is a payment-oriented programmable network with:
-
-- efficient execution
-- compact persistence
-- clear validator recovery behavior
-- observable state convergence
-
-### 7.5 Conclusion
-
-Kanari's current design is centered on one simple idea: blockchain state should move only when real user work is committed. Mysticeti-style ordering, Move execution, and explicit state-root comparison all serve that goal.
-
-That makes the system easier to reason about, easier to benchmark honestly, and easier to operate in a multi-node environment.
+Kanari should be evaluated like a distributed financial system: by invariants, adversarial tests, operational evidence, and independent review—not by a headline benchmark alone.

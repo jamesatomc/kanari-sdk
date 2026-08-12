@@ -1,58 +1,43 @@
-## 2 Architecture & Mysticeti Consensus
+# 2. Architecture and Consensus
 
-### 2.1 DAG Ordering in Kanari
+## 2.1 DAG and authority flow
 
-Kanari uses a Directed Acyclic Graph to exchange ordering metadata between authorities. DAG traffic helps validators agree on the order of work, but it does not directly define blockchain state.
+Authorities receive signed transactions, publish DAG vertices, exchange dependency references, and feed ordered work into execution. A vertex is consensus metadata; it is not itself a committed state transition.
 
-That distinction is intentional:
+The pipeline is: receive and validate; propagate and order; schedule object access sets; execute deterministic effects; apply and persist the changeset; then advance the checkpoint.
 
-- DAG sync must not create synthetic checkpoints
-- network liveness must not inflate blockchain height
-- state roots must come from executed transaction effects
+## 2.2 Safety invariants
 
-### 2.2 Mysticeti-Style Authority Flow
+- duplicate vertices cannot execute twice;
+- missing rounds trigger synchronization;
+- DAG traffic cannot create empty checkpoints;
+- a root mismatch at equal height is an observable divergence;
+- honest nodes converge on checkpoint height, root, and supply.
 
-The current implementation follows a Mysticeti-oriented authority model.
+## 2.3 Fault model
 
-At a high level:
+The design covers delayed, duplicated, reordered, and missing P2P messages, follower or leader termination, and multi-node restart. Byzantine safety still depends on an honest-validator quorum and deterministic execution.
 
-1. Authorities receive and propagate transactions.
-2. Validators exchange DAG vertices and dependency references.
-3. Ordered transaction batches move into execution.
-4. A checkpoint is finalized only if there are pending transactions to commit.
+## 2.4 Components
 
-This keeps consensus progress and state progress aligned without forcing empty blocks during quiet periods.
+`kanari-core` orchestrates execution and checkpoints. `kanari-node` provides startup, P2P, synchronization, and service wiring. `kanari-rpc-server` exposes validated APIs. `kanari-move-runtime-v1` applies Move state. `crates/smt` maintains canonical sparse roots.
 
-### 2.3 Checkpoint Invariants
+## 2.5 Protocol phases
 
-Kanari currently treats the following rules as architectural invariants:
+The normal path is: client signing; RPC decoding and admission; pending-queue intake; DAG proposal and synchronization; consensus ordering; Move execution; changeset validation and application; durable checkpoint persistence; and committed-result queries. Each phase has a separate error boundary and should expose latency and failure metrics.
 
-- no pending transactions means no new checkpoint
-- DAG metadata propagation alone must not advance chain height
-- nodes catching up from peers should replay committed work instead of inventing local progress
-- state roots at the same checkpoint height should converge across honest nodes
+## 2.6 Byzantine and failure assumptions
 
-These rules make explorer output and operator debugging much easier to trust.
+Safety depends on the configured Mysticeti-style quorum and deterministic commit rules. Liveness additionally depends on network delivery, available storage, and responsive authorities. A malicious validator may send conflicting or malformed messages, so author, round, parents, signatures, identity, and replay status must be checked before a vertex is injected.
 
-### 2.4 Security Model
+## 2.7 Limits of the claim
 
-Kanari assumes partial faults and Byzantine behavior are possible. Safety depends on deterministic execution and validator agreement on the ordered transaction set.
+A DAG does not automatically prove fairness, censorship resistance, or a particular finality time. Those properties require protocol-specific proofs and measurements. Kanari reports convergence evidence and treats latency and fairness improvements as engineering goals unless formally specified.
 
-Operationally this means:
+## 2.8 Consensus safety model
 
-- root mismatches at the same height are treated as real divergence signals
-- lagging nodes must resync from committed history
-- checkpoint persistence must reflect executed state, not transient consensus chatter
+For an authority set of size `n` and Byzantine bound `f`, the conventional quorum condition is:
 
-### 2.5 Component Overview
+`n >= 3f + 1` and `q = 2f + 1`
 
-The main runtime components are:
-
-- `kanari-core`: execution orchestration, checkpoint production, persistence, DAG integration
-- `kanari-node`: runtime startup, networking, synchronization, RPC bootstrapping
-- `kanari-rpc-api`: public method surface and shared RPC types
-- `kanari-rpc-server`: JSON-RPC handlers and query endpoints
-- `kanari-move-runtime-v1`: Move execution and state application
-- `crates/smt`: sparse Merkle tree support for state-root maintenance
-
-This separation lets Kanari optimize execution and storage without weakening the consensus model.
+Here `q` is the minimum commit support under the configured BFT protocol. This describes the deployment assumption; the exact commit rule remains defined by the implementation and protocol configuration.

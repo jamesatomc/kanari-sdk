@@ -1,218 +1,116 @@
-# Kanari Move Runtime - Object Management Improvements
+# Kanari Move Runtime v1: Object and State Management
 
-## 📋 Overview
+This document describes the current implementation in this crate. It replaces the older “object management improvements” note, which described an intermediate preload/borrow design and contained stale test counts and method locations.
 
-This document describes the improvements made to `kanari-move-runtime` for better object management through native function integration.
+## Scope
 
-**Latest Update**: Added support for both immutable (`borrow_global`) and mutable (`borrow_global_mut`) object access.
+The runtime has four distinct responsibilities:
 
-## ✅ Changes Made
+1. Execute Move bytecode and collect deterministic effects.
+2. Validate object references, ownership, versions, gas, and supply effects.
+3. Convert effects into a canonical `ChangeSet` and deterministic access manifest.
+4. Apply the accepted changeset to the state overlay, SMT, indexes, and persistent store.
 
-### 1. Enhanced Session Extensions (`mod.rs`)
+Object loading, Move VM resolution, object policy, state application, and persistence are related but are not the same layer.
 
-**File**: `src/move_runtime/mod.rs`
+## Current execution flow
 
-Added critical extensions to support proper object lifecycle management:
-
-```rust
-// Added to create_session_with_storage_ext()
-extensions.add(kanari_system_natives::object::LoadedObjectsExt::default());
-extensions.add(kanari_system_natives::object::BorrowedObjectsExt::default());
+```text
+Signed transaction
+  -> MoveRuntime session and resolver
+  -> Move VM execution
+  -> native object/gas/event extensions
+  -> ChangeSet (objects, modules, balances, fields, events, gas)
+  -> deterministic StateAccessSet
+  -> scheduler conflict decision
+  -> StateManager validation
+  -> apply changeset and supply checks
+  -> incremental SMT/root update
+  -> checkpoint/persistent commit
 ```
 
-**Purpose**:
+`ChangeSet` is the canonical boundary between VM execution and state mutation. A VM success is not a commit: the state manager still validates references, duplicate mutable inputs, ownership, gas overlap, arithmetic, and persistence invariants.
 
-- `LoadedObjectsExt`: Stores preloaded objects that can be accessed by `native_borrow_global` and `native_borrow_global_mut`
-- `BorrowedObjectsExt`: Tracks mutable borrows for proper writeback after execution
+## Object representation
 
-### 2. Object Preloading Mechanism (`helpers.rs`)
+Objects created by Move execution are represented by `CreatedObject` and may carry:
 
-**File**: `src/move_runtime/helpers.rs`
+- owner and `ObjectOwnerKind`;
+- optional `UIDRecord` for UID-shaped resources;
+- optional `IDRecord` for copyable IDs used by DeFi protocols;
+- Move type string;
+- serialized object data;
+- object version and derived digest/object reference.
 
-Helper function `preload_objects_for_execution()` enables both immutable and mutable object access:
+Deleted objects, explicit object changes, dynamic-field additions/removals, shared inputs, immutable inputs, gas references, and ordinary input objects are represented separately in the changeset. This separation prevents an index/query projection from being confused with canonical object state.
 
-```rust
-pub(crate) fn preload_objects_for_execution(
-    &self,
-    session: &mut Session<KanariMoveResolver>,
-    args: &[Vec<u8>],
-) -> anyhow::Result<()>
+## Ownership and authorization
+
+The runtime enforces infrastructure-level object safety: object references must be valid, versions/digests must match, mutable inputs must not be duplicated, and native KANARI transfer inputs cannot overlap the gas object. Coin ownership is checked by the runtime policy.
+
+Generic DeFi objects may be passed according to the protocol's object policy. That does not grant business authority. Move entry functions must independently check buyer, seller, admin, owner, lifecycle state, amount, and replay conditions. Escrow modules must test create, delivery, release, dispute, refund, and unauthorized cross-role calls.
+
+## Deterministic access scheduling
+
+`StateAccessSet` contains deterministic byte keys for reads and writes. It is derived from resolver reads and canonical effects, including objects, owner state, Move writes, dynamic-field fences, gas, and other state keys.
+
+Two transactions may execute in parallel only when no write/read or write/write conflict exists:
+
+```text
+Mutable(T_i) INTERSECT Mutable(T_j) = EMPTY_SET
 ```
 
-**Functionality**:
+The manifest is intentionally conservative. An unknown or unclassified write is fenced rather than treated as independent. This protects deterministic replay at the cost of possible parallelism.
 
-- Scans transaction arguments for potential object IDs (32-byte addresses)
-- Loads objects from `ObjectStorage` before VM execution
-- Populates `LoadedObjectsExt` so `native_borrow_global` and `native_borrow_global_mut` can find them
-- Enables proper object resolution during Move VM execution for both read and write operations
+## ChangeSet and failure atomicity
 
-**Integration Point**:
-Called in `execute_entry_function_internal()` right after session creation:
+The current `ChangeSet` carries owner deltas, native gas credits, events, treasury/NFT capability updates, absolute token balance sets, input/shared/immutable/gas references, created/deleted objects, explicit object changes, dynamic fields, Move writes, resolver-read metadata, gas usage, success, and an optional error.
 
-```rust
-let mut session = self.create_session_with_storage_ext(&vm_guard);
-self.preload_objects_for_execution(&mut session, &args)?;
+State application is staged. Validation must complete before canonical state is exposed. Failed execution or failed validation must not leave partial object writes, owner indexes, supply updates, or state-root changes.
+
+## State root and persistence
+
+The state manager maintains an overlay for speculative/buffered writes and applies canonical updates through the persistent store. The SMT update is incremental: changed leaves and affected paths are batched, then the effective root is checked before commit. Full root audits remain available for verification and recovery.
+
+The runtime persists schema/version markers, object/index state, supply metadata, and checkpoint-related data through `PersistentStore`/RocksDB. Recovery compares checkpoint height, canonical root, object/index consistency, and native supply. Derived caches may be rebuilt; they must not silently redefine canonical state.
+
+## Supply invariant
+
+Native operations must preserve:
+
+```text
+total_supply
+  = circulating_supply
+  + object_locked_supply
+  + untracked_supply
 ```
 
-## 🎯 Benefits
+Correctly tracked mint, burn, transfer, split, merge, gas, and escrow operations finish with `untracked_supply = 0`. Overflow, underflow, stale object state, malformed indexes, or inconsistent treasury data fail closed.
 
-### 1. Proper Native Function Integration
+## Gas
 
-- `native_borrow_global` and `native_borrow_global_mut` now have access to preloaded objects
-- Objects are resolved through proper extension mechanism instead of manual loading
-- Follows Move VM architecture patterns
+`KanariGasMeter` charges runtime work such as bytecode, serialization, vectors, native calls, and value-size-dependent operations. The meter is a computation/DoS boundary; payment-object selection and native supply accounting are validated separately. Gas price or zero-price development configuration does not remove execution, storage, or recovery cost.
 
-### 2. Cleaner Architecture
+## Testing map
 
-- Separates object loading from execution logic
-- Uses extension pattern consistently across the runtime
-- Makes code more maintainable and testable
+Tests are organized by behavior rather than by the former preload implementation:
 
-### 3. Better Mutable Reference Tracking
+- `tests/unit/state_tests.rs`: state application, roots, supply, and recovery behavior;
+- `tests/unit/changeset_tests.rs`: changeset and access-manifest behavior;
+- `tests/unit/object_ops_tests.rs`: object operation and policy cases;
+- `tests/unit/object_storage_tests.rs`: object persistence and lookup;
+- `tests/unit/scheduler_tests.rs`: deterministic conflict scheduling;
+- `tests/state_persistence.rs`: persistent state/restart behavior;
+- `tests/state_root_module_commitment.rs`: root/module commitment behavior;
+- `tests/repro_inflation.rs` and `tests/test_mint_consolidation.rs`: supply regressions;
+- dynamic-field/object-field and publish/upgrade tests: cross-transaction and module lifecycle behavior.
 
-- `BorrowedObjectsExt` tracks all mutable borrows
-- Enables proper writeback handling after execution
-- Reduces risk of state inconsistencies
+Run the crate's current tests instead of relying on a hard-coded historical test count:
 
-### 4. Improved Debugging
-
-- Added debug logging for object preloading
-- Easier to trace object lifecycle through extensions
-- Better visibility into what objects are loaded
-
-## 🔧 Technical Details
-
-### Object Loading Flow (Before)
-
-```md
-Transaction Args → Manual ObjectStorage Lookup → Direct Data Injection
+```text
+cargo test -p kanari-move-runtime-v1 --tests -- --test-threads=2
 ```
 
-### Object Loading Flow (After)
+## Known boundaries
 
-```md
-Transaction Args → Preload to LoadedObjectsExt → native_borrow_global/borrow_global_mut Resolution
-```
-
-### Extension Lifecycle
-
-1. **Session Creation**: All extensions initialized (`LoadedObjectsExt`, `BorrowedObjectsExt`)
-2. **Preloading**: Objects loaded into `LoadedObjectsExt` before execution
-3. **Execution**:
-   - VM calls `native_borrow_global()` for immutable access
-   - VM calls `native_borrow_global_mut()` for mutable access
-   - Both read from `LoadedObjectsExt`
-   - Mutable borrows tracked in `BorrowedObjectsExt`
-4. **Post-Execution**:
-   - Extract `saved_objects` from `SavedObjectsExt`
-   - Extract `borrowed_objects` from `BorrowedObjectsExt` ← NEW!
-   - Process all modified objects and update ChangeSet
-   - Persist changes to ObjectStorage
-
-### Data Structures
-
-#### BorrowedObject Struct
-
-```rust
-#[derive(Clone, Debug)]
-pub struct BorrowedObject {
-    pub object_id: String,      // Hex-encoded object ID (0x...)
-    pub object_type: String,    // Move type tag (e.g., "0x1::coin::Coin<...>")
-    pub data: Vec<u8>,          // BCS-serialized object data
-}
-```
-
-**Purpose**: Tracks objects that were modified through `borrow_global_mut()` during execution.
-
-**Usage**: After VM execution, the runtime extracts all borrowed objects and processes them similarly to saved objects, ensuring proper state persistence.
-
-#### Comparison: SavedObject vs BorrowedObject
-
-| Feature | SavedObject | BorrowedObject |
-|---------|-------------|----------------|
-| Source | Explicit `save_object()` call | Implicit via `borrow_global_mut()` |
-| Tracking | `SavedObjectsExt` | `BorrowedObjectsExt` |
-| Use Case | Manual save after modification | Automatic tracking of mutable borrows |
-| Processing | Post-execution writeback | Post-execution writeback |
-
-## 📊 Testing
-
-All existing tests pass without modification:
-
-- ✅ 8 unit tests
-- ✅ 1 publish/upgrade test  
-- ✅ 5 inflation reproduction tests
-- ✅ 7 mint consolidation tests
-
-**Total**: 21/21 tests passing
-
-## 🚀 Future Improvements
-
-### Phase 2: Simplify Mutable Reference Handling
-
-- Leverage `BorrowedObjectsExt` for automatic writeback
-- Reduce manual tracking in `loaded_mutable_objects` vector
-- Extract coin auto-merge logic to separate module
-
-### Phase 3: Performance Optimization
-
-- Batch object preloading for multiple transactions
-- Cache frequently accessed objects
-- Add metrics for object loading performance
-
-### Phase 4: Enhanced Error Handling
-
-- Better error messages when object loading fails
-- Validation of object ownership before execution
-- Graceful degradation when objects not found
-
-## 📝 Migration Notes
-
-### For Developers
-
-- No API changes - all modifications are internal
-- Existing Move modules work without changes
-- CLI and SDK interfaces remain unchanged
-
-### For Testing
-
-- All existing tests pass without modification
-- New tests can leverage `LoadedObjectsExt` for object setup
-- Consider adding tests for edge cases in object preloading
-
-## 🔍 Debugging Tips
-
-### Enable Debug Logging
-
-```bash
-export RUST_LOG=debug
-cargo run -p kanari-node start
-```
-
-### Key Log Messages
-
-- `[RUNTIME] Preloaded object {id} into LoadedObjectsExt` - Object successfully preloaded
-- Check for missing preloads if `native_borrow_global_mut` fails
-
-### Common Issues
-
-1. **Object Not Found**: Ensure object exists in ObjectStorage before transaction
-2. **Type Mismatch**: Verify object type matches expected type in Move function
-3. **Ownership Violation**: Check that sender owns or has access to object
-
-## 📚 Related Documentation
-
-- [`native_borrow_global_mut` Implementation](../../crates/kanari-system-natives/src/object.rs)
-- [Object Storage Architecture](./ER_DIAGRAM.md)
-- [Move Runtime Extensions](./src/move_runtime/move_runtime_extensions.rs)
-
-## ✨ Summary
-
-These improvements lay the foundation for proper object management in Kanari Move Runtime by:
-
-1. Integrating native functions with extension system
-2. Preloading objects before execution
-3. Tracking mutable borrows for proper writeback
-4. Maintaining backward compatibility
-
-The changes make the runtime more robust, maintainable, and aligned with Move VM best practices.
+The runtime cannot infer application-level authorization for every arbitrary Move type. Streaming backup encryption, long-running fuzzing, multi-day persistent chaos, and independent security review remain operational/research work. Performance depends on object contention, signature scheme, storage backend, checkpoint policy, and workload shape.

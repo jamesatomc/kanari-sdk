@@ -142,7 +142,7 @@ url = "2.5.8"
 variant_count = "1.2.1"
 vfs = "0.13.0"
 walkdir = "2.5.0"
-whoami = { version = "2.1.2" }
+whoami = { version = "2.1.3" }
 x25519-dalek = { version = "0.1.0", package = "x25519-dalek-fiat", default-features = false, features = [
     "std",
     "u64_backend",

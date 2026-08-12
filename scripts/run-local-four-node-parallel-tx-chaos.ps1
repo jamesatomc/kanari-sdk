@@ -26,8 +26,11 @@ param(
     [ValidateRange(1, 1000000)]
     [int]$FaucetCoinsPerSender = 2,
 
-    # `pay::split_vec` is deliberately capped below the Move transaction gas
-    # budget.  This is still 64x fewer setup transactions than faucet-per-coin.
+    [ValidateRange(2, 1024)]
+    [int]$CoinReserveBuffer = 32,
+
+    # Keep this below the Move gas budget. Larger batches are rejected before
+    # commit by `pay::split_vec`; 64 is the largest production-safe batch.
     [ValidateRange(1, 64)]
     [int]$FanoutBatchSize = 64,
 
@@ -167,7 +170,9 @@ if ($FundSenders) {
     }
     # Reserve a disjoint transfer/gas pair for every transaction. This avoids
     # false node-stall results when a prior mutable object version is delayed.
-    $requiredCoinFanout = (2 * $CountPerSender) + 2
+    # Two objects per transaction (transfer + gas), plus a small reserve for
+    # gas/object bookkeeping consumed while the funding fanout commits.
+    $requiredCoinFanout = (2 * $CountPerSender) + $CoinReserveBuffer
     if ($AutoCoinFanout -and $FaucetCoinsPerSender -lt $requiredCoinFanout) {
         Write-Host "AutoCoinFanout adjusted FaucetCoinsPerSender from $FaucetCoinsPerSender to $requiredCoinFanout for CountPerSender=$CountPerSender"
         $FaucetCoinsPerSender = $requiredCoinFanout

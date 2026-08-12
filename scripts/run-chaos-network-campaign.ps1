@@ -30,6 +30,9 @@ param(
     [ValidateRange(1, 64)]
     [int]$FanoutBatchSize = 64,
 
+    [ValidateRange(2, 1024)]
+    [int]$CoinReserveBuffer = 32,
+
     [ValidateRange(30, 7200)]
     [int]$LaneTimeoutSec = 900,
 
@@ -139,6 +142,7 @@ while ((Get-Date) -lt $deadline) {
         -FaucetAmount 1 `
         -FaucetCoinsPerSender $FaucetCoinsPerSender `
         -FanoutBatchSize $FanoutBatchSize `
+        -CoinReserveBuffer $CoinReserveBuffer `
         -LaneTimeoutSec $LaneTimeoutSec `
         -FundingCommitTimeoutSec $FundingCommitTimeoutSec `
         -AutoCoinFanout:$AutoCoinFanout `
