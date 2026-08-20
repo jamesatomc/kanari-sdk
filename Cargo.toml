@@ -31,7 +31,6 @@ members = [
       "crates/kanari-rpc-server",
       "crates/kanari-rpc-loadgen",
       "crates/kanari-faucet",
-      "packages/kanari_flutter/rust",
       "crates/kanari-core",
       "crates/smt",
       "crates/kanari-benchmarks", 
@@ -47,6 +46,10 @@ members = [
 
       # move-execution
       "move-execution/v1/kanari-move-runtime-v1",
+
+      # libraries mobile and desktop apps can use to interact with the kanari-sdk
+      "packages/kanari_flutter/rust",
+      "packages/kanari-kotlin",
 ]
 
 
@@ -148,7 +151,7 @@ primitive-types = { version = "0.14.0", default-features = true }               
 # ============================================================================
 ml-dsa = { version = "0.1.1", features = ["zeroize"] }                              # Pure Rust FIPS 204 ML-DSA signatures
 slh-dsa = { version = "0.2.0-rc.5", features = ["zeroize"] }                        # Pure Rust FIPS 205 SLH-DSA signatures
-falcon = { package = "falcon-rs", version = "0.2.4", features = ["std"] }           # Pure Rust FIPS 206 FN-DSA/Falcon signatures
+falcon = { package = "falcon-rs", version = "0.2.5", features = ["std"] }           # Pure Rust FIPS 206 FN-DSA/Falcon signatures
 
 # ============================================================================
 # Memory Security & Timing Attack Prevention
@@ -161,7 +164,7 @@ fs2 = "0.4.3"                                                                   
 # ============================================================================
 # Database & Persistent Storage
 # ============================================================================
-rocksdb = "0.24.0"                                                                  # High-performance embedded DB
+rocksdb = "0.25.0"                                                                  # High-performance embedded DB
 zstd = "0.13.3"                                                                     # Compression for storage/network
 
 # ============================================================================

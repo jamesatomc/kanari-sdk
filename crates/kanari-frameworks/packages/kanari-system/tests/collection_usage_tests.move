@@ -151,7 +151,7 @@ module kanari_system::collection_usage_tests {
         let ctx = &mut tx_context::dummy();
         let denylist = deny_list::new_denylist();
         let denylist_ref = &mut denylist;
-        let cap = deny_list::new_denycap<u64>(ctx);
+        let cap = deny_list::new_denycap_for_testing<u64>(ctx);
 
         deny_list::deny_list_add<u64>(denylist_ref, &cap, @0x1, ctx);
         deny_list::deny_list_add<u64>(denylist_ref, &cap, @0x2, ctx);

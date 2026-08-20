@@ -20,9 +20,14 @@ use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use kanari_rpc_api::BuildCallFunctionRequest;
 use kanari_rpc_client::RpcClient;
-use kanari_types::gas_coin::GAS_COIN;
+use kanari_types::transaction::{ObjectInput, ObjectRef};
+use kanari_types::{coin::CoinModule, gas_coin::GAS_COIN};
 use move_core_types::account_address::AccountAddress;
 use std::time::Duration;
+
+fn native_coin_balance(data: &[u8]) -> Option<u64> {
+    CoinModule::read_balance(data)
+}
 
 #[derive(Parser, Debug)]
 pub struct Fanout {
@@ -80,11 +85,10 @@ impl Fanout {
             .into_iter()
             .filter(|object| object.type_ == native_coin_type)
             .filter_map(|object| {
-                let balance = object
-                    .data
-                    .get(object.data.len().checked_sub(8)?..)
-                    .and_then(|bytes| bytes.try_into().ok())
-                    .map(u64::from_le_bytes)?;
+                // Coin<T> is a structured BCS value.  Its balance is not the
+                // trailing eight bytes (the UID occupies the tail), so always
+                // use the canonical parser shared with the RPC server.
+                let balance = native_coin_balance(&object.data)?;
                 Some((object, balance))
             })
             .filter(|(_, balance)| *balance >= total_mist)
@@ -93,6 +97,20 @@ impl Fanout {
             .context("no native coin object can fund this fanout")?;
         let source_object_id = AccountAddress::from_hex_literal(&normalize_addr(&source.id)?)
             .context("failed to encode source coin object id")?;
+        // `split_vec` receives its source as `&mut Coin<T>`.  Supplying the
+        // complete object reference is required here: relying on the RPC
+        // builder to infer an input from the raw 32-byte ID is ambiguous when
+        // module metadata is unavailable.  Without it the VM attempts to
+        // deserialize the ID as a Coin value and rejects the transaction.
+        let source_input = ObjectInput {
+            object_ref: ObjectRef::new(
+                source.id.clone(),
+                Some(source.version),
+                source.digest.clone(),
+            ),
+            owner: Some(source.owner_kind.clone()),
+            mutable: true,
+        };
 
         eprintln!(
             "Fanout: creating {} owned Coin<KANARI> object(s), {} Mist each ({} Mist total)",
@@ -106,7 +124,7 @@ impl Fanout {
                 function: "split_vec".to_string(),
                 type_args: vec![GAS_COIN.to_string()],
                 args: vec![source_object_id.to_vec(), bcs::to_bytes(&amounts)?],
-                object_inputs: None,
+                object_inputs: Some(vec![source_input]),
                 gas_limit,
                 gas_price,
                 nonce: None,
@@ -139,5 +157,20 @@ impl Fanout {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_coin_balance;
+
+    #[test]
+    fn reads_the_canonical_coin_balance_not_trailing_object_bytes() {
+        let expected = 168_000_000_000u64;
+        let mut object = vec![0u8; 72];
+        object[32..40].copy_from_slice(&expected.to_le_bytes());
+        object[64..72].copy_from_slice(&1u64.to_le_bytes());
+
+        assert_eq!(native_coin_balance(&object), Some(expected));
     }
 }

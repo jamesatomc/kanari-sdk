@@ -2,6 +2,7 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
 /// Simple trait used for pretty printing the various AST
 ///
 /// Unfortunately, the trait implementation cannot be derived. The actual implementation should

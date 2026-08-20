@@ -221,7 +221,7 @@ impl SyncManager {
             }
             P2PMessage::NewDagVertex(vertex_data) => {
                 debug!("[P2P] Received NewDagVertex");
-                self.handle_new_dag_vertex(vertex_data);
+                self.handle_new_dag_vertex(vertex_data).await;
             }
             P2PMessage::DagVertexRebroadcast(msg) => {
                 if msg.sender_peer_id != authenticated_peer_id {
@@ -235,7 +235,7 @@ impl SyncManager {
                     "[P2P] Received DagVertexRebroadcast from {}",
                     msg.sender_peer_id
                 );
-                self.handle_new_dag_vertex(msg.vertex_data);
+                self.handle_new_dag_vertex(msg.vertex_data).await;
             }
             P2PMessage::DagVertexRequest(req) => {
                 if req.requester_peer_id != authenticated_peer_id {
@@ -264,7 +264,7 @@ impl SyncManager {
                     resp.responder_peer_id,
                     resp.vertex_data.len()
                 );
-                self.handle_dag_vertex_response(resp);
+                self.handle_dag_vertex_response(resp).await;
             }
             P2PMessage::CheckpointRequest(sequence, timestamp) => {
                 info!("[P2P] Received CheckpointRequest for sequence {}", sequence);
@@ -379,7 +379,13 @@ impl SyncManager {
         vertex_data
     }
 
-    fn queue_dag_vertex_request(&self, parent_round: u64, timestamp: u64, context: &str) -> bool {
+    fn queue_dag_vertex_request_with_limit(
+        &self,
+        parent_round: u64,
+        limit: usize,
+        timestamp: u64,
+        context: &str,
+    ) -> bool {
         if !self.should_request_dag_vertices_for_round(parent_round, timestamp) {
             return false;
         }
@@ -389,8 +395,17 @@ impl SyncManager {
                 requester_peer_id: self.local_peer_id.clone(),
                 parent_round,
                 timestamp,
-                limit: NodeRuntimeConfig::dag_vertices_per_response() as u64,
+                limit: limit.clamp(1, NodeRuntimeConfig::dag_vertices_max_response()) as u64,
             }),
+            context,
+        )
+    }
+
+    fn queue_dag_vertex_request(&self, parent_round: u64, timestamp: u64, context: &str) -> bool {
+        self.queue_dag_vertex_request_with_limit(
+            parent_round,
+            NodeRuntimeConfig::dag_vertices_per_response(),
+            timestamp,
             context,
         )
     }
@@ -469,7 +484,7 @@ impl SyncManager {
 
     fn handle_dag_vertex_request(&self, request: DagVertexRequestMsg) {
         let limit =
-            (request.limit as usize).clamp(1, NodeRuntimeConfig::dag_vertices_per_response());
+            (request.limit as usize).clamp(1, NodeRuntimeConfig::dag_vertices_max_response());
         let vertices = match self
             .engine
             .dag_vertices_through_round_for_sync(request.parent_round, limit)
@@ -508,7 +523,7 @@ impl SyncManager {
         );
     }
 
-    fn handle_dag_vertex_response(&self, response: DagVertexResponseMsg) {
+    async fn handle_dag_vertex_response(&self, response: DagVertexResponseMsg) {
         let mut vertices = response
             .vertex_data
             .into_iter()
@@ -521,9 +536,10 @@ impl SyncManager {
                 .then_with(|| left.id.cmp(&right.id))
         });
         for vertex in vertices {
-            self.handle_dag_vertex(vertex);
+            self.handle_dag_vertex(vertex).await;
         }
         self.request_missing_buffered_dag_parents();
+        self.try_apply_buffered_checkpoints().await;
     }
 
     fn request_missing_buffered_dag_parents(&self) {
@@ -532,7 +548,15 @@ impl SyncManager {
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        let missing_rounds = match self.engine.dag_missing_parent_rounds_for_sync(&buffered) {
+        self.request_missing_dag_parent_rounds(&buffered);
+    }
+
+    /// Ask for the closest missing DAG ancestry page needed by the supplied
+    /// evidence. Checkpoint evidence may be queued by Mysticeti while its
+    /// parents are recovered, so it shares the same repair path as an
+    /// out-of-order gossip vertex.
+    fn request_missing_dag_parent_rounds(&self, vertices: &[DagVertex]) {
+        let missing_rounds = match self.engine.dag_missing_parent_rounds_for_sync(vertices) {
             Ok(rounds) => rounds,
             Err(error) => {
                 debug!("[DAG SYNC] Cannot inspect buffered parent gaps: {}", error);
@@ -552,6 +576,36 @@ impl SyncManager {
             debug!(
                 "[DAG SYNC] Requested next missing checkpoint ancestry page through round {}",
                 parent_round
+            );
+        }
+    }
+
+    /// Recover the DAG frontier that proves a checkpoint is committable.
+    ///
+    /// Mysticeti may need vertices from rounds after the checkpoint roots to
+    /// derive the commit decision. A parent-only repair is therefore
+    /// insufficient after restart: every direct parent can be present while
+    /// the local DAG still lacks the later quorum evidence. Requesting a
+    /// bounded page through a small future frontier lets the responder return
+    /// both the roots and their commit proof, while the existing per-round
+    /// cooldown prevents request amplification.
+    fn request_checkpoint_commit_proof(&self, vertices: &[DagVertex]) {
+        self.request_missing_dag_parent_rounds(vertices);
+
+        let Some(highest_evidence_round) = vertices.iter().map(|vertex| vertex.round).max() else {
+            return;
+        };
+        let proof_round = highest_evidence_round.saturating_add(3);
+        let timestamp = Self::current_timestamp();
+        if self.queue_dag_vertex_request_with_limit(
+            proof_round,
+            NodeRuntimeConfig::dag_vertices_max_response(),
+            timestamp,
+            "[DAG SYNC] Failed to queue checkpoint commit-proof request",
+        ) {
+            info!(
+                "[DAG SYNC] Requested checkpoint commit proof through round {}",
+                proof_round
             );
         }
     }
@@ -625,6 +679,18 @@ impl SyncManager {
             buffer.remove(&next_sequence);
         }
         next_candidate
+    }
+
+    fn requeue_checkpoint_candidate_front(&self, candidate: BufferedCheckpointCandidate) {
+        let sequence = candidate.checkpoint.checkpoint.sequence;
+        let mut buffer = self.checkpoint_buffer_guard();
+        buffer.entry(sequence).or_default().push_front(candidate);
+    }
+
+    fn checkpoint_waits_for_dag_evidence(error: &anyhow::Error) -> bool {
+        error
+            .to_string()
+            .contains("has not been committed by the local Mysticeti DAG")
     }
 
     fn best_peer_for_height(&self, height: u64) -> Option<String> {
@@ -1035,7 +1101,7 @@ impl SyncManager {
             let next_candidate = self.pop_next_buffer_candidate(next_sequence);
 
             if let Some(candidate) = next_candidate {
-                let checkpoint = candidate.checkpoint;
+                let checkpoint = candidate.checkpoint.clone();
                 info!(
                     "[SYNC] Found checkpoint #{} in buffer, attempting to apply. (current height: {})",
                     checkpoint.checkpoint.sequence, stats.height
@@ -1056,6 +1122,20 @@ impl SyncManager {
                         );
                     }
                     Err(e) => {
+                        if Self::checkpoint_waits_for_dag_evidence(&e) {
+                            // The checkpoint is valid but its signed DAG
+                            // evidence is not committable yet. Keep it until
+                            // ancestry recovery advances the local DAG;
+                            // dropping it here caused repeated requests and
+                            // slow recovery after restart.
+                            warn!(
+                                "[SYNC] Checkpoint #{} is waiting for local DAG evidence; retaining it for retry.",
+                                checkpoint.checkpoint.sequence
+                            );
+                            self.request_checkpoint_commit_proof(&checkpoint.dag_vertices);
+                            self.requeue_checkpoint_candidate_front(candidate);
+                            break;
+                        }
                         let has_more_candidates = {
                             let buffer = self.checkpoint_buffer_guard();
                             buffer
@@ -1128,16 +1208,16 @@ impl SyncManager {
         }
     }
 
-    fn handle_new_dag_vertex(&self, vertex_data: String) {
+    async fn handle_new_dag_vertex(&self, vertex_data: String) {
         // DAG vertices are serialized as kanari_core::DagVertex,
         // not as the higher-level block metadata wrapper.
 
         if let Some(vertex) = Self::parse_message::<DagVertex>(&vertex_data, "DAG vertex") {
-            self.handle_dag_vertex(vertex);
+            self.handle_dag_vertex(vertex).await;
         }
     }
 
-    fn handle_dag_vertex(&self, vertex: DagVertex) {
+    async fn handle_dag_vertex(&self, vertex: DagVertex) {
         debug!(
             "Received DAG vertex {} (round {}) from network with {} transactions",
             hex::encode(vertex.id),
@@ -1151,7 +1231,15 @@ impl SyncManager {
                     "Successfully added DAG vertex {} to local consensus",
                     hex::encode(vertex.id)
                 );
+                // BlockManager accepts an out-of-order vertex into its pending
+                // set without returning an error.  It still needs its direct
+                // parents before Mysticeti can advance the commit frontier.
+                // Repairing only vertices that produced an error leaves this
+                // accepted-but-pending path stranded after a restart.
+                self.request_missing_dag_parent_rounds(std::slice::from_ref(&vertex));
                 self.retry_buffered_dag_vertices();
+                self.request_missing_buffered_dag_parents();
+                self.try_apply_buffered_checkpoints().await;
             }
             Err(e) => {
                 let error_text = e.to_string();

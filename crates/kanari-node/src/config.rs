@@ -24,6 +24,14 @@ impl NodeRuntimeConfig {
         env_usize_clamped("KANARI_DAG_VERTICES_PER_RESPONSE", 8, 1, 64)
     }
 
+    /// Absolute responder-side bound for authenticated DAG repair replies.
+    /// Ordinary repair stays at `dag_vertices_per_response`; checkpoint
+    /// recovery may request a larger bounded page to include a full quorum
+    /// commit frontier after a restart.
+    pub(crate) fn dag_vertices_max_response() -> usize {
+        env_usize_clamped("KANARI_DAG_VERTICES_MAX_RESPONSE", 64, 1, 64)
+    }
+
     pub(crate) fn p2p_max_inflight_chunked_payloads() -> usize {
         env_usize_clamped("KANARI_P2P_MAX_INFLIGHT_CHUNKED_PAYLOADS", 16, 1, 256)
     }

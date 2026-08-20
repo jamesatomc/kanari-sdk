@@ -417,11 +417,18 @@ impl MysticetiBackend {
                 &self.core.verifier(),
             )
             .map_err(|e| anyhow::anyhow!("Invalid canonical Mysticeti block: {e}"))?;
-        let processed = self.core.add_blocks(vec![block]);
-        anyhow::ensure!(
-            !processed.is_empty(),
-            "Missing parent(s), duplicate, or unprocessable Mysticeti block"
-        );
+        // `Core::add_blocks` deliberately returns an empty list when this is a
+        // duplicate *or* when it accepts the block into Mysticeti's own pending
+        // dependency queue.  The latter is normal during unordered gossip and
+        // recovery: `BlockManager` retains the block and automatically applies
+        // it when its parents arrive.  Treating that accepted pending state as
+        // an error made the outer sync layer keep a second buffer and repeatedly
+        // re-inject the same vertices, which can starve checkpoint recovery.
+        //
+        // Validation above still rejects malformed or unauthenticated blocks;
+        // from this point onward the core owns deduplication and ancestry
+        // resolution.
+        let _processed = self.core.add_blocks(vec![block]);
         Ok(())
     }
 

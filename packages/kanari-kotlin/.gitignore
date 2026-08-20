@@ -1,0 +1,14 @@
+# Rust build output
+target/
+**/*.rs.bk
+
+# Android
+android/.gradle/
+android/**/build/
+android/local.properties
+android/**/.cxx/
+android/kanari-crypto/src/main/jniLibs/**/*.so
+
+# IDE
+.idea/
+*.iml

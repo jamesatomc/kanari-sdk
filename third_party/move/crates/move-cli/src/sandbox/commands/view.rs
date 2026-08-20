@@ -2,6 +2,7 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
 use crate::sandbox::utils::{is_bytecode_file, on_disk_state_view::OnDiskStateView};
 
 use anyhow::{Result, bail};

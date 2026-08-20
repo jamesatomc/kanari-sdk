@@ -77,7 +77,6 @@ fn test_function_names_are_accessible() {
 
     let coin_fns = coin::CoinModule::function_names();
     assert_eq!(coin_fns.create_currency, "create_currency");
-    assert_eq!(coin_fns.treasury_into_supply, "treasury_into_supply");
 
     let transfer_fns = transfer::TransferModule::function_names();
     assert_eq!(transfer_fns.create_transfer, "create_transfer");

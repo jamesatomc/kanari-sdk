@@ -88,6 +88,44 @@ fn test_retry_cooldown_throttles_rapid_duplicate_checkpoint_request() {
 }
 
 #[test]
+fn checkpoint_waiting_for_dag_evidence_is_retained_for_retry() {
+    let sync = new_sync_manager();
+    let prev_hash = {
+        let chain = sync
+            .engine
+            .blockchain
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        chain.latest_checkpoint().hash().unwrap()
+    };
+    let candidate = BufferedCheckpointCandidate {
+        checkpoint: CheckpointSyncData {
+            checkpoint: Checkpoint::new(1, vec![], vec![], vec![0u8; 32], 1, prev_hash),
+            dag_vertices: Vec::new(),
+        },
+        source_peer_id: Some("peer-1".to_string()),
+    };
+
+    sync.requeue_checkpoint_candidate_front(candidate);
+    assert_eq!(
+        sync.pop_next_buffer_candidate(1)
+            .expect("checkpoint must remain available for retry")
+            .checkpoint
+            .checkpoint
+            .sequence,
+        1
+    );
+    assert!(SyncManager::checkpoint_waits_for_dag_evidence(
+        &anyhow::anyhow!(
+            "Checkpoint #1 has not been committed by the local Mysticeti DAG; apply its signed DAG evidence first."
+        )
+    ));
+    assert!(!SyncManager::checkpoint_waits_for_dag_evidence(
+        &anyhow::anyhow!("checkpoint state root mismatch")
+    ));
+}
+
+#[test]
 fn test_dag_vertex_buffer_deduplicates_by_vertex_id() {
     let sync = new_sync_manager();
     let vertex = test_dag_vertex(10, "peer-a");

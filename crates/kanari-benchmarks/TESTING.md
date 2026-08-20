@@ -115,3 +115,18 @@ cargo test -p kanari-benchmarks production_soak_test -- --ignored --nocapture
 ```
 
 For a 72-hour run, set `KANARI_SOAK_SECONDS=259200`.
+
+## Persistent RocksDB Profile
+
+Use the dedicated runner before making storage performance claims. It executes
+the full production workload against a temporary RocksDB store and records
+memtable, L0, pending-compaction, flush, compaction, and write-stall metrics:
+
+```powershell
+.\scripts\run-persistent-rocksdb-benchmark-profile.ps1 -Transactions 10000 -Senders 10000
+```
+
+The command intentionally does not set a TPS target: disk throughput depends on
+the machine and storage configuration. Treat a nonzero `total-stops`,
+`total-delays`, `compaction-pending`, or `estimate-pending-compaction-bytes` as
+a signal to investigate the RocksDB configuration and workload before release.

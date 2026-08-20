@@ -2,6 +2,7 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
 use crate::{DEFAULT_BUILD_DIR, DEFAULT_STORAGE_DIR};
 
 use move_command_line_common::{

@@ -18,7 +18,15 @@ param(
     [int]$Count,
 
     [Parameter(Mandatory = $true)]
-    [string]$Rpc
+    [string]$Rpc,
+
+    # Alternate replicas for transport-only failover. Transaction validation
+    # errors are never retried through a different endpoint.
+    # Comma-separated so Start-Process forwards it as one argument on Windows.
+    [string]$RpcFallbackCsv = '',
+
+    [ValidateRange(20, 7200)]
+    [int]$CommitTimeoutSec = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,14 +36,23 @@ if ([string]::IsNullOrWhiteSpace($password)) {
     throw 'KANARI_LOAD_PASSWORD is required.'
 }
 
-& $KanariExe `
-    client `
-    stress-test `
-    --from $Sender `
-    --to $Recipient `
-    --amount $Amount `
-    --count $Count `
-    --rpc $Rpc `
-    -p $password
+$arguments = @(
+    'client',
+    'stress-test',
+    '--from', $Sender,
+    '--to', $Recipient,
+    '--amount', $Amount,
+    '--count', $Count,
+    '--commit-timeout-sec', $CommitTimeoutSec,
+    '--rpc', $Rpc,
+    '-p', $password
+)
+foreach ($endpoint in ($RpcFallbackCsv -split ',')) {
+    if (-not [string]::IsNullOrWhiteSpace($endpoint) -and $endpoint -ne $Rpc) {
+        $arguments += @('--rpc-fallback', $endpoint)
+    }
+}
+
+& $KanariExe @arguments
 
 exit $LASTEXITCODE

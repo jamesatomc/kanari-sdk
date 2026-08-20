@@ -5,6 +5,7 @@
 //! Adapted from control_flow_graph for Bytecode, this module defines the control-flow graph on
 //! Stackless Bytecode used in analysis as part of Move prover.
 
+#![allow(clippy::print_stdout)]
 use crate::{
     function_target::FunctionTarget,
     stackless_bytecode::{Bytecode, Label},

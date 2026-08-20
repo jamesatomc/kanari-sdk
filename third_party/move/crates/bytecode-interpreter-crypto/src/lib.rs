@@ -14,8 +14,8 @@
 
 use anyhow::{Result, bail};
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH, PublicKey as Ed25519PublicKey,
-    SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH, Signature as Ed25519Signature,
+    PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
+    Signature as Ed25519Signature, VerifyingKey as Ed25519PublicKey,
 };
 use sha2::{Digest, Sha256};
 use sha3::Sha3_256;
@@ -62,7 +62,8 @@ pub fn ed25519_deserialize_public_key(bytes: &[u8]) -> Result<Ed25519PublicKey> 
     if !validate_public_key(bytes) {
         bail!("Invalid public key bytes");
     }
-    Ok(Ed25519PublicKey::from_bytes(bytes)?)
+    let bits: &[u8; ED25519_PUBLIC_KEY_LENGTH] = bytes.try_into()?;
+    Ok(Ed25519PublicKey::from_bytes(bits)?)
 }
 
 fn validate_signature(bytes: &[u8]) -> bool {
@@ -84,7 +85,7 @@ pub fn ed25519_deserialize_signature(bytes: &[u8]) -> Result<Ed25519Signature> {
     if !validate_signature(bytes) {
         bail!("Invalid signature bytes");
     }
-    Ok(Ed25519Signature::from_bytes(bytes)?)
+    Ok(Ed25519Signature::try_from(bytes)?)
 }
 
 pub fn ed25519_verify_signature(

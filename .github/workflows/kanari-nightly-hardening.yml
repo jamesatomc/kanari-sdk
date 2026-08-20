@@ -47,7 +47,7 @@ jobs:
       - name: Persistent SMT and storage tests
         run: |
           cargo test -p smt --all-targets
-          cargo test -p kanari-move-runtime-v1 --test state_tests compute_state_root_matches_materialized_sparse_root_for_rocksdb -- --test-threads=1
+          cargo test -p kanari-move-runtime-v1 --lib compute_state_root_matches_materialized_sparse_root_for_rocksdb -- --test-threads=1
           cargo test -p kanari-rpc-server rpc_adversarial_inputs_are_rejected_without_server_error -- --test-threads=1
 
       - name: RustSec dependency audit (report-only)

@@ -58,6 +58,9 @@ fuzz_target!(|data: &[u8]| {
             assert_does_not_verify(verify_signature(&tagged, message, &tampered_sig));
         }
         1 => {
+            if message.is_empty() {
+                return;
+            }
             let tampered_msg = flip_byte(message, flip_index, flip_mask);
             assert_does_not_verify(verify_signature(&tagged, &tampered_msg, &signature));
         }

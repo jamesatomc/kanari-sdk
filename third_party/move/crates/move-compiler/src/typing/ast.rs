@@ -696,7 +696,7 @@ impl AstDebug for UnannotatedExp_ {
                     w.comma(arms.iter(), |w, (variant, rhs)| {
                         w.write(format!("{} =>", variant));
                         rhs.ast_debug(w);
-                        println!();
+                        eprintln!();
                     })
                 });
             }

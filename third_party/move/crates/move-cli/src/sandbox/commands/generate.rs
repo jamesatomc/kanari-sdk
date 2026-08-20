@@ -2,6 +2,7 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
 use crate::sandbox::utils::on_disk_state_view::OnDiskStateView;
 use anyhow::{Result, bail};
 use move_bytecode_utils::layout::{SerdeLayoutBuilder, SerdeLayoutConfig};

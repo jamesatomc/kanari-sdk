@@ -2,8 +2,8 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
 #![forbid(unsafe_code)]
-
 use crate::cli::Options;
 use anyhow::anyhow;
 use codespan_reporting::{

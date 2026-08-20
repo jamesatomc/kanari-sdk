@@ -8,8 +8,38 @@ use tokio::sync::mpsc;
 
 use super::{
     MAX_DECOMPRESSED_PAYLOAD_SIZE, P2PEventHandler, P2PMessage, P2PMessageChunk, P2PNetwork,
-    P2PTopicKind, decompress_payload,
+    P2PTopicKind, decompress_payload, is_recovery_control_message, outbound_priority,
 };
+
+#[test]
+fn checkpoint_recovery_control_messages_outrank_best_effort_gossip() {
+    assert!(
+        outbound_priority(&P2PMessage::TargetedCheckpointRequest(
+            super::CheckpointRequestMsg {
+                sequence: 1,
+                timestamp: 1,
+                requester_peer_id: "requester".to_owned(),
+                responder_peer_id: "responder".to_owned(),
+            },
+        )) < outbound_priority(&P2PMessage::PeerInfo(super::PeerInfoMsg {
+            height: 0,
+            peer_id: "peer".to_owned(),
+            timestamp: 0,
+            latest_checkpoint_hash: String::new(),
+            latest_state_root: String::new(),
+            total_transactions: 0,
+        }))
+    );
+}
+
+#[test]
+fn chaos_does_not_delay_checkpoint_recovery_control_messages() {
+    let request = P2PMessage::CheckpointRequest(7, 1);
+    assert!(is_recovery_control_message(&request));
+    assert!(!is_recovery_control_message(&P2PMessage::NewTransaction(
+        "transaction".to_owned(),
+    )));
+}
 
 fn test_handler() -> P2PEventHandler {
     let network = P2PNetwork::new(Keypair::generate_ed25519(), 0, false).unwrap();

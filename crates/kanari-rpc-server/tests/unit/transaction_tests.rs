@@ -436,6 +436,111 @@ proptest! {
             .message
             .contains("cannot overlap with a mutable object input"));
     }
+
+    /// A client cannot turn a mutable object/gas overlap into an allowed input
+    /// by changing the object-id spelling.  Conversely, the same reference is
+    /// valid as a read-only input: authorization is tied to mutability, not
+    /// representation.
+    #[test]
+    fn overlap_policy_is_invariant_under_object_id_encodings(
+        object_id in 1u64..u64::MAX,
+        leading_zeroes in 0usize..48,
+        uppercase in any::<bool>(),
+        mutable in any::<bool>(),
+    ) {
+        let compact = format!("0x{object_id:x}");
+        let digits = if uppercase {
+            format!("{object_id:X}")
+        } else {
+            format!("{object_id:x}")
+        };
+        let padded = format!("0x{}{}", "0".repeat(leading_zeroes), digits);
+        let input = kanari_types::transaction::ObjectInput {
+            object_ref: kanari_types::transaction::ObjectRef::new(
+                compact,
+                Some(1),
+                Some("input-digest".to_string()),
+            ),
+            owner: Some(kanari_types::transaction::ObjectOwnerKind::AddressOwner(
+                "0xa".to_string(),
+            )),
+            mutable,
+        };
+        let gas_payment = kanari_types::transaction::GasPayment {
+            payment_objects: vec![kanari_types::transaction::ObjectRef::new(
+                padded,
+                Some(1),
+                Some("gas-digest".to_string()),
+            )],
+            owner: "0xa".to_string(),
+            budget: 1,
+            price: 1,
+        };
+
+        let result = validate_object_inputs_and_gas(52, &[input], Some(&gas_payment));
+        if mutable {
+            let error = result.expect_err("mutable input must not overlap gas");
+            prop_assert!(error
+                .error
+                .as_ref()
+                .expect("rpc error")
+                .message
+                .contains("cannot overlap with a mutable object input"));
+        } else {
+            prop_assert!(result.is_ok());
+        }
+    }
+
+    /// Adversarial object-input metadata must be handled as a normal RPC
+    /// validation result, never as a panic.  This covers malformed IDs,
+    /// owner declarations, versions, and digests before they reach Move.
+    #[test]
+    fn malformed_object_input_metadata_is_bounded_at_rpc_validation(
+        object_id in ".{0,256}",
+        owner in ".{0,256}",
+        digest in ".{0,256}",
+        version in any::<u64>(),
+        mutable in any::<bool>(),
+        owner_kind in 0u8..3,
+    ) {
+        let owner = match owner_kind {
+            0 => kanari_types::transaction::ObjectOwnerKind::AddressOwner(owner),
+            1 => kanari_types::transaction::ObjectOwnerKind::Shared,
+            _ => kanari_types::transaction::ObjectOwnerKind::Immutable,
+        };
+        let input = kanari_types::transaction::ObjectInput {
+            object_ref: kanari_types::transaction::ObjectRef::new(
+                object_id,
+                Some(version),
+                Some(digest),
+            ),
+            owner: Some(owner),
+            mutable,
+        };
+
+        let _ = validate_object_inputs_and_gas(51, &[input], None);
+    }
+
+    /// RPC clients may submit transaction bytes that are truncated, noncanonical,
+    /// or deliberately shaped like a large BCS container.  Decoding must remain
+    /// an ordinary fallible operation at this boundary; malformed bytes must not
+    /// unwind the RPC worker.
+    #[test]
+    fn malformed_signed_transaction_bcs_is_fallible(
+        payload in prop::collection::vec(any::<u8>(), 0..4096),
+    ) {
+        let _ = bcs::from_bytes::<kanari_types::transaction::SignedTransaction>(&payload);
+    }
+
+    /// Larger adversarial BCS payloads must stay within the normal error path
+    /// too.  This guards the RPC decoder against panics when a request mixes
+    /// arbitrary bytes with container-sized prefixes.
+    #[test]
+    fn large_malformed_signed_transaction_bcs_is_fallible(
+        payload in prop::collection::vec(any::<u8>(), 4096..16384),
+    ) {
+        let _ = bcs::from_bytes::<kanari_types::transaction::SignedTransaction>(&payload);
+    }
 }
 
 #[test]

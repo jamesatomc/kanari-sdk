@@ -1,6 +1,8 @@
 // Copyright (c) The Diem Core Contributors
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
+
+#![allow(clippy::print_stdout)]
 #![allow(hidden_glob_reexports)]
 use crate::sandbox::utils::on_disk_state_view::OnDiskStateView;
 use anyhow::{Result, bail};

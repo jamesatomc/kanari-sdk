@@ -42,6 +42,11 @@ param(
     [ValidateRange(20, 7200)]
     [int]$FundingCommitTimeoutSec = 180,
 
+    # A node restart can delay checkpoint finality beyond the normal client
+    # default.  This only changes the test client's observation window.
+    [ValidateRange(20, 7200)]
+    [int]$LoadCommitTimeoutSec = 180,
+
     [switch]$AutoCoinFanout,
 
     [ValidateRange(16, 65536)]
@@ -55,6 +60,9 @@ param(
 
     [ValidateRange(0, 8)]
     [int]$P2pDuplicatePublishes = 0,
+
+    # Test-only: reorder best-effort gossip within a bounded local publish batch.
+    [switch]$P2pReorderBestEffort,
 
     [switch]$FundSenders,
 
@@ -105,8 +113,11 @@ param(
 
     [switch]$IncludeOversizedRpcAdversarial,
 
+    # Four nodes consume base, base+10, base+20, and base+30.
+    [ValidateRange(1024, 65505)]
     [int]$BaseP2pPort = 19500,
 
+    [ValidateRange(1024, 65505)]
     [int]$BaseRpcPort = 19501,
 
     [string]$P2pNamespace = '',
@@ -276,7 +287,15 @@ function Get-NativeCoinObjectCount {
 }
 
 function Start-KanariNode {
-    param([int]$Index, [string]$OutSuffix = '')
+    param(
+        [int]$Index,
+        [string]$OutSuffix = '',
+        # Keep bootstrap and sender fanout free of injected faults.  A node only
+        # receives the delay/duplicate settings after the preflight state has
+        # converged, so a failed faucet transaction cannot be mistaken for a
+        # load/recovery result.
+        [switch]$EnableP2pFaults
+    )
 
     $offset = ($Index - 1) * 10
     $p2pPort = $BaseP2pPort + $offset
@@ -307,11 +326,15 @@ function Start-KanariNode {
     $previousSyncConcurrency = $env:KANARI_MAX_CONCURRENT_SYNC_MESSAGES
     $previousChaosDelay = $env:KANARI_CHAOS_P2P_PUBLISH_DELAY_MS
     $previousChaosDuplicates = $env:KANARI_CHAOS_P2P_DUPLICATE_PUBLISHES
+    $previousChaosReorder = $env:KANARI_CHAOS_P2P_REORDER_BEST_EFFORT
     $env:KANARI_P2P_NAMESPACE = $P2pNamespace
     $env:KANARI_P2P_CHANNEL_CAPACITY = [string]$P2pChannelCapacity
     $env:KANARI_MAX_CONCURRENT_SYNC_MESSAGES = [string]$MaxConcurrentSyncMessages
-    $env:KANARI_CHAOS_P2P_PUBLISH_DELAY_MS = [string]$P2pPublishDelayMs
-    $env:KANARI_CHAOS_P2P_DUPLICATE_PUBLISHES = [string]$P2pDuplicatePublishes
+    $effectiveP2pPublishDelayMs = if ($EnableP2pFaults) { $P2pPublishDelayMs } else { 0 }
+    $effectiveP2pDuplicatePublishes = if ($EnableP2pFaults) { $P2pDuplicatePublishes } else { 0 }
+    $env:KANARI_CHAOS_P2P_PUBLISH_DELAY_MS = [string]$effectiveP2pPublishDelayMs
+    $env:KANARI_CHAOS_P2P_DUPLICATE_PUBLISHES = [string]$effectiveP2pDuplicatePublishes
+    $env:KANARI_CHAOS_P2P_REORDER_BEST_EFFORT = if ($EnableP2pFaults -and $P2pReorderBestEffort) { '1' } else { '0' }
     try {
         return Start-Process `
             -FilePath $nodeExe `
@@ -346,6 +369,11 @@ function Start-KanariNode {
             Remove-Item Env:\KANARI_CHAOS_P2P_DUPLICATE_PUBLISHES -ErrorAction SilentlyContinue
         } else {
             $env:KANARI_CHAOS_P2P_DUPLICATE_PUBLISHES = $previousChaosDuplicates
+        }
+        if ($null -eq $previousChaosReorder) {
+            Remove-Item Env:\KANARI_CHAOS_P2P_REORDER_BEST_EFFORT -ErrorAction SilentlyContinue
+        } else {
+            $env:KANARI_CHAOS_P2P_REORDER_BEST_EFFORT = $previousChaosReorder
         }
     }
 }
@@ -435,26 +463,37 @@ Write-Host "P2P channel capacity: $P2pChannelCapacity"
 Write-Host "Max concurrent sync messages: $MaxConcurrentSyncMessages"
 Write-Host "Chaos P2P publish delay: ${P2pPublishDelayMs}ms"
 Write-Host "Chaos duplicate P2P publishes per message: $P2pDuplicatePublishes"
+Write-Host "Chaos best-effort P2P reorder: $P2pReorderBestEffort"
 $profilePath = Join-Path $runRoot 'profile-samples.csv'
 $profileSummaryPath = Join-Path $runRoot 'profile-summary.json'
 $flamegraphTargetsPath = Join-Path $runRoot 'flamegraph-targets.csv'
 $laneMetricsPath = Join-Path $runRoot 'tx-lane-metrics.csv'
 $prepareLog = Join-Path $runRoot 'prepare.out.log'
-$previousErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-try {
-    & $nodeExe consensus-keygen --node-count 4 --output-dir $keysDir --force *> $prepareLog
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 0) {
-        & $nodeExe genesis-export --network devnet --data-dir $sourceData --output $genesis *>> $prepareLog
-        $exitCode = $LASTEXITCODE
-    }
-} finally {
-    $ErrorActionPreference = $previousErrorActionPreference
+$prepareErr = Join-Path $runRoot 'prepare.err.log'
+
+function Invoke-PrepareNodeCommand {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $process = Start-Process `
+        -FilePath $nodeExe `
+        -ArgumentList $Arguments `
+        -WorkingDirectory $repoRoot `
+        -RedirectStandardOutput $prepareLog `
+        -RedirectStandardError $prepareErr `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    return [int]$process.ExitCode
+}
+
+$exitCode = Invoke-PrepareNodeCommand -Arguments @('consensus-keygen', '--node-count', '4', '--output-dir', $keysDir, '--force')
+if ($exitCode -eq 0) {
+    $exitCode = Invoke-PrepareNodeCommand -Arguments @('genesis-export', '--network', 'devnet', '--data-dir', $sourceData, '--output', $genesis)
 }
 if ($exitCode -ne 0) {
     Get-Content $prepareLog -Tail 80
-    throw "devnet preparation failed with exit code $exitCode; log: $prepareLog"
+    Get-Content $prepareErr -Tail 80
+    throw "devnet preparation failed with exit code $exitCode; logs: $prepareLog $prepareErr"
 }
 
 $processes = @{}
@@ -599,11 +638,44 @@ function Get-PercentileValue {
     return ([double]$sorted[$lower] * (1.0 - $weight)) + ([double]$sorted[$upper] * $weight)
 }
 
+function Get-FilePatternMatchCount {
+    param(
+        [string[]]$Paths,
+        [Parameter(Mandatory = $true)][string]$Pattern
+    )
+
+    # RocksDB can rotate or remove a LOG file between discovery and reading it.
+    # Count each file independently so that a profiling race never changes a
+    # successful consensus/recovery result into a failed campaign.
+    $count = 0
+    foreach ($filePath in $Paths) {
+        if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+            continue
+        }
+        try {
+            $count += @(Select-String -LiteralPath $filePath -Pattern $Pattern -ErrorAction Stop).Count
+        } catch {
+            # A RocksDB log may disappear during rotation or be transiently
+            # locked by the database process. Profiling must remain best-effort.
+        }
+    }
+    return $count
+}
+
 function Write-LogProfileSummary {
     param([string]$Path)
 
     $nodeLogs = Get-ChildItem -LiteralPath $runRoot -Filter 'node*.out.log' -File -ErrorAction SilentlyContinue
-    $dbLogs = Get-ChildItem -LiteralPath $runRoot -Recurse -Include 'LOG', 'LOG.old.*' -File -ErrorAction SilentlyContinue
+    # RocksDB may atomically replace a LOG file while a node is shutting down.
+    # Re-check each discovered path so a transient file cannot turn a successful
+    # recovery run into a harness failure during profiling.
+    $dbLogs = @(
+        Get-ChildItem -LiteralPath $runRoot -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                ($_.Name -eq 'LOG' -or $_.Name -like 'LOG.old.*') -and
+                (Test-Path -LiteralPath $_.FullName -PathType Leaf)
+            }
+    )
     $laneMetrics = if (Test-Path -LiteralPath $laneMetricsPath) {
         @(Import-Csv -LiteralPath $laneMetricsPath)
     } else {
@@ -668,9 +740,13 @@ function Write-LogProfileSummary {
     }
     if ($dbLogs.Count -gt 0) {
         $dbPaths = $dbLogs.FullName
-        $summary.rocksdb_compaction_lines = (Select-String -Path $dbPaths -Pattern 'compaction|Compaction' -ErrorAction SilentlyContinue).Count
-        $summary.rocksdb_flush_lines = (Select-String -Path $dbPaths -Pattern 'flush|Flush' -ErrorAction SilentlyContinue).Count
-        $summary.rocksdb_stall_lines = (Select-String -Path $dbPaths -Pattern 'stall|Stall|Stopped writes|delayed write' -ErrorAction SilentlyContinue).Count
+        $summary.rocksdb_compaction_lines = Get-FilePatternMatchCount -Paths $dbPaths -Pattern 'compaction|Compaction'
+        $summary.rocksdb_flush_lines = Get-FilePatternMatchCount -Paths $dbPaths -Pattern 'flush|Flush'
+        # RocksDB's statistics always print zero-valued "Cumulative stall" and
+        # "Write Stall" headings.  Count only a non-zero delay/stop/statistic
+        # (or an explicit runtime stopped/delayed-write message), otherwise the
+        # profile would report a false write stall on every healthy run.
+        $summary.rocksdb_stall_lines = Get-FilePatternMatchCount -Paths $dbPaths -Pattern 'total-(delays|stops): [1-9][0-9]*|rocksdb\.stall\.micros COUNT : [1-9][0-9]*|rocksdb\.db\.write\.stall .* COUNT : [1-9][0-9]*|Stopped writes|delayed write'
     }
     if ($laneMetrics.Count -gt 0) {
         $durations = @($laneMetrics | ForEach-Object { [double]$_.elapsed_ms })
@@ -780,7 +856,7 @@ function Invoke-RecoveryAudit {
                 $ProcessesByNode.Remove($node)
             }
             Start-Sleep -Seconds $RecoveryRestartDelaySec
-            $ProcessesByNode[$node] = Start-KanariNode -Index $node -OutSuffix "audit$round"
+            $ProcessesByNode[$node] = Start-KanariNode -Index $node -OutSuffix "audit$round" -EnableP2pFaults:$chaosP2pEnabled
             Wait-RpcReady -Urls @($Urls[$node - 1]) -Attempts 120
             Wait-StatsConverged -Urls $Urls
             Assert-NativeSupplyConverged -Urls $Urls
@@ -851,7 +927,7 @@ function Restart-CrashTargets {
 
     foreach ($target in $Targets) {
         Write-Host "CRASH-DURING-LOAD round=$Round restarting node$target"
-        $ProcessesByNode[$target] = Start-KanariNode -Index $target -OutSuffix "loadcrash$Round"
+        $ProcessesByNode[$target] = Start-KanariNode -Index $target -OutSuffix "loadcrash$Round" -EnableP2pFaults:$chaosP2pEnabled
         Wait-RpcReady -Urls @("http://127.0.0.1:$($BaseRpcPort + (($target - 1) * 10))") -Attempts 120
     }
 }
@@ -895,12 +971,25 @@ try {
     if ($FundSenders) {
         foreach ($sender in $Senders) {
             $senderShort = $sender.Substring(2, [Math]::Min(12, $sender.Length - 2))
-            $sourceAmount = $FaucetAmount * $requiredCoinFanout
-            Write-Host "Funding sender $sender with one source coin ($sourceAmount KANARI), one gas reserve ($FaucetAmount KANARI), then native batch fanout to $requiredCoinFanout reserved objects"
-            foreach ($funding in @(
-                @{ Name = 'source'; Amount = $sourceAmount },
-                @{ Name = 'gas'; Amount = $FaucetAmount }
-            )) {
+            # Native fanout consumes its selected source coin and replaces it
+            # with the requested outputs.  Fund one source per planned batch;
+            # otherwise the first successful split leaves only unit coins and
+            # later batches cannot find a source large enough to continue.
+            $fundings = @()
+            $remainingFundingOutputs = $requiredCoinFanout
+            $sourceIndex = 0
+            while ($remainingFundingOutputs -gt 0) {
+                $sourceOutputCount = [Math]::Min($FanoutBatchSize, $remainingFundingOutputs)
+                $sourceIndex += 1
+                $fundings += @{
+                    Name = "source-$sourceIndex"
+                    Amount = $FaucetAmount * $sourceOutputCount
+                }
+                $remainingFundingOutputs -= $sourceOutputCount
+            }
+            $fundings += @{ Name = 'gas'; Amount = $FaucetAmount }
+            Write-Host "Funding sender $sender with $sourceIndex batch source coin(s), one gas reserve ($FaucetAmount KANARI), then native batch fanout to $requiredCoinFanout reserved objects"
+            foreach ($funding in $fundings) {
                 $fundLog = Join-Path $runRoot "fund-$senderShort-$($funding.Name).log"
                 $fundErr = Join-Path $runRoot "fund-$senderShort-$($funding.Name).err.log"
                 $env:KANARI_KEYSTORE_PATH = $KeystorePath
@@ -935,11 +1024,17 @@ try {
             }
             $remainingFanout = $requiredCoinFanout
             $fanoutBatch = 0
+            # The Move call has a deterministic amount limit but the actual
+            # admissible vector size also depends on the deployed gas schedule.
+            # Learn a safe size per sender/run instead of assuming that the
+            # configured upper bound always previews successfully.
+            $effectiveFanoutBatchSize = $FanoutBatchSize
+            $fanoutAttempt = 0
             while ($remainingFanout -gt 0) {
-                $fanoutBatch += 1
-                $batchCount = [Math]::Min($FanoutBatchSize, $remainingFanout)
-                $fanoutLog = Join-Path $runRoot "fanout-$senderShort-$fanoutBatch.log"
-                $fanoutErr = Join-Path $runRoot "fanout-$senderShort-$fanoutBatch.err.log"
+                $batchCount = [Math]::Min($effectiveFanoutBatchSize, $remainingFanout)
+                $fanoutAttempt += 1
+                $fanoutLog = Join-Path $runRoot "fanout-$senderShort-$fanoutBatch-attempt$fanoutAttempt.log"
+                $fanoutErr = Join-Path $runRoot "fanout-$senderShort-$fanoutBatch-attempt$fanoutAttempt.err.log"
                 $fanoutArgs = @(
                     'client',
                     'fanout',
@@ -966,11 +1061,18 @@ try {
                     -Wait `
                     -PassThru
                 if ($fanoutProcess.ExitCode -ne 0) {
+                    if ($batchCount -gt 1) {
+                        $nextBatchCount = [Math]::Max(1, [int][Math]::Floor($batchCount / 2))
+                        Write-Warning "Fanout preview failed for $batchCount outputs; retrying batch $fanoutBatch with $nextBatchCount outputs. This is an adaptive setup retry, not a committed transaction failure."
+                        $effectiveFanoutBatchSize = [Math]::Min($effectiveFanoutBatchSize, $nextBatchCount)
+                        continue
+                    }
                     Get-Content $fanoutLog -Tail 80
                     Get-Content $fanoutErr -Tail 80
-                    throw "native batch fanout failed for $sender batch $fanoutBatch; logs: $fanoutLog $fanoutErr"
+                    throw "native batch fanout failed for $sender after reducing to one output; logs: $fanoutLog $fanoutErr"
                 }
                 $remainingFanout -= $batchCount
+                $fanoutBatch += 1
             }
         }
         Wait-StatsConverged -Urls $urls
@@ -984,6 +1086,23 @@ try {
         Write-ProfileSample -Phase 'post-funding' -ProcessesByNode $processes -Urls $urls -Path $profilePath
     }
 
+    # Bootstrap and sender fanout run clean.  Otherwise a synthetic P2P fault
+    # can make the faucet preflight fail and turn a setup failure into a false
+    # chaos result.  Switch validators one at a time after the state converges
+    # so quorum remains available during the transition.
+    $chaosP2pEnabled = $P2pPublishDelayMs -gt 0 -or $P2pDuplicatePublishes -gt 0 -or $P2pReorderBestEffort
+    if ($chaosP2pEnabled) {
+        Write-Host "Enabling injected P2P faults only after clean preflight convergence"
+        foreach ($node in 1..4) {
+            Write-Host "P2P fault transition restarting node$node"
+            Stop-Process -Id $processes[$node].Id -Force
+            $processes[$node] = Start-KanariNode -Index $node -OutSuffix 'p2p-fault' -EnableP2pFaults
+            Wait-RpcReady -Urls @($urls[$node - 1]) -Attempts 120
+            Wait-StatsConverged -Urls $urls
+        }
+        Write-ProfileSample -Phase 'p2p-fault-enabled' -ProcessesByNode $processes -Urls $urls -Path $profilePath
+    }
+
     Write-Host "Starting $($Senders.Count) parallel tx lanes, $CountPerSender tx each"
     'lane,pid,sender,rpc,requested_txs,started_at,ended_at,elapsed_ms,tps,exit_code,success' |
         Set-Content -LiteralPath $laneMetricsPath
@@ -991,6 +1110,9 @@ try {
         $sender = $Senders[$i]
         $laneRecipient = if ($SelfRecipient) { $sender } else { $Recipient }
         $rpc = $laneRpcUrls[$i % $laneRpcUrls.Count]
+        # The primary stays in the protected ingress pool.  Other replicas are
+        # supplied for transport-only failover if that endpoint disappears.
+        $rpcFallbackUrls = @($urls | Where-Object { $_ -ne $rpc })
         $lane = $i + 1
         $txLog = Join-Path $runRoot "lane$lane.tx.out.log"
         $txErr = Join-Path $runRoot "lane$lane.tx.err.log"
@@ -1008,7 +1130,9 @@ try {
             '-Recipient', $laneRecipient,
             '-Amount', $Amount,
             '-Count', $CountPerSender,
-            '-Rpc', $rpc
+            '-Rpc', $rpc,
+            '-RpcFallbackCsv', ($rpcFallbackUrls -join ','),
+            '-CommitTimeoutSec', $LoadCommitTimeoutSec
         )
         $env:KANARI_LOAD_PASSWORD = $Password
         $startedAt = Get-Date
@@ -1042,7 +1166,7 @@ try {
         Show-Stats -Urls ($urls | Where-Object { $_ -ne "http://127.0.0.1:$($BaseRpcPort + (($target - 1) * 10))" })
 
         Write-Host "CHAOS round=$round restarting node$target"
-        $processes[$target] = Start-KanariNode -Index $target -OutSuffix "restart$round"
+        $processes[$target] = Start-KanariNode -Index $target -OutSuffix "restart$round" -EnableP2pFaults:$chaosP2pEnabled
         Wait-RpcReady -Urls @("http://127.0.0.1:$($BaseRpcPort + (($target - 1) * 10))") -Attempts 120
     }
 

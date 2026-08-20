@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 module kanari_system::deny_list {
+    // A DenyCap is an authorization capability, not a constructor token.
+    // Only coin::create_regulated_currency may mint one in production.
+    friend kanari_system::coin;
+
     use std::vector;
     use kanari_system::object;
     use kanari_system::tx_context::TxContext;
@@ -21,8 +25,17 @@ module kanari_system::deny_list {
         DenyList { addresses: vector::empty<address>() }
     }
 
-    /// Create a new DenyCap object
-    public fun new_denycap<T>(ctx: &mut TxContext): DenyCap<T> {
+    /// Create a DenyCap while constructing a regulated currency.  Keeping this
+    /// friend-only prevents an arbitrary transaction from forging a capability
+    /// for another asset type and changing its deny list.
+    public(friend) fun new_denycap<T>(ctx: &mut TxContext): DenyCap<T> {
+        DenyCap<T> { id: object::new(ctx) }
+    }
+
+    #[test_only]
+    /// Test-only constructor for unit tests.  It is not present in published
+    /// bytecode and therefore cannot become a production authorization path.
+    public fun new_denycap_for_testing<T>(ctx: &mut TxContext): DenyCap<T> {
         DenyCap<T> { id: object::new(ctx) }
     }
 

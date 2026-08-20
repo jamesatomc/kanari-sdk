@@ -1,0 +1,29 @@
+[package]
+name = "kanari-kotlin"
+edition.workspace = true
+categories.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+name = "kanari_kotlin"
+
+[dependencies]
+kanari-crypto.workspace = true
+serde.workspace = true
+hex.workspace = true
+uniffi = { version = "0.32.0", features = ["cli"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[build-dependencies]
+uniffi = { version = "0.32.0", features = ["build"] }

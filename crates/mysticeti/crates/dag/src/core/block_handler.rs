@@ -74,7 +74,12 @@ impl<C: Ctx> RealBlockHandler<C> {
             transaction_time.insert(locator, C::now());
             count += 1;
         }
-        self.pending_transactions -= count;
+        // A recovered core can replay proposals that were created before this
+        // process started.  `pending_transactions` is intentionally local
+        // bookkeeping (it is not recovered from storage), so such a proposal
+        // may contain more transactions than the local counter.  Saturate at
+        // zero instead of panicking and taking the validator out of quorum.
+        self.pending_transactions = self.pending_transactions.saturating_sub(count);
     }
 
     pub fn cleanup(&self) {

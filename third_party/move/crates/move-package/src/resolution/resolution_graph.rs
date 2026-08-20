@@ -2,6 +2,7 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
 use anyhow::{Context, Result, bail};
 use move_command_line_common::files::{
     FileHash, MOVE_COMPILED_EXTENSION, extension_equals, find_filenames, find_move_filenames,

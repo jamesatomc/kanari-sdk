@@ -1,0 +1,6 @@
+jdk:
+  - openjdk17
+before_install:
+  - cd packages/kanari-kotlin/android
+install:
+  - ./gradlew :kanari-crypto:publishToMavenLocal -Pgroup=com.github.jamesatomc

@@ -285,10 +285,4 @@ module kanari_system::coin {
         metadata.description = description;
     }
     
-    // --- Deprecated/Legacy functions ---
-
-    public fun treasury_into_supply<T>(_cap: &mut TreasuryCap<T>): kanari_system::balance::Supply<T> {
-        kanari_system::balance::new_supply<T>()
-    }
-
 }

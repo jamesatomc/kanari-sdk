@@ -10,6 +10,11 @@ module kanari_escrow::usdt {
 
     use std::string;
     use std::ascii;
+
+    /// Only the publishing address may initialize the currency.  Without this
+    /// guard, any sender could call `setup` again and obtain another
+    /// `TreasuryCap<USDT>`, which would make the asset supply untrustworthy.
+    const E_NOT_DEPLOYER: u64 = 1;
     
     /// Name of the coin
     struct USDT has drop {}
@@ -35,6 +40,7 @@ module kanari_escrow::usdt {
     /// invokes `init`, and transfers the created objects to the
     /// transaction sender so they are persisted in the caller's account.
     public entry fun setup(ctx: &mut TxContext) {
+        assert!(kanari_system::tx_context::sender(ctx) == @kanari_escrow, E_NOT_DEPLOYER);
         let witness = USDT {};
         let (treasury, metadata) = init(witness, ctx);
         let sender = kanari_system::tx_context::sender(ctx);

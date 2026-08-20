@@ -89,6 +89,55 @@ impl QueuedP2PMessage {
     }
 }
 
+/// Keep state-recovery control traffic ahead of best-effort gossip when the
+/// bounded outbound queue has accumulated a backlog.  A recovering validator
+/// must be able to request and receive checkpoints even while transaction and
+/// rebroadcast traffic is intentionally delayed by a chaos campaign.
+fn outbound_priority(message: &P2PMessage) -> u8 {
+    match message {
+        P2PMessage::NewCheckpoint(_)
+        | P2PMessage::CheckpointRequest(_, _)
+        | P2PMessage::CheckpointResponse(_)
+        | P2PMessage::TargetedCheckpointRequest(_)
+        | P2PMessage::TargetedCheckpointResponse(_)
+        | P2PMessage::CompressedCheckpoint(_)
+        | P2PMessage::CompressedCheckpointResponse(_)
+        | P2PMessage::CompressedTargetedCheckpointResponse(_)
+        | P2PMessage::Chunk(P2PMessageChunk {
+            topic: P2PTopicKind::Checkpoint,
+            ..
+        }) => 0,
+        P2PMessage::DagVertexRequest(_)
+        | P2PMessage::DagVertexResponse(_)
+        | P2PMessage::NewDagVertex(_) => 1,
+        P2PMessage::NewTransaction(_) => 2,
+        P2PMessage::DagVertexRebroadcast(_)
+        | P2PMessage::PeerInfo(_)
+        | P2PMessage::CompressedDagVertex(_)
+        | P2PMessage::Chunk(_) => 3,
+    }
+}
+
+fn is_recovery_control_message(message: &P2PMessage) -> bool {
+    matches!(
+        message,
+        P2PMessage::NewCheckpoint(_)
+            | P2PMessage::CheckpointRequest(_, _)
+            | P2PMessage::CheckpointResponse(_)
+            | P2PMessage::TargetedCheckpointRequest(_)
+            | P2PMessage::TargetedCheckpointResponse(_)
+            | P2PMessage::CompressedCheckpoint(_)
+            | P2PMessage::CompressedCheckpointResponse(_)
+            | P2PMessage::CompressedTargetedCheckpointResponse(_)
+            | P2PMessage::DagVertexRequest(_)
+            | P2PMessage::DagVertexResponse(_)
+            | P2PMessage::Chunk(P2PMessageChunk {
+                topic: P2PTopicKind::Checkpoint,
+                ..
+            })
+    )
+}
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, bincode::Encode, bincode::Decode,
 )]
@@ -571,20 +620,32 @@ impl P2PNetwork {
                 let topic = self.message_topic(&chunk).clone();
                 let encoded = bincode::encode_to_vec(&chunk, config)
                     .map_err(|e| anyhow::anyhow!("Failed to encode P2P chunk: {e}"))?;
-                self.publish_encoded(topic, encoded)?;
+                self.publish_encoded(topic, encoded, !is_recovery_control_message(&chunk))?;
             }
             return Ok(());
         }
 
         let topic = self.message_topic(&final_msg).clone();
-        self.publish_encoded(topic, data)
+        self.publish_encoded(topic, data, !is_recovery_control_message(&final_msg))
     }
 
-    fn publish_encoded(&mut self, topic: IdentTopic, data: Vec<u8>) -> Result<()> {
-        maybe_apply_chaos_publish_delay();
+    fn publish_encoded(
+        &mut self,
+        topic: IdentTopic,
+        data: Vec<u8>,
+        apply_synthetic_chaos: bool,
+    ) -> Result<()> {
+        if apply_synthetic_chaos {
+            maybe_apply_chaos_publish_delay();
+        }
 
-        // Publish and handle duplicate gracefully
-        let duplicate_publishes = chaos_duplicate_publish_count();
+        // Fault injection targets best-effort gossip. Recovery control traffic
+        // must remain reliable enough to heal the deliberately delayed gossip.
+        let duplicate_publishes = if apply_synthetic_chaos {
+            chaos_duplicate_publish_count()
+        } else {
+            0
+        };
         for _ in 0..duplicate_publishes {
             match self
                 .swarm
@@ -634,6 +695,12 @@ fn maybe_apply_chaos_publish_delay() {
 
 fn chaos_duplicate_publish_count() -> usize {
     chaos_env_u64("KANARI_CHAOS_P2P_DUPLICATE_PUBLISHES", 8) as usize
+}
+
+fn chaos_reorder_best_effort_enabled() -> bool {
+    std::env::var("KANARI_CHAOS_P2P_REORDER_BEST_EFFORT")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
 }
 
 /// Decompress a compressed UTF-8 P2P payload.
@@ -690,9 +757,71 @@ impl P2PEventHandler {
         self
     }
 
+    /// Re-dial persisted peers after a process restart.
+    ///
+    /// A restarted node cannot rely on the remote side retrying at exactly the
+    /// instant its listener returns.  In particular, a four-node committee can
+    /// otherwise leave the returning node disconnected forever: the original
+    /// reconnect attempt happens while the process is still down, and all
+    /// subsequent gossip/sync requests have no subscribers.  The peer store is
+    /// advisory only; invalid or stale entries are ignored and normal swarm
+    /// connection handling remains the authority for live peers.
+    async fn dial_saved_peers(&mut self) {
+        let peers = match &self.peer_store {
+            Some(store) => store
+                .lock()
+                .await
+                .peers
+                .iter()
+                .flat_map(|(peer_id, peer)| {
+                    peer.addresses
+                        .iter()
+                        .cloned()
+                        .map(move |address| (peer_id.clone(), address))
+                })
+                .collect::<Vec<_>>(),
+            None => return,
+        };
+
+        for (stored_peer_id, address) in peers {
+            if let Ok(peer_id) = stored_peer_id.parse::<PeerId>() {
+                // A listen-address observed through an inbound connection can
+                // otherwise make a node try to dial itself after a restart.
+                if peer_id == *self.network.swarm.local_peer_id()
+                    || self.network.swarm.is_connected(&peer_id)
+                {
+                    continue;
+                }
+            }
+            match address.parse::<Multiaddr>() {
+                Ok(address) => match self.network.swarm.dial(address.clone()) {
+                    Ok(()) => debug!(%address, "Dialing persisted P2P peer"),
+                    Err(error) => debug!(%address, %error, "Could not dial persisted P2P peer"),
+                },
+                Err(error) => {
+                    warn!(%address, %error, "Ignoring invalid persisted P2P peer address")
+                }
+            }
+        }
+    }
+
     pub async fn run(&mut self) {
+        // Do this before waiting for swarm events so a node returning from a
+        // crash actively rejoins even if all remote reconnect attempts already
+        // happened during its downtime.
+        self.dial_saved_peers().await;
+        let mut saved_peer_retry = tokio::time::interval(Duration::from_secs(5));
+        // The first immediate tick would duplicate the startup dialing above.
+        saved_peer_retry.tick().await;
+
         loop {
             tokio::select! {
+                // Retrying is intentionally bounded by the small persisted peer
+                // set and lets a node recover from a restart race without
+                // depending on best-effort gossipsub publication.
+                _ = saved_peer_retry.tick() => {
+                    self.dial_saved_peers().await;
+                }
                 // Handle swarm events
                 Some(event) = self.network.swarm.next() => {
                     self.handle_event(event).await;
@@ -704,13 +833,39 @@ impl P2PEventHandler {
                         None => std::future::pending().await,
                     }
                 } => {
-                    let queued_ms = queued.enqueued_at.elapsed().as_millis();
-                    debug!(
-                        p2p_outbound_queue_latency_ms = queued_ms,
-                        "P2P outbound queue latency"
-                    );
-                    if let Err(e) = self.network.publish_message(queued.message) {
-                        warn!("Failed to publish outgoing message: {}", e);
+                    // Drain a small bounded batch and publish recovery control
+                    // messages first. This avoids a stale rebroadcast flood
+                    // starving checkpoint catch-up after a node restart.
+                    let mut batch = vec![queued];
+                    if let Some(rx) = self.outgoing_rx.as_mut() {
+                        for _ in 0..63 {
+                            match rx.try_recv() {
+                                Ok(message) => batch.push(message),
+                                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => break,
+                            }
+                        }
+                    }
+                    batch.sort_by_key(|queued| outbound_priority(&queued.message));
+                    // Test-only fault injection: recovery and DAG repair traffic
+                    // keep their priority, while best-effort transaction and
+                    // rebroadcast gossip is published in reverse local order.
+                    if chaos_reorder_best_effort_enabled() {
+                        let first_best_effort = batch
+                            .iter()
+                            .position(|queued| outbound_priority(&queued.message) > 1)
+                            .unwrap_or(batch.len());
+                        batch[first_best_effort..].reverse();
+                    }
+                    for queued in batch {
+                        let queued_ms = queued.enqueued_at.elapsed().as_millis();
+                        debug!(
+                            p2p_outbound_queue_latency_ms = queued_ms,
+                            p2p_outbound_priority = outbound_priority(&queued.message),
+                            "P2P outbound queue latency"
+                        );
+                        if let Err(e) = self.network.publish_message(queued.message) {
+                            warn!("Failed to publish outgoing message: {}", e);
+                        }
                     }
                 }
                 else => break,
@@ -1143,11 +1298,14 @@ impl P2PEventHandler {
                     num_established
                 );
 
-                // Save peer to persistent store
+                // Record liveness here, but do not persist the remote endpoint
+                // as a dial target. For an inbound connection that endpoint is
+                // often the peer's ephemeral source port, not its listener.
+                // Persisting it causes a restart to redial stale ports and can
+                // destabilize a small recovery mesh.
                 if let Some(peer_store) = &self.peer_store {
                     let mut store = peer_store.lock().await;
-                    let addresses = vec![endpoint.get_remote_address().clone()];
-                    store.add_peer(peer_id, addresses);
+                    store.add_peer(peer_id, Vec::new());
 
                     // Save to disk (async, ignore errors)
                     if let Err(e) = store.save() {
@@ -1178,13 +1336,23 @@ impl P2PEventHandler {
                     "Identified peer {}: protocol {}, agent {}",
                     peer_id, info.protocol_version, info.agent_version
                 );
-                // Add identified addresses to Kademlia
-                for addr in info.listen_addrs {
+                // Identify supplies the peer's advertised listener addresses.
+                // Unlike the remote endpoint of an inbound connection, these
+                // are safe to persist and redial after a process restart.
+                let listen_addrs = info.listen_addrs;
+                for addr in &listen_addrs {
                     self.network
                         .swarm
                         .behaviour_mut()
                         .kademlia
-                        .add_address(&peer_id, addr);
+                        .add_address(&peer_id, addr.clone());
+                }
+                if let Some(peer_store) = &self.peer_store {
+                    let mut store = peer_store.lock().await;
+                    store.add_peer(peer_id, listen_addrs);
+                    if let Err(error) = store.save() {
+                        warn!(%error, "Failed to save identified peer addresses");
+                    }
                 }
             }
             SwarmEvent::Behaviour(KanariBehaviourEvent::Relay(

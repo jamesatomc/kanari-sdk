@@ -1,0 +1,37 @@
+namespace kanari_kotlin {
+  // Keypair Generation
+  KeyPairData generate_keypair_api(string curve_name);
+
+  // Mnemonic and Derivation
+  string generate_mnemonic_api(u32 word_count);
+  KeyPairData derive_keypair_from_mnemonic(string mnemonic, string curve_name);
+  KeyPairData derive_keypair_from_path_api(string mnemonic, string derivation_path, string curve_name);
+  sequence<KeyPairData> derive_multiple_addresses_api(string mnemonic, string path_template, string curve_name, u32 count);
+
+  // Key Import/Export
+  KeyPairData import_keypair_from_private_key(string private_key, string curve_name);
+
+  // Cryptographic Operations
+  sequence<u8> sign_message_api(string private_key, sequence<u8> message, string curve_name);
+  boolean verify_signature_api(string address, sequence<u8> message, sequence<u8> signature, string curve_name);
+  sequence<u8> blake3_hash_api(sequence<u8> data);
+
+  // Curve Information
+  sequence<CurveInfo> list_supported_curves();
+};
+
+dictionary CurveInfo {
+  string name;
+  boolean is_post_quantum;
+  boolean is_hybrid;
+  u8 security_level;
+};
+
+dictionary KeyPairData {
+  string private_key;
+  string public_key;
+  string address;
+  string tagged_address;
+  sequence<u8> raw_public_key;
+  string curve_type;
+};

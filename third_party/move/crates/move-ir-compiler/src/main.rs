@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![forbid(unsafe_code)]
-
+#![allow(clippy::print_stdout)]
 use anyhow::Context;
 use clap::Parser;
 use move_binary_format::{errors::VMError, file_format::CompiledModule};

@@ -1,6 +1,7 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::print_stdout)]
 #![allow(dead_code)]
 #![allow(unused_must_use)]
 #![allow(unused_imports)]
