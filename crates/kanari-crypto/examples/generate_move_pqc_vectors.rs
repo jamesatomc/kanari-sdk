@@ -12,6 +12,7 @@ use kanari_crypto::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #![allow(clippy::print_stdout)] // example utility intentionally prints vectors to stdout
     let message = b"kanari move pqc positive vector";
     println!("message={}", hex::encode(message));
 

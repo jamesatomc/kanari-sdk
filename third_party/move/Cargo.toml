@@ -58,8 +58,8 @@ dunce = "1.0.5"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = [
     "serde",
 ] }
-blake3 = "1.8.6"
-blake2b_simd = "1.0.4"
+blake3 = "1.8.7"
+blake2b_simd = "1.0.5"
 ethnum = "1.5.3"
 fail = "0.5.1"
 file_diff = "1.0.0"
@@ -74,7 +74,7 @@ internment = { version = "0.8.6", features = ["arc"] }
 itertools = "0.15.0"
 leb128 = "0.2.7"
 libfuzzer-sys = "0.4.13"
-log = { version = "0.4.33", features = ["serde"] }
+log = { version = "0.4.34", features = ["serde"] }
 lsp-server = "0.10.0"
 lsp-types = "0.97.0"
 memory-stats = "1.2.0"

@@ -105,10 +105,12 @@ Create a new empty DenyList
 
 ## Function `new_denycap`
 
-Create a new DenyCap object
+Create a DenyCap while constructing a regulated currency.  Keeping this
+friend-only prevents an arbitrary transaction from forging a capability
+for another asset type and changing its deny list.
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="deny_list.md#0x2_deny_list_new_denycap">new_denycap</a>&lt;T&gt;(ctx: &<b>mut</b> <a href="tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>): <a href="deny_list.md#0x2_deny_list_DenyCap">deny_list::DenyCap</a>&lt;T&gt;
+<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="deny_list.md#0x2_deny_list_new_denycap">new_denycap</a>&lt;T&gt;(ctx: &<b>mut</b> <a href="tx_context.md#0x2_tx_context_TxContext">tx_context::TxContext</a>): <a href="deny_list.md#0x2_deny_list_DenyCap">deny_list::DenyCap</a>&lt;T&gt;
 </code></pre>
 
 
@@ -117,7 +119,7 @@ Create a new DenyCap object
 <summary>Implementation</summary>
 
 
-<pre><code><b>public</b> <b>fun</b> <a href="deny_list.md#0x2_deny_list_new_denycap">new_denycap</a>&lt;T&gt;(ctx: &<b>mut</b> TxContext): <a href="deny_list.md#0x2_deny_list_DenyCap">DenyCap</a>&lt;T&gt; {
+<pre><code><b>public</b>(<b>friend</b>) <b>fun</b> <a href="deny_list.md#0x2_deny_list_new_denycap">new_denycap</a>&lt;T&gt;(ctx: &<b>mut</b> TxContext): <a href="deny_list.md#0x2_deny_list_DenyCap">DenyCap</a>&lt;T&gt; {
     <a href="deny_list.md#0x2_deny_list_DenyCap">DenyCap</a>&lt;T&gt; { id: <a href="object.md#0x2_object_new">object::new</a>(ctx) }
 }
 </code></pre>

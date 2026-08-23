@@ -28,7 +28,6 @@
 -  [Function `update_name`](#0x2_coin_update_name)
 -  [Function `update_symbol`](#0x2_coin_update_symbol)
 -  [Function `update_description`](#0x2_coin_update_description)
--  [Function `treasury_into_supply`](#0x2_coin_treasury_into_supply)
 
 
 <pre><code><b>use</b> <a href="dependencies/move-stdlib/ascii.md#0x1_ascii">0x1::ascii</a>;
@@ -833,30 +832,6 @@ Update the description for the given coin type.
     description: <a href="dependencies/move-stdlib/string.md#0x1_string_String">string::String</a>
 ) {
     metadata.description = description;
-}
-</code></pre>
-
-
-
-</details>
-
-<a name="0x2_coin_treasury_into_supply"></a>
-
-## Function `treasury_into_supply`
-
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="coin.md#0x2_coin_treasury_into_supply">treasury_into_supply</a>&lt;T&gt;(_cap: &<b>mut</b> <a href="coin.md#0x2_coin_TreasuryCap">coin::TreasuryCap</a>&lt;T&gt;): <a href="balance.md#0x2_balance_Supply">balance::Supply</a>&lt;T&gt;
-</code></pre>
-
-
-
-<details>
-<summary>Implementation</summary>
-
-
-<pre><code><b>public</b> <b>fun</b> <a href="coin.md#0x2_coin_treasury_into_supply">treasury_into_supply</a>&lt;T&gt;(_cap: &<b>mut</b> <a href="coin.md#0x2_coin_TreasuryCap">TreasuryCap</a>&lt;T&gt;): kanari_system::balance::Supply&lt;T&gt; {
-    kanari_system::balance::new_supply&lt;T&gt;()
 }
 </code></pre>
 

@@ -61,7 +61,7 @@ categories = ["development-tools"]                                              
 keywords = ["blockchain", "sdk", "move", "rust", "ifps", "storage", "wallet", "framework"]     # Keywords for crates.io search.
 homepage = "https://kanarinetwork.site"                                                        # Project homepage.
 documentation = "https://docs.kanarinetwork.site"                                              # Link to project documentation.
-version = "0.2.6"                                                                              # Current version of the SDK.
+version = "0.2.7"                                                                              # Current version of the SDK.
 authors = ["Kanari Network"]                                                                   # Authors of the SDK.
 license = "Apache-2.0"                                                                         # License information.
 repository = "https://github.com/kanari-network/kanari-sdk"                                    # Link to the code repository.
@@ -122,7 +122,7 @@ bincode = { version = "2.0.1", features = ["serde", "alloc"] }
 sha2 = "0.11.0"
 sha3 = "0.12.0"
 shake = "0.1.0"
-blake3 = { version = "1.8.6" }
+blake3 = { version = "1.8.7" }
 
 ## Elliptic Curve Cryptography (ECC)
 k256 = { version = "0.14.0", features = ["ecdsa", "std", "sha2"] }                  # secp256k1 (Bitcoin/Ethereum)
@@ -133,7 +133,7 @@ secp256k1 = { version = "0.31.1", features = ["recovery"] }                     
 rsa = { version = "0.9.10", default-features = false, features = ["std"] }          # RSA signature verification
 
 ## Symmetric Encryption & MAC
-aes-gcm = "0.11.0"                                                                  # Authenticated encryption
+aes-gcm = "0.11.1"                                                                  # Authenticated encryption
 hmac = { version = "0.13.0" }                                                       # HMAC for key derivation
 
 ## Key Derivation & Password Hashing
@@ -186,7 +186,7 @@ better_any = { version = "0.2.1", features = ["derive"] }
 # ============================================================================
 # Logging, Tracing & Observability
 # ============================================================================
-log = { version = "0.4.33", default-features = true }
+log = { version = "0.4.34", default-features = true }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 env_logger = "0.11.11"
@@ -225,7 +225,7 @@ data-encoding = "2.11.1"                                                        
 # Time & Date Handling
 # ============================================================================
 chrono = { version = "0.4.45", features = ["serde"] }
-uuid = { version = "1.24.0", features = ["v4", "serde"] }
+uuid = { version = "1.25.0", features = ["v4", "serde"] }
 
 # ============================================================================
 # Mathematics & Numerics
@@ -240,7 +240,7 @@ flate2 = "1.1.9"    # DEFLATE compression (gzip/zlib)
 # ============================================================================
 # Mobile & Cross-Platform Bridge
 # ============================================================================
-flutter_rust_bridge = "=2.12.0"  # Flutter ↔ Rust interop
+flutter_rust_bridge = "2.13.0"  # Flutter ↔ Rust interop
 
 # ============================================================================
 # Memory Allocator (Performance Optimization)
@@ -261,6 +261,11 @@ rusqlite = { version = "0.40.2", features = ["bundled", "chrono", "serde_json"] 
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 syn = { version = "3.0.3", features = ["full"] }
+
+# ============================================================================
+# Miscellaneous Utilities
+# ============================================================================
+uniffi = { version = "0.32.0" }
 
 # ============================================================================
 

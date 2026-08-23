@@ -16,22 +16,28 @@ module kanari_system::ecdsa_k1 {
     const ECDSA: u8 = 0;
     const SCHNORR: u8 = 1;
 
+    #[allow(unused_const)]
     /// Error if the public key cannot be recovered from the signature.
     const ErrorFailToRecoverPubKey: u64 = 1;
 
+    #[allow(unused_const)]
     /// Error if the signature is invalid.
     const ErrorInvalidSignature: u64 = 2;
 
+    #[allow(unused_const)]
     /// Error if the public key is invalid.
     const ErrorInvalidPubKey: u64 = 3;
 
 
+    #[allow(unused_const)]
     /// Error if the x only public key is invalid.
     const ErrorInvalidXOnlyPubKey: u64 = 5;
 
+    #[allow(unused_const)]
     /// Error if the message is invalid.
     const ErrorInvalidMessage: u64 = 6;
 
+    #[allow(unused_const)]
     /// Error if the schnorr signature is invalid.
     const ErrorInvalidSchnorrSignature: u64 = 7;
 
@@ -209,6 +215,7 @@ module kanari_system::ecdsa_k1 {
     }
 
     // Helper Move function to recover signature directly to an ETH address.
+    #[allow(unused_function)]
     fun ecrecover_eth_address(sig: vector<u8>, msg: vector<u8>): vector<u8> {
         use std::vector;
         use std::hash;

@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "network": "testnet",
-  "protocol_version": "0.2.6",
+  "protocol_version": "0.2.7",
   "state_schema_version": "canonical-state-root-v1",
   "genesis_checkpoint_hash": "9a574b2f2c0d27a63e1347d4df4f56a57b08b22d35706b28fb06caf86b59cb1c",
   "genesis_state_root": "56277fbbe9438e88a554eda13c97a4c11231e1eeae63c3272efc73a8af82802e"
