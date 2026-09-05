@@ -27,22 +27,31 @@ fun IsometricWalletIllustration(
     modifier: Modifier = Modifier,
     shadowColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
 ) {
-    val infiniteTransition = rememberInfiniteTransition()
+    val infiniteTransition = rememberInfiniteTransition(label = "walletAnim")
     val floatY by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = -12f,
-        animationSpec = infiniteRepeatable(tween(2500, easing = EaseInOutSine), RepeatMode.Reverse)
+        animationSpec = infiniteRepeatable(tween(2500, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "floatY"
+    )
+    val sweepPos by infiniteTransition.animateFloat(
+        initialValue = -0.5f, targetValue = 1.5f,
+        animationSpec = infiniteRepeatable(tween(3000, easing = LinearEasing)),
+        label = "sweep"
     )
     val coinFloat1 by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = -8f,
-        animationSpec = infiniteRepeatable(tween(1800, easing = EaseInOutSine), RepeatMode.Reverse)
+        animationSpec = infiniteRepeatable(tween(1800, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "coin1"
     )
     val coinFloat2 by infiniteTransition.animateFloat(
         initialValue = -6f, targetValue = 4f,
-        animationSpec = infiniteRepeatable(tween(2200, easing = EaseInOutSine), RepeatMode.Reverse)
+        animationSpec = infiniteRepeatable(tween(2200, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "coin2"
     )
     val glowAlpha by infiniteTransition.animateFloat(
         initialValue = 0.3f, targetValue = 0.6f,
-        animationSpec = infiniteRepeatable(tween(2000), RepeatMode.Reverse)
+        animationSpec = infiniteRepeatable(tween(2000), RepeatMode.Reverse),
+        label = "glow"
     )
 
     Canvas(modifier = modifier) {
@@ -66,17 +75,36 @@ fun IsometricWalletIllustration(
 
         drawRoundRect(
             color = shadowColor, topLeft = Offset(walletX, walletY + 4.dp.toPx()),
-            size = Size(walletW, walletH), cornerRadius = CornerRadius(8.dp.toPx())
+            size = Size(walletW, walletH), cornerRadius = CornerRadius(12.dp.toPx())
         )
+
+        // Main wallet body with sweep effect
+        val walletBrush = Brush.linearGradient(
+            colors = listOf(Purple, Lavender, Purple),
+            start = Offset(walletX, walletY),
+            end = Offset(walletX + walletW, walletY + walletH)
+        )
+
+        drawRoundRect(
+            brush = walletBrush,
+            topLeft = Offset(walletX, walletY),
+            size = Size(walletW, walletH),
+            cornerRadius = CornerRadius(12.dp.toPx())
+        )
+
+        // Light sweep overlay
         drawRoundRect(
             brush = Brush.linearGradient(
-                colors = listOf(Purple, Lime.copy(alpha = 0.8f)),
-                start = Offset(walletX, walletY),
-                end = Offset(walletX + walletW, walletY + walletH)
+                0.0f to Color.Transparent,
+                0.5f to Color.White.copy(alpha = 0.2f),
+                1.0f to Color.Transparent,
+                start = Offset(walletX + (walletW * sweepPos), walletY),
+                end = Offset(walletX + (walletW * sweepPos) + 40.dp.toPx(), walletY + walletH)
             ),
             topLeft = Offset(walletX, walletY),
             size = Size(walletW, walletH),
-            cornerRadius = CornerRadius(8.dp.toPx())
+            cornerRadius = CornerRadius(12.dp.toPx()),
+            blendMode = BlendMode.Overlay
         )
 
         drawRoundRect(
@@ -124,14 +152,16 @@ fun IsometricNetworkOrbit(
     modifier: Modifier = Modifier,
     labelColor: Color = MaterialTheme.colorScheme.onSurface
 ) {
-    val infiniteTransition = rememberInfiniteTransition()
+    val infiniteTransition = rememberInfiniteTransition(label = "orbitAnim")
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(26000, easing = LinearEasing))
+        animationSpec = infiniteRepeatable(tween(26000, easing = LinearEasing)),
+        label = "rotation"
     )
     val pulse by infiniteTransition.animateFloat(
         initialValue = 0.8f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1500, easing = EaseInOutSine), RepeatMode.Reverse)
+        animationSpec = infiniteRepeatable(tween(1500, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "pulse"
     )
 
     Canvas(modifier = modifier) {
@@ -141,9 +171,10 @@ fun IsometricNetworkOrbit(
         val cy = h / 2f
         val orbitRadius = w * 0.34f
 
+        // Multiple orbits for depth
         drawCircle(
-            color = Lavender.copy(alpha = 0.08f),
-            radius = orbitRadius + 12.dp.toPx(),
+            color = Lavender.copy(alpha = 0.05f),
+            radius = orbitRadius + 20.dp.toPx(),
             center = Offset(cx, cy)
         )
         drawCircle(
@@ -151,30 +182,38 @@ fun IsometricNetworkOrbit(
             radius = orbitRadius,
             center = Offset(cx, cy),
             style = Stroke(
-                width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
+                width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
             )
         )
 
-        val centerR = 16.dp.toPx() * pulse
-        drawCircle(color = Lime, radius = centerR, center = Offset(cx, cy))
-        drawCircle(color = Ink, radius = centerR * 0.6f, center = Offset(cx, cy))
-
+        val centerR = 20.dp.toPx() * pulse
         drawCircle(
             brush = Brush.radialGradient(
-                colors = listOf(Lime.copy(alpha = 0.15f), Color.Transparent),
-                center = Offset(cx, cy), radius = centerR * 2.5f
+                listOf(Lime, Purple),
+                center = Offset(cx, cy),
+                radius = centerR
             ),
-            radius = centerR * 2.5f, center = Offset(cx, cy)
+            radius = centerR,
+            center = Offset(cx, cy)
         )
+        drawCircle(color = Ink.copy(alpha = 0.8f), radius = centerR * 0.5f, center = Offset(cx, cy))
 
-        val nodeLabels = listOf("K", "M", "01", "TX", "SC")
-        val nodeColors = listOf(Lime, Purple, Lavender, Lime.copy(alpha = 0.7f), Cream)
-        val nodeR = 10.dp.toPx()
+        val nodeLabels = listOf("K", "PQ", "01", "TX", "SC", "M")
+        val nodeColors = listOf(Lime, Lavender, Purple, Lime.copy(alpha = 0.7f), Cream, Purple.copy(alpha = 0.6f))
+        val nodeR = 12.dp.toPx()
 
         nodeLabels.forEachIndexed { i, label ->
             val angle = Math.toRadians((rotation + i * (360.0 / nodeLabels.size)).toDouble())
             val nx = cx + orbitRadius * cos(angle).toFloat()
             val ny = cy + orbitRadius * sin(angle).toFloat()
+
+            // Connecting line to center
+            drawLine(
+                color = nodeColors[i].copy(alpha = 0.2f),
+                start = Offset(cx, cy),
+                end = Offset(nx, ny),
+                strokeWidth = 1.dp.toPx()
+            )
 
             drawCircle(
                 brush = Brush.radialGradient(
@@ -183,20 +222,24 @@ fun IsometricNetworkOrbit(
                 ),
                 radius = nodeR, center = Offset(nx, ny)
             )
+
+            // Node glow
             drawCircle(
-                color = Color.White.copy(alpha = 0.5f),
-                radius = nodeR * 0.25f,
-                center = Offset(nx - nodeR * 0.2f, ny - nodeR * 0.2f)
+                brush = Brush.radialGradient(
+                    colors = listOf(nodeColors[i].copy(alpha = 0.4f), Color.Transparent),
+                    center = Offset(nx, ny), radius = nodeR * 2f
+                ),
+                radius = nodeR * 2f, center = Offset(nx, ny)
             )
 
             drawContext.canvas.nativeCanvas.apply {
                 val paint = android.graphics.Paint().apply {
                     color = labelColor.toArgb()
-                    textSize = 8.dp.toPx()
+                    textSize = 9.dp.toPx()
                     textAlign = android.graphics.Paint.Align.CENTER
                     typeface = android.graphics.Typeface.DEFAULT_BOLD
                 }
-                drawText(label, nx, ny + 3.dp.toPx(), paint)
+                drawText(label, nx, ny + 3.5.dp.toPx(), paint)
             }
         }
     }
@@ -286,10 +329,11 @@ fun IsometricShieldLock(
 
 @Composable
 fun IsometricCoinStack(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition()
+    val infiniteTransition = rememberInfiniteTransition(label = "coinStack")
     val floatY by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = -8f,
-        animationSpec = infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse)
+        animationSpec = infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "float"
     )
 
     Canvas(modifier = modifier) {
@@ -302,20 +346,29 @@ fun IsometricCoinStack(modifier: Modifier = Modifier) {
         val coinH = w * 0.1f
         val coinRadius = coinH / 2f
         val spacing = coinH * 0.7f
-        val stackCount = 5
+        val stackCount = 6
 
         for (i in 0 until stackCount) {
-            val offsetX = (stackCount - 1 - i) * 3.dp.toPx()
+            val offsetX = (stackCount - 1 - i) * 2.5.dp.toPx()
             val x = cx - coinW / 2f + offsetX
             val yBase = cy + (stackCount - 1 - i) * spacing - stackCount * spacing / 2f
-            val y = yBase + floatY * (1f - i * 0.12f)
+            val y = yBase + floatY * (1f - i * 0.1f)
+
+            // Individual coin shadow
+            drawRoundRect(
+                color = Color.Black.copy(alpha = 0.15f),
+                topLeft = Offset(x, y + 2.dp.toPx()),
+                size = Size(coinW, coinH),
+                cornerRadius = CornerRadius(coinRadius)
+            )
 
             val colors = listOf(
-                listOf(Lime, Lime.copy(alpha = 0.7f)),
-                listOf(Purple, Purple.copy(alpha = 0.7f)),
-                listOf(Lavender, Lavender.copy(alpha = 0.7f)),
-                listOf(Lime, Purple),
-                listOf(Cream, Lime)
+                listOf(Lime, Lime.copy(alpha = 0.8f)),
+                listOf(Purple, Purple.copy(alpha = 0.8f)),
+                listOf(Lavender, Lavender.copy(alpha = 0.8f)),
+                listOf(Lime, Purple.copy(alpha = 0.6f)),
+                listOf(Cream, Lime.copy(alpha = 0.5f)),
+                listOf(Purple, Lavender)
             )
             val c = colors[i % colors.size]
 
@@ -327,17 +380,13 @@ fun IsometricCoinStack(modifier: Modifier = Modifier) {
                 size = Size(coinW, coinH),
                 cornerRadius = CornerRadius(coinRadius)
             )
+
+            // Highlights
             drawLine(
-                color = Color.White.copy(alpha = 0.3f),
-                start = Offset(x + 4.dp.toPx(), y + coinH * 0.35f),
-                end = Offset(x + coinW - 4.dp.toPx(), y + coinH * 0.35f),
+                color = Color.White.copy(alpha = 0.4f),
+                start = Offset(x + 4.dp.toPx(), y + 2.dp.toPx()),
+                end = Offset(x + coinW - 4.dp.toPx(), y + 2.dp.toPx()),
                 strokeWidth = 1.dp.toPx()
-            )
-            drawLine(
-                color = Color.White.copy(alpha = 0.2f),
-                start = Offset(x + 4.dp.toPx(), y + coinH * 0.55f),
-                end = Offset(x + coinW - 4.dp.toPx(), y + coinH * 0.55f),
-                strokeWidth = 0.8.dp.toPx()
             )
         }
     }
@@ -345,14 +394,16 @@ fun IsometricCoinStack(modifier: Modifier = Modifier) {
 
 @Composable
 fun IsometricGlobeChain(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition()
+    val infiniteTransition = rememberInfiniteTransition(label = "globeChain")
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(30000, easing = LinearEasing))
+        animationSpec = infiniteRepeatable(tween(30000, easing = LinearEasing)),
+        label = "rotation"
     )
     val pulse by infiniteTransition.animateFloat(
-        initialValue = 0.9f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse)
+        initialValue = 0.9f, targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(tween(2500, easing = EaseInOutSine), RepeatMode.Reverse),
+        label = "pulse"
     )
 
     Canvas(modifier = modifier) {

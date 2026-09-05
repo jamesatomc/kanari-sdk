@@ -9,9 +9,21 @@ import android.graphics.Bitmap
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.*
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,13 +40,22 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +76,7 @@ import androidx.compose.ui.text.font.FontWeight
 import kotlin.math.pow
 import androidx.core.graphics.set
 import androidx.core.graphics.createBitmap
+import com.jamesatomc.kanariapp.ui.theme.LocalKanariGradients
 
 // ---------- Utils ----------
 
@@ -107,6 +129,14 @@ fun copyToClipboard(
     Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
 }
 
+@Composable
+fun triggerHapticFeedback(type: HapticFeedbackType = HapticFeedbackType.LongPress) {
+    val haptic = LocalHapticFeedback.current
+    SideEffect {
+        haptic.performHapticFeedback(type)
+    }
+}
+
 fun extractAddressFromQr(raw: String): String {
     val regex = Regex("0x[0-9a-fA-F]{1,64}")
     return regex.find(raw.trim())?.value ?: raw.trim()
@@ -147,21 +177,55 @@ fun LoadingButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     colors: ButtonColors = ButtonDefaults.buttonColors()
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.96f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "buttonScale"
+    )
+    val haptic = LocalHapticFeedback.current
+
     Button(
-        onClick = onClick,
+        onClick = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            onClick()
+        },
         enabled = enabled && !isLoading,
-        modifier = modifier.height(56.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = colors
+        modifier = modifier
+            .height(60.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            },
+        shape = RoundedCornerShape(16.dp),
+        colors = colors,
+        interactionSource = interactionSource,
+        contentPadding = PaddingValues(horizontal = 24.dp)
     ) {
         if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                color = if (colors == ButtonDefaults.buttonColors()) MaterialTheme.colorScheme.onPrimary else colors.contentColor,
+                strokeWidth = 3.dp
+            )
         } else {
-            if (icon != null) {
-                Icon(icon, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                if (icon != null) {
+                    Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                }
+                Text(
+                    text,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                )
             }
-            Text(text, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -230,25 +294,89 @@ fun AuthHeroSection(
 fun ErrorBanner(error: String, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.errorContainer
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.2f))
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Icon(
                 Icons.Default.Security,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(18.dp)
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(20.dp)
             )
             Text(
                 error,
                 color = MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                 modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    trailing: @Composable (() -> Unit)? = null
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(width = 4.dp, height = 18.dp)
+                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp))
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
+                ),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+        trailing?.invoke()
+    }
+}
+
+@Composable
+fun DotsIndicator(
+    totalDots: Int,
+    selectedIndex: Int,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(totalDots) { index ->
+            val isSelected = index == selectedIndex
+            val width by animateDpAsState(
+                targetValue = if (isSelected) 24.dp else 8.dp,
+                animationSpec = spring(stiffness = Spring.StiffnessLow),
+                label = "dotWidth"
+            )
+            val color by animateColorAsState(
+                targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                label = "dotColor"
+            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .size(width = width, height = 8.dp)
+                    .background(color = color, shape = CircleShape)
             )
         }
     }
@@ -257,14 +385,55 @@ fun ErrorBanner(error: String, modifier: Modifier = Modifier) {
 @Composable
 fun DetailSectionCard(
     modifier: Modifier = Modifier,
+    glass: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        shape = RoundedCornerShape(16.dp),
-        modifier = modifier.fillMaxWidth()
+    if (glass) {
+        GlassCard(modifier = modifier, content = content)
+    } else {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            shape = RoundedCornerShape(20.dp),
+            modifier = modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(2.dp),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        }
+    }
+}
+
+@Composable
+fun GlassCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val isDark = isSystemInDarkTheme()
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
+        shape = RoundedCornerShape(24.dp),
+        color = if (isDark) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.08f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.5.dp,
+            Brush.linearGradient(
+                listOf(
+                    if (isDark) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.2f),
+                    if (isDark) Color.White.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.1f)
+                )
+            )
+        )
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+        Column(
+            Modifier
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            content = content
+        )
     }
 }
 
@@ -320,28 +489,65 @@ fun DropdownSelector(
 
 @Composable
 fun CurveBadge(curveInfo: CurveInfo, modifier: Modifier = Modifier) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Icon(
-            if (curveInfo.isPostQuantum) Icons.Default.Security else Icons.Default.VerifiedUser,
-            contentDescription = null,
-            modifier = Modifier.size(14.dp),
-            tint = if (curveInfo.isPostQuantum) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
-        )
-        Text(
-            curveInfo.displayName,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (curveInfo.isPostQuantum) Surface(
-            color = MaterialTheme.colorScheme.tertiaryContainer,
-            shape = RoundedCornerShape(6.dp)
+    val infiniteTransition = rememberInfiniteTransition(label = "badgePulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = EaseInOutSine),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "alpha"
+    )
+
+    val bgColor = if (curveInfo.isPostQuantum) {
+        com.jamesatomc.kanariapp.ui.theme.KanariColors.Lime.copy(alpha = alpha)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+    }
+
+    val contentColor = if (curveInfo.isPostQuantum) {
+        com.jamesatomc.kanariapp.ui.theme.KanariColors.Ink
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Surface(
+        modifier = modifier,
+        color = bgColor,
+        shape = RoundedCornerShape(12.dp),
+        border = if (curveInfo.isPostQuantum) androidx.compose.foundation.BorderStroke(
+            1.dp,
+            Color.Black.copy(alpha = 0.1f)
+        ) else null
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text(
-                "PQ",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            Icon(
+                if (curveInfo.isPostQuantum) Icons.Default.Security else Icons.Default.VerifiedUser,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = contentColor
             )
+            Text(
+                curveInfo.displayName,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = contentColor
+            )
+            if (curveInfo.isPostQuantum) {
+                Text(
+                    "Post-Quantum",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    ),
+                    color = contentColor.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(start = 2.dp)
+                )
+            }
         }
     }
 }
@@ -412,19 +618,30 @@ fun SmartTabRow(
 ) {
     TabRow(
         selectedTabIndex = selectedTabIndex,
-        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh, // More distinct background
         contentColor = MaterialTheme.colorScheme.primary,
+        indicator = { tabPositions ->
+            if (selectedTabIndex < tabPositions.size) {
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        },
         divider = {},
-        modifier = modifier.clip(RoundedCornerShape(12.dp))
+        modifier = modifier.clip(RoundedCornerShape(16.dp))
     ) {
         tabs.forEachIndexed { index, title ->
+            val isSelected = selectedTabIndex == index
             Tab(
-                selected = selectedTabIndex == index,
+                selected = isSelected,
                 onClick = { onTabSelected(index) },
                 text = {
                     Text(
                         title,
-                        fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal
+                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp)
                     )
                 }
             )
@@ -470,6 +687,7 @@ fun SecretRevealCard(
     onCopy: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     val icon = remember(title) {
         when (title) {
             "Private Key" -> Icons.Filled.Visibility
@@ -484,48 +702,69 @@ fun SecretRevealCard(
         "Private Key" -> MaterialTheme.colorScheme.onPrimaryContainer
         else -> MaterialTheme.colorScheme.onSecondaryContainer
     }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        shape = RoundedCornerShape(16.dp),
-        modifier = modifier.fillMaxWidth()
+        shape = RoundedCornerShape(24.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessLow))
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Surface(
                     shape = CircleShape,
                     color = containerColor,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = contentColor)
+                        Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = contentColor)
                     }
                 }
                 Text(
                     title,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                 )
             }
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
                     if (isVisible && secret != null) secret else "•".repeat(32),
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = if (isVisible) 0.sp else 4.sp
+                    ),
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(12.dp)
+                    modifier = Modifier.padding(16.dp),
+                    textAlign = if (isVisible) TextAlign.Start else TextAlign.Center
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onCopy, modifier = Modifier.weight(1f)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onCopy()
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp)); Text("Copy")
+                    Spacer(Modifier.width(8.dp)); Text("Copy")
                 }
-                Button(onClick = onToggleVisibility, modifier = Modifier.weight(1f)) {
+                Button(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleVisibility()
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     Text(if (isVisible) "Hide" else "Show")
                 }
             }

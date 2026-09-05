@@ -27,9 +27,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.jamesatomc.kanariapp.ui.components.PinVerificationContent
+import com.jamesatomc.kanariapp.ui.components.*
+import com.jamesatomc.kanariapp.ui.theme.LocalKanariGradients
 import com.jamesatomc.kanariapp.wallet.WalletRecord
 import com.jamesatomc.kanariapp.wallet.WalletStorage
 import com.kanari.kanari_crypto.KanariCrypto
@@ -146,37 +148,24 @@ fun KeyGenerationScreen(
             Modifier.fillMaxSize().padding(padding).verticalScroll(scrollState).navigationBarsPadding().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            TabRow(
+            SmartTabRow(
                 selectedTabIndex = selectedTab,
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                contentColor = MaterialTheme.colorScheme.primary,
-                divider = {},
-                modifier = Modifier.clip(RoundedCornerShape(12.dp))
-            ) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTab == index,
-                        onClick = {
-                            selectedTab = index; mnemonic = null; keyPairs = emptyList(); importInput =
-                            ""; errorMessage = null
-                        },
-                        text = {
-                            Text(
-                                title,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-                        })
+                tabs = tabs,
+                onTabSelected = { 
+                    selectedTab = it
+                    mnemonic = null
+                    keyPairs = emptyList()
+                    importInput = ""
+                    errorMessage = null
                 }
-            }
-            ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            )
+            DetailSectionCard(glass = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(
                         if (selectedTab == 0) "Wallet Settings" else "Import Details",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.ExtraBold
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     if (selectedTab == 1) {
@@ -250,7 +239,7 @@ fun KeyGenerationScreen(
                     )
                 }
             }
-            Button(
+            LoadingButton(
                 onClick = {
                     scope.launch {
                         isLoading = true
@@ -294,32 +283,11 @@ fun KeyGenerationScreen(
                         isLoading = false
                     }
                 },
-                enabled = !isLoading,
-                modifier = Modifier.fillMaxWidth().height(64.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                contentPadding = PaddingValues(16.dp)
-            ) {
-                if (isLoading) CircularProgressIndicator(
-                    Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 3.dp
-                )
-                else Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        if (selectedTab == 0) Icons.Default.Refresh else Icons.Default.FileDownload,
-                        contentDescription = null
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        if (selectedTab == 0) "Generate Secure Wallet" else "Import Existing Wallet",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
-                    )
-                }
-            }
+                isLoading = isLoading,
+                text = if (selectedTab == 0) "Generate Secure Wallet" else "Import Existing Wallet",
+                icon = if (selectedTab == 0) Icons.Default.Refresh else Icons.Default.FileDownload,
+                modifier = Modifier.fillMaxWidth()
+            )
             if (mnemonic != null || keyPairs.isNotEmpty()) {
                 Row(
                     Modifier.fillMaxWidth(),
