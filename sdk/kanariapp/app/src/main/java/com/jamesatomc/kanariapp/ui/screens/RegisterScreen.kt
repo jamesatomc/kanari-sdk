@@ -66,7 +66,6 @@ fun RegisterScreen(
             Spacer(Modifier.height(16.dp))
 
             AuthHeroSection(
-                icon = Icons.Default.PersonAdd,
                 title = "Create Your Account",
                 subtitle = "Set up your Kanari account and choose the wallet that fits your use case."
             )

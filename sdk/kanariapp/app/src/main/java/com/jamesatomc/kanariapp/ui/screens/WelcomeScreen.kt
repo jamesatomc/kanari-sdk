@@ -67,19 +67,9 @@ fun WelcomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "K",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
+                    com.jamesatomc.kanariapp.ui.components.KanariLogo(
+                        modifier = Modifier.size(36.dp)
+                    )
                     Spacer(Modifier.width(10.dp))
                     Text(
                         "KANARI",

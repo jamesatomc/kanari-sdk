@@ -134,7 +134,9 @@ fun PinNumberPad(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)
             ) {
-                row.forEach { num -> NumberButton(number = num, onPressed = { onNumberPressed(num) }) }
+                row.forEach { num ->
+                    NumberButton(number = num, onClick = onNumberPressed)
+                }
             }
         }
         Row(
@@ -154,7 +156,7 @@ fun PinNumberPad(
                 )
             }
             else Spacer(Modifier.size(56.dp))
-            NumberButton(number = "0", onPressed = { onNumberPressed("0") })
+            NumberButton(number = "0", onClick = onNumberPressed)
             IconButton(onClick = onBackspacePressed, modifier = Modifier.size(56.dp)) {
                 Icon(
                     Icons.AutoMirrored.Filled.Backspace,
@@ -168,13 +170,13 @@ fun PinNumberPad(
 }
 
 @Composable
-private fun NumberButton(number: String, onPressed: () -> Unit) {
+private fun NumberButton(number: String, onClick: (String) -> Unit) {
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.size(56.dp),
-        onClick = onPressed
+        onClick = { onClick(number) }
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Text(
@@ -246,6 +248,30 @@ fun PinVerificationContent(
 ) {
     val pin = rememberPinState()
     val scope = rememberCoroutineScope()
+    val onNumberPressedStable = remember {
+        { num: String ->
+            pin.onNumber(num)
+            if (pin.entered.length == 6) {
+                pin.isChecking = true
+                scope.launch {
+                    val currentPin = pin.entered
+                    val ok = try {
+                        if (onVerifyAsync != null) onVerifyAsync(currentPin) else onVerify(currentPin)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (ok) {
+                        onSuccess(currentPin)
+                    } else {
+                        pin.fail("Invalid PIN")
+                    }
+                }
+            }
+        }
+    }
+
+    val onBackspacePressedStable = remember { { pin.onBackspace() } }
+
     Column(
         modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -260,26 +286,8 @@ fun PinVerificationContent(
         )
         Spacer(Modifier.height(32.dp))
         PinNumberPad(
-            onNumberPressed = {
-                pin.onNumber(it)
-                if (pin.entered.length == 6) {
-                    pin.isChecking = true
-                    scope.launch {
-                        val currentPin = pin.entered
-                        val ok = try {
-                            if (onVerifyAsync != null) onVerifyAsync(currentPin) else onVerify(currentPin)
-                        } catch (_: Exception) {
-                            false
-                        }
-                        if (ok) {
-                            onSuccess(currentPin)
-                        } else {
-                            pin.fail("Invalid PIN")
-                        }
-                    }
-                }
-            },
-            onBackspacePressed = pin::onBackspace,
+            onNumberPressed = onNumberPressedStable,
+            onBackspacePressed = onBackspacePressedStable,
             biometricEnabled = biometricEnabled,
             onBiometricPressed = onBiometric
         )
@@ -336,9 +344,9 @@ fun ChangePinFullScreenContent(
                 isChecking = pin.isChecking
             )
             Spacer(Modifier.height(32.dp))
-            PinNumberPad(
-                onNumberPressed = {
-                    pin.onNumber(it)
+            val onNumberPressedStable = remember(step, currentPin, newPin) {
+                { num: String ->
+                    pin.onNumber(num)
                     if (pin.entered.length == 6) {
                         when (step) {
                             0 -> {
@@ -371,8 +379,13 @@ fun ChangePinFullScreenContent(
                             }
                         }
                     }
-                },
-                onBackspacePressed = pin::onBackspace,
+                }
+            }
+            val onBackspacePressedStable = remember { { pin.onBackspace() } }
+
+            PinNumberPad(
+                onNumberPressed = onNumberPressedStable,
+                onBackspacePressed = onBackspacePressedStable,
                 biometricEnabled = showBiometric,
                 onBiometricPressed = onBiometric
             )

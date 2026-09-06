@@ -10,8 +10,10 @@ import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.integration.android.AndroidKeysetManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.security.SecureRandom
@@ -66,22 +68,22 @@ class WalletStorage(private val context: Context) {
         private val KEY_BIOMETRIC_ENABLED = booleanPreferencesKey("kanari_biometric_enabled")
         private val KEY_BIOMETRIC_PIN = stringPreferencesKey("kanari_biometric_pin")
         private const val PIN_LENGTH = 6
-        private const val KDF_ITERATIONS = 210000
+        private const val KDF_ITERATIONS = 100000
     }
 
-    private fun encryptSecure(data: String): String {
-        return Base64.encodeToString(aead.encrypt(data.toByteArray(), null), Base64.NO_WRAP)
+    private suspend fun encryptSecure(data: String): String = withContext(Dispatchers.Default) {
+        Base64.encodeToString(aead.encrypt(data.toByteArray(), null), Base64.NO_WRAP)
     }
 
-    private fun decryptSecure(encrypted: String): String {
-        return String(aead.decrypt(Base64.decode(encrypted, Base64.NO_WRAP), null))
+    private suspend fun decryptSecure(encrypted: String): String = withContext(Dispatchers.Default) {
+        String(aead.decrypt(Base64.decode(encrypted, Base64.NO_WRAP), null))
     }
 
-    suspend fun hasPin(): Boolean {
-        return context.dataStore.data.map { it.contains(KEY_PIN_VERIFIER) }.first()
+    suspend fun hasPin(): Boolean = withContext(Dispatchers.IO) {
+        context.dataStore.data.map { it.contains(KEY_PIN_VERIFIER) }.first()
     }
 
-    suspend fun savePin(pin: String) {
+    suspend fun savePin(pin: String) = withContext(Dispatchers.Default) {
         require(pin.length == PIN_LENGTH) { "PIN must be $PIN_LENGTH digits" }
         val salt = ByteArray(16).apply { SecureRandom().nextBytes(this) }
         val verifier = deriveKey(pin, salt)
@@ -92,64 +94,66 @@ class WalletStorage(private val context: Context) {
         }
     }
 
-    suspend fun verifyPin(pin: String): Boolean {
+    suspend fun verifyPin(pin: String): Boolean = withContext(Dispatchers.Default) {
         val prefs = context.dataStore.data.first()
-        val saltBase64 = prefs[KEY_PIN_SALT] ?: return false
-        val verifierBase64 = prefs[KEY_PIN_VERIFIER] ?: return false
+        val saltBase64 = prefs[KEY_PIN_SALT] ?: return@withContext false
+        val verifierBase64 = prefs[KEY_PIN_VERIFIER] ?: return@withContext false
 
         val salt = Base64.decode(saltBase64, Base64.NO_WRAP)
         val verifier = Base64.decode(verifierBase64, Base64.NO_WRAP)
 
         val candidate = deriveKey(pin, salt)
-        return candidate.contentEquals(verifier)
+        candidate.contentEquals(verifier)
     }
 
-    suspend fun isBiometricEnabled(): Boolean {
-        return context.dataStore.data.map { it[KEY_BIOMETRIC_ENABLED] ?: false }.first()
+    suspend fun isBiometricEnabled(): Boolean = withContext(Dispatchers.IO) {
+        context.dataStore.data.map { it[KEY_BIOMETRIC_ENABLED] ?: false }.first()
     }
 
-    suspend fun setBiometricEnabled(enabled: Boolean) {
+    suspend fun setBiometricEnabled(enabled: Boolean) = withContext(Dispatchers.IO) {
         context.dataStore.edit { prefs ->
             prefs[KEY_BIOMETRIC_ENABLED] = enabled
             if (!enabled) prefs.remove(KEY_BIOMETRIC_PIN)
         }
     }
 
-    suspend fun saveBiometricPin(pin: String) {
+    suspend fun saveBiometricPin(pin: String) = withContext(Dispatchers.Default) {
         require(pin.length == PIN_LENGTH) { "PIN must be $PIN_LENGTH digits" }
+        val encrypted = encryptSecure(pin)
         context.dataStore.edit { prefs ->
-            prefs[KEY_BIOMETRIC_PIN] = encryptSecure(pin)
+            prefs[KEY_BIOMETRIC_PIN] = encrypted
             prefs[KEY_BIOMETRIC_ENABLED] = true
         }
     }
 
-    suspend fun getBiometricPin(): String? {
-        if (!isBiometricEnabled()) return null
-        val encrypted = context.dataStore.data.first()[KEY_BIOMETRIC_PIN] ?: return null
-        return try {
+    suspend fun getBiometricPin(): String? = withContext(Dispatchers.Default) {
+        if (!isBiometricEnabled()) return@withContext null
+        val encrypted = context.dataStore.data.first()[KEY_BIOMETRIC_PIN] ?: return@withContext null
+        try {
             decryptSecure(encrypted)
         } catch (_: Exception) {
             null
         }
     }
 
-    suspend fun clearBiometricPin() {
+    suspend fun clearBiometricPin() = withContext(Dispatchers.IO) {
         context.dataStore.edit { prefs ->
             prefs.remove(KEY_BIOMETRIC_PIN)
             prefs.remove(KEY_BIOMETRIC_ENABLED)
         }
     }
 
-    suspend fun saveWallets(wallets: List<WalletRecord>) {
+    suspend fun saveWallets(wallets: List<WalletRecord>) = withContext(Dispatchers.Default) {
         val data = json.encodeToString(wallets)
+        val encrypted = encryptSecure(data)
         context.dataStore.edit { prefs ->
-            prefs[KEY_WALLETS] = encryptSecure(data)
+            prefs[KEY_WALLETS] = encrypted
         }
     }
 
-    suspend fun loadWallets(): List<WalletRecord> {
-        val encrypted = context.dataStore.data.first()[KEY_WALLETS] ?: return emptyList()
-        return try {
+    suspend fun loadWallets(): List<WalletRecord> = withContext(Dispatchers.Default) {
+        val encrypted = context.dataStore.data.first()[KEY_WALLETS] ?: return@withContext emptyList()
+        try {
             val data = decryptSecure(encrypted)
             json.decodeFromString(data)
         } catch (_: Exception) {
@@ -163,7 +167,7 @@ class WalletStorage(private val context: Context) {
         return factory.generateSecret(spec).encoded
     }
 
-    fun encrypt(data: String, pin: String): EncryptedData {
+    suspend fun encrypt(data: String, pin: String): EncryptedData = withContext(Dispatchers.Default) {
         val salt = ByteArray(16).apply { SecureRandom().nextBytes(this) }
         val keyBytes = deriveKey(pin, salt)
         val key = SecretKeySpec(keyBytes, "AES")
@@ -174,10 +178,11 @@ class WalletStorage(private val context: Context) {
 
         val encryptedBytes = cipher.doFinal(data.toByteArray())
 
+        // Split cipherText and MAC (Android's AES/GCM includes MAC at the end)
         val cipherText = encryptedBytes.copyOfRange(0, encryptedBytes.size - 16)
         val mac = encryptedBytes.copyOfRange(encryptedBytes.size - 16, encryptedBytes.size)
 
-        return EncryptedData(
+        EncryptedData(
             salt = Base64.encodeToString(salt, Base64.NO_WRAP),
             nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
             cipherText = Base64.encodeToString(cipherText, Base64.NO_WRAP),
@@ -186,7 +191,7 @@ class WalletStorage(private val context: Context) {
         )
     }
 
-    fun decrypt(encryptedData: EncryptedData, pin: String): String {
+    suspend fun decrypt(encryptedData: EncryptedData, pin: String): String = withContext(Dispatchers.Default) {
         val salt = Base64.decode(encryptedData.salt, Base64.NO_WRAP)
         val keyBytes = deriveKey(pin, salt)
         val key = SecretKeySpec(keyBytes, "AES")
@@ -199,6 +204,6 @@ class WalletStorage(private val context: Context) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, nonce))
 
-        return String(cipher.doFinal(combined))
+        String(cipher.doFinal(combined))
     }
 }

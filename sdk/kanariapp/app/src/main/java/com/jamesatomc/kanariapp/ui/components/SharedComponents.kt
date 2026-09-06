@@ -62,6 +62,8 @@ import androidx.compose.ui.text.font.FontWeight
 import kotlin.math.pow
 
 
+const val KANARI_LOGO_URL = "https://avatars.githubusercontent.com/u/127471673?s=200&v=4"
+
 // ---------- Utils ----------
 
 fun String.toShortAddress(): String =
@@ -142,6 +144,15 @@ fun getCurveInfo(curveType: String): CurveInfo = when (curveType) {
 }
 
 // ---------- Shared Composables ----------
+
+@Composable
+fun KanariLogo(modifier: Modifier = Modifier) {
+    coil3.compose.AsyncImage(
+        model = KANARI_LOGO_URL,
+        contentDescription = "Kanari Logo",
+        modifier = modifier.clip(CircleShape)
+    )
+}
 
 @Composable
 fun LoadingButton(
@@ -235,10 +246,10 @@ fun ScaffoldWithBackBar(
 
 @Composable
 fun AuthHeroSection(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
 ) {
     Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -248,12 +259,16 @@ fun AuthHeroSection(
             ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                modifier = Modifier.size(40.dp),
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
+            if (icon != null) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            } else {
+                KanariLogo(modifier = Modifier.size(60.dp))
+            }
         }
         Spacer(Modifier.height(16.dp))
         Text(title, style = MaterialTheme.typography.headlineMedium)
@@ -741,6 +756,7 @@ fun KanariTopBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        KanariLogo(modifier = Modifier.size(24.dp))
                         Text(
                             "Kanari Wallet",
                             style = MaterialTheme.typography.titleMedium,

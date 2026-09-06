@@ -486,11 +486,13 @@ fun WalletDetailFullScreen(
                 subtitle = "Enter 6-digit PIN to reveal secrets",
                 onVerifyAsync = { pin -> viewModel.verifyPin(pin) },
                 onSuccess = { pin ->
-                    val k = viewModel.revealPrivateKey(wallet, pin)
-                    if (k != null) {
-                        revealedKey = k
-                        revealedSeed = if (hasSeed) viewModel.revealMnemonic(wallet, pin) else null
-                        isVerified = true
+                    scope.launch {
+                        val k = viewModel.revealPrivateKey(wallet, pin)
+                        if (k != null) {
+                            revealedKey = k
+                            revealedSeed = if (hasSeed) viewModel.revealMnemonic(wallet, pin) else null
+                            isVerified = true
+                        }
                     }
                 },
                 biometricEnabled = canUseBiometric,

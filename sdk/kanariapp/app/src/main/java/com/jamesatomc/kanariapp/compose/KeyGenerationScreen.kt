@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -84,10 +85,14 @@ fun KeyGenerationScreen(
     Scaffold(modifier = modifier, snackbarHost = { SnackbarHost(snackState) }, topBar = {
         TopAppBar(
             title = {
-                Text(
-                    "Kanari Key Generator",
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    KanariLogo(modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "Key Generator",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
             },
             navigationIcon = {
                 IconButton(onClick = onBack) {

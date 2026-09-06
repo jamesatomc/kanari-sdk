@@ -169,7 +169,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun verifyPin(pin: String): Boolean = walletStorage.verifyPin(pin)
 
-    fun revealPrivateKey(record: WalletRecord, pin: String): String? {
+    suspend fun revealPrivateKey(record: WalletRecord, pin: String): String? {
         val enc = record.privateKeyEncrypted ?: return null
         return try {
             walletStorage.decrypt(enc, pin)
@@ -178,7 +178,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun revealMnemonic(record: WalletRecord, pin: String): String? {
+    suspend fun revealMnemonic(record: WalletRecord, pin: String): String? {
         val enc = record.mnemonicEncrypted ?: return null
         return try {
             walletStorage.decrypt(enc, pin)
