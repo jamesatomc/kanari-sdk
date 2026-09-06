@@ -189,17 +189,15 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
     fun isBiometricEnabled(): Boolean = walletStorage.isBiometricEnabled()
 
     fun setBiometricEnabled(enabled: Boolean): Boolean {
-        val result = if (enabled) {
+        if (enabled) {
             val pin = unlockedPin ?: return false
             walletStorage.saveBiometricPin(pin)
-            true
         } else {
             walletStorage.clearBiometricPin()
             walletStorage.setBiometricEnabled(false)
-            true
         }
         _biometricEnabled.value = walletStorage.isBiometricEnabled()
-        return result
+        return true
     }
 
     fun changePin(oldPin: String, newPin: String): Boolean {

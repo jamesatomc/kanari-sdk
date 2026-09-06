@@ -3,7 +3,7 @@ package com.jamesatomc.kanariapp.wallet
 import android.content.Context
 import android.util.Base64
 import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
+import androidx.security.crypto.MasterKey
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.security.SecureRandom
@@ -35,14 +35,15 @@ data class WalletRecord(
     val encryption: String = "pin_aes_gcm_pbkdf2_v1"
 )
 
-@Suppress("DEPRECATION")
 class WalletStorage(context: Context) {
     private val sharedPrefs by lazy {
-        val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
         EncryptedSharedPreferences.create(
-            "kanari_secure_prefs",
-            masterKeyAlias,
             context,
+            "kanari_secure_prefs",
+            masterKey,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )

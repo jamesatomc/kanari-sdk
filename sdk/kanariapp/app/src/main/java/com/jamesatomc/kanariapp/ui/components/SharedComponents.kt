@@ -1,14 +1,11 @@
 package com.jamesatomc.kanariapp.ui.components
 
-import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.util.Log
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
@@ -34,7 +31,6 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.*
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,20 +49,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
+import qrcode.QRCode
 import com.jamesatomc.kanariapp.network.models.TokenBalance
 import com.jamesatomc.kanariapp.wallet.WalletRecord
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
 import androidx.compose.material.icons.filled.CurrencyExchange
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.ui.text.font.FontWeight
 import kotlin.math.pow
-import androidx.core.graphics.set
-import androidx.core.graphics.createBitmap
 
 
 // ---------- Utils ----------
@@ -566,18 +559,10 @@ fun SmartTabRow(
     modifier: Modifier = Modifier,
     onTabSelected: (Int) -> Unit = {}
 ) {
-    TabRow(
+    SecondaryTabRow(
         selectedTabIndex = selectedTabIndex,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh, // More distinct background
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.primary,
-        indicator = { tabPositions ->
-            if (selectedTabIndex < tabPositions.size) {
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        },
         divider = {},
         modifier = modifier.clip(RoundedCornerShape(16.dp))
     ) {
@@ -720,21 +705,6 @@ fun SecretRevealCard(
             }
         }
     }
-}
-
-fun generateQrBitmap(text: String, size: Int): Bitmap? = try {
-    val writer = QRCodeWriter()
-    val bitMatrix = writer.encode(text, BarcodeFormat.QR_CODE, size, size)
-    val w = bitMatrix.width
-    val h = bitMatrix.height
-    val bmp = createBitmap(w, h, Bitmap.Config.RGB_565)
-    for (x in 0 until w) for (y in 0 until h) {
-        bmp[x, y] =
-            if (bitMatrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
-    }
-    bmp
-} catch (_: Exception) {
-    null
 }
 
 // ---------- Reusable UI (shared across Dashboard/History/Receive) ----------
@@ -880,18 +850,30 @@ fun QrCodeImage(
         ) { CircularProgressIndicator() }
     }
 ) {
-    val bmp = remember(address) { if (address.isNotEmpty()) generateQrBitmap(address, 512) else null }
+    val bitmap = remember(address) {
+        if (address.isNotEmpty()) {
+            try {
+                val qrCode = QRCode(address)
+                val qrData = qrCode.render().nativeImage() as Bitmap
+                qrData
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+    }
+
     Surface(
         modifier = modifier.size(size).padding(8.dp),
         shape = RoundedCornerShape(16.dp),
         color = Color.White
     ) {
-        if (bmp != null) Image(
-            bitmap = bmp.asImageBitmap(),
-            contentDescription = "QR",
-            modifier = Modifier.fillMaxSize()
-        )
-        else placeholder()
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "QR",
+                modifier = Modifier.fillMaxSize()
+            )
+        } else placeholder()
     }
 }
 
@@ -950,7 +932,7 @@ fun TokenIcon(token: TokenBalance, modifier: Modifier = Modifier) {
     Surface(shape = CircleShape, color = container, modifier = modifier.size(40.dp)) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (!token.iconUrl.isNullOrBlank()) {
-                coil.compose.AsyncImage(
+                coil3.compose.AsyncImage(
                     model = token.iconUrl,
                     contentDescription = token.symbol,
                     modifier = Modifier.fillMaxSize().padding(6.dp)
@@ -999,30 +981,13 @@ fun RecipientAddressField(
     val context = LocalContext.current
     var showPicker by remember { mutableStateOf(false) }
 
-    val qrLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        if (result.contents != null) {
-            onValueChange(extractAddressFromQr(result.contents))
-            Toast.makeText(context, "Scan successful", Toast.LENGTH_SHORT).show()
-        }
+    val scannerOptions = remember {
+        GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .enableAutoZoom()
+            .build()
     }
-    val permLauncher =
-        rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                try {
-                    qrLauncher.launch(ScanOptions().apply {
-                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                        setPrompt("Scan wallet QR")
-                        setBeepEnabled(true)
-                        setBarcodeImageEnabled(true)
-                        setOrientationLocked(true)
-                        setCaptureActivity(com.journeyapps.barcodescanner.CaptureActivity::class.java)
-                    })
-                } catch (e: Exception) {
-                    Log.e("RecipientField", "scanner failed", e)
-                    Toast.makeText(context, "Failed to open camera: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            } else Toast.makeText(context, "Camera permission required", Toast.LENGTH_SHORT).show()
-        }
+    val scanner = remember { GmsBarcodeScanning.getClient(context, scannerOptions) }
 
     OutlinedTextField(
         value = value,
@@ -1041,25 +1006,17 @@ fun RecipientAddressField(
                     )
                 }
                 IconButton(onClick = {
-                    try {
-                        if (ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.CAMERA
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
-                            qrLauncher.launch(ScanOptions().apply {
-                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                setPrompt("Scan wallet QR")
-                                setBeepEnabled(true)
-                                setBarcodeImageEnabled(true)
-                                setOrientationLocked(true)
-                                setCaptureActivity(com.journeyapps.barcodescanner.CaptureActivity::class.java)
-                            })
-                        } else permLauncher.launch(Manifest.permission.CAMERA)
-                    } catch (e: Exception) {
-                        Log.e("RecipientField", "launch error", e)
-                        Toast.makeText(context, "Cannot open camera: ${e.message}", Toast.LENGTH_LONG).show()
-                    }
+                    scanner.startScan()
+                        .addOnSuccessListener { barcode ->
+                            barcode.rawValue?.let { raw ->
+                                onValueChange(extractAddressFromQr(raw))
+                                Toast.makeText(context, "Scan successful", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        .addOnFailureListener {
+                            Log.e("RecipientField", "Scan failed")
+                            // "Canceled" is a common failure if user closes it
+                        }
                 }) {
                     Icon(
                         Icons.Default.QrCodeScanner,
