@@ -35,7 +35,7 @@ fun WelcomeScreen(
 ) {
     val context = LocalContext.current
     val walletStorage = remember { WalletStorage(context) }
-    var hasWallet by remember { mutableStateOf(walletStorage.loadWallets().isNotEmpty()) }
+    var hasWallet by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { hasWallet = walletStorage.loadWallets().isNotEmpty() }
 
     val animProgress = remember { Animatable(0f) }

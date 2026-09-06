@@ -237,7 +237,8 @@ fun PinEntryHeader(
 fun PinVerificationContent(
     title: String,
     subtitle: String,
-    onVerify: (String) -> Boolean,
+    onVerify: (String) -> Boolean = { false },
+    onVerifyAsync: (suspend (String) -> Boolean)? = null,
     onSuccess: (String) -> Unit,
     biometricEnabled: Boolean = false,
     onBiometric: (() -> Unit)? = null,
@@ -246,7 +247,7 @@ fun PinVerificationContent(
     val pin = rememberPinState()
     val scope = rememberCoroutineScope()
     Column(
-        modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 24.dp),
+        modifier = modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -263,14 +264,17 @@ fun PinVerificationContent(
                 pin.onNumber(it)
                 if (pin.entered.length == 6) {
                     pin.isChecking = true
-                    scope.launch(Dispatchers.Default) {
+                    scope.launch {
+                        val currentPin = pin.entered
                         val ok = try {
-                            onVerify(pin.entered)
+                            if (onVerifyAsync != null) onVerifyAsync(currentPin) else onVerify(currentPin)
                         } catch (_: Exception) {
                             false
                         }
-                        withContext(Dispatchers.Main) {
-                            if (ok) onSuccess(pin.entered) else pin.fail("Invalid PIN")
+                        if (ok) {
+                            onSuccess(currentPin)
+                        } else {
+                            pin.fail("Invalid PIN")
                         }
                     }
                 }
@@ -286,7 +290,8 @@ fun PinVerificationContent(
 @Composable
 fun ChangePinFullScreenContent(
     onDismiss: () -> Unit,
-    onConfirm: (String, String) -> Boolean,
+    onConfirm: (String, String) -> Boolean = { _, _ -> false },
+    onConfirmAsync: (suspend (String, String) -> Boolean)? = null,
     biometricEnabled: Boolean = false,
     onBiometric: (() -> Unit)? = null
 ) {
@@ -350,12 +355,17 @@ fun ChangePinFullScreenContent(
                                 else {
                                     pin.isChecking = true
                                     scope.launch {
-                                        val ok = withContext(Dispatchers.Default) { onConfirm(currentPin, pin.entered) }
+                                        val ok = try {
+                                            if (onConfirmAsync != null) onConfirmAsync(currentPin, pin.entered)
+                                            else withContext(Dispatchers.Default) { onConfirm(currentPin, pin.entered) }
+                                        } catch (_: Exception) {
+                                            false
+                                        }
                                         if (ok) {
                                             Toast.makeText(context, "PIN changed successfully", Toast.LENGTH_SHORT)
                                                 .show()
                                             onDismiss()
-                                        } else pin.fail("Incorrect current PIN")
+                                        } else pin.fail("Incorrect current PIN or invalid new PIN")
                                     }
                                 }
                             }

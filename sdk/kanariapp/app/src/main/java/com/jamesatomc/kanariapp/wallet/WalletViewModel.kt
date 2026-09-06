@@ -55,7 +55,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
     private val _themeMode = MutableStateFlow(loadThemeMode())
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
 
-    private val _biometricEnabled = MutableStateFlow(walletStorage.isBiometricEnabled())
+    private val _biometricEnabled = MutableStateFlow(false)
     val biometricEnabled: StateFlow<Boolean> = _biometricEnabled.asStateFlow()
 
     private fun loadThemeMode(): ThemeMode {
@@ -73,6 +73,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     init {
+        viewModelScope.launch {
+            _biometricEnabled.value = walletStorage.isBiometricEnabled()
+        }
         loadWallets()
     }
 
@@ -132,7 +135,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         refreshBalance()
     }
 
-    fun unlock(pin: String): Boolean {
+    suspend fun unlock(pin: String): Boolean {
         if (walletStorage.verifyPin(pin)) {
             unlockedPin = pin
             _isUnlocked.value = true
@@ -149,25 +152,24 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         return false
     }
 
-    fun unlockWithBiometric(): Boolean {
+    suspend fun unlockWithBiometric(): Boolean {
         val pin = walletStorage.getBiometricPin() ?: return false
         return unlock(pin)
     }
 
-    fun revealPrivateKeyWithBiometric(record: WalletRecord): String? {
+    suspend fun revealPrivateKeyWithBiometric(record: WalletRecord): String? {
         val pin = walletStorage.getBiometricPin() ?: return null
         return revealPrivateKey(record, pin)
     }
 
-    fun revealMnemonicWithBiometric(record: WalletRecord): String? {
+    suspend fun revealMnemonicWithBiometric(record: WalletRecord): String? {
         val pin = walletStorage.getBiometricPin() ?: return null
         return revealMnemonic(record, pin)
     }
 
-    fun verifyPin(pin: String): Boolean = walletStorage.verifyPin(pin)
+    suspend fun verifyPin(pin: String): Boolean = walletStorage.verifyPin(pin)
 
     fun revealPrivateKey(record: WalletRecord, pin: String): String? {
-        if (!verifyPin(pin)) return null
         val enc = record.privateKeyEncrypted ?: return null
         return try {
             walletStorage.decrypt(enc, pin)
@@ -177,7 +179,6 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun revealMnemonic(record: WalletRecord, pin: String): String? {
-        if (!verifyPin(pin)) return null
         val enc = record.mnemonicEncrypted ?: return null
         return try {
             walletStorage.decrypt(enc, pin)
@@ -186,9 +187,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun isBiometricEnabled(): Boolean = walletStorage.isBiometricEnabled()
+    suspend fun isBiometricEnabled(): Boolean = walletStorage.isBiometricEnabled()
 
-    fun setBiometricEnabled(enabled: Boolean): Boolean {
+    suspend fun setBiometricEnabled(enabled: Boolean): Boolean {
         if (enabled) {
             val pin = unlockedPin ?: return false
             walletStorage.saveBiometricPin(pin)
@@ -200,10 +201,10 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
         return true
     }
 
-    fun changePin(oldPin: String, newPin: String): Boolean {
+    suspend fun changePin(oldPin: String, newPin: String): Boolean {
         if (!walletStorage.verifyPin(oldPin)) return false
         if (newPin.length != 6 || !newPin.all { it.isDigit() }) return false
-        return try {
+        try {
             val wallets = walletStorage.loadWallets()
             val reEncrypted = wallets.map { record ->
                 val newPrivate = record.privateKeyEncrypted?.let {
@@ -230,9 +231,9 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
             }
             _wallets.value = reEncrypted
             _activeWallet.value = reEncrypted.find { it.id == _activeWallet.value?.id } ?: reEncrypted.firstOrNull()
-            true
+            return true
         } catch (_: Exception) {
-            false
+            return false
         }
     }
 

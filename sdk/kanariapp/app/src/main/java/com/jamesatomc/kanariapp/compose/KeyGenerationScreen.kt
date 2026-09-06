@@ -49,7 +49,7 @@ fun KeyGenerationScreen(
     onKeyPairGenerated: ((KeyPairModel) -> Unit)? = null,
     viewModel: WalletViewModel? = null
 ) {
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
@@ -80,8 +80,8 @@ fun KeyGenerationScreen(
         if (curves.isNotEmpty() && selectedCurveInfo == null) selectedCurveInfo =
             curves.find { it.name == defaultCurve } ?: curves.first()
     }
-    LaunchedEffect(errorMessage) { errorMessage?.let { snackbarHostState.showSnackbar(it); errorMessage = null } }
-    Scaffold(modifier = modifier, snackbarHost = { SnackbarHost(snackbarHostState) }, topBar = {
+    LaunchedEffect(errorMessage) { errorMessage?.let { snackState.showSnackbar(it); errorMessage = null } }
+    Scaffold(modifier = modifier, snackbarHost = { SnackbarHost(snackState) }, topBar = {
         TopAppBar(
             title = {
                 Text(
@@ -112,7 +112,7 @@ fun KeyGenerationScreen(
                     PinVerificationContent(
                         title = "Save Wallet",
                         subtitle = "Enter 6-digit PIN to encrypt your wallet",
-                        onVerify = { pin -> !walletStorage.hasPin() || walletStorage.verifyPin(pin) },
+                        onVerifyAsync = { pin -> !walletStorage.hasPin() || walletStorage.verifyPin(pin) },
                         onSuccess = { pin ->
                             scope.launch {
                                 runCatching {
@@ -132,7 +132,7 @@ fun KeyGenerationScreen(
                                     walletStorage.saveWallets(existing)
                                     if (!walletStorage.hasPin()) walletStorage.savePin(pin)
                                     viewModel?.loadWallets()
-                                    snackbarHostState.showSnackbar("Wallet saved successfully!")
+                                    snackState.showSnackbar("Wallet saved successfully!")
                                     showSaveDialog = false
                                     onBack()
                                 }.onFailure { errorMessage = "Failed to save: ${it.message}" }
@@ -257,11 +257,10 @@ fun KeyGenerationScreen(
                                         currentCurve,
                                         addressCount
                                     ) else {
-                                        val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" };
-                                        val pair =
-                                            KanariCrypto.deriveKeypairFromPath(words, path, currentCurve); listOf(
-                                            pair
-                                        )
+                                    val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" }
+                                    val pair =
+                                        KanariCrypto.deriveKeypairFromPath(words, path, currentCurve)
+                                    listOf(pair)
                                     }
                                     words to pairs
                                 }
@@ -276,8 +275,9 @@ fun KeyGenerationScreen(
                                 }
                             }
                         }.onSuccess { (words, pairs) ->
-                            mnemonic = words; keyPairs = pairs; pairs.firstOrNull()
-                            ?.let { onKeyPairGenerated?.invoke(it) }
+                            mnemonic = words
+                            keyPairs = pairs
+                            pairs.firstOrNull()?.let { onKeyPairGenerated?.invoke(it) }
                         }.onFailure { errorMessage = it.message ?: "Operation failed" }
                         isLoading = false
                     }
@@ -305,7 +305,9 @@ fun KeyGenerationScreen(
                         Icon(
                             Icons.Default.Save,
                             contentDescription = null
-                        ); Spacer(Modifier.size(8.dp)); Text("Save Wallet")
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text("Save Wallet")
                     }
                 }
                 mnemonic?.let { words ->
@@ -349,11 +351,11 @@ fun KeyGenerationScreen(
                             WalletAddressCard(
                                 address = pair.address,
                                 label = "Public Address",
-                                onCopied = { scope.launch { snackbarHostState.showSnackbar("Address copied") } })
+                                onCopied = { scope.launch { snackState.showSnackbar("Address copied") } })
                             WalletAddressCard(
                                 address = pair.privateKey,
                                 label = "Private Key (Hex)",
-                                onCopied = { scope.launch { snackbarHostState.showSnackbar("Private key copied") } })
+                                onCopied = { scope.launch { snackState.showSnackbar("Private key copied") } })
                         }
                     }
                 }

@@ -34,6 +34,7 @@ import com.jamesatomc.kanariapp.ui.theme.KanariColors
 import com.jamesatomc.kanariapp.ui.theme.LocalKanariGradients
 import com.jamesatomc.kanariapp.wallet.WalletRecord
 import com.jamesatomc.kanariapp.wallet.WalletViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -437,6 +438,7 @@ fun WalletDetailFullScreen(
 ) {
     val ctx = LocalContext.current
     val activity = ctx.findFragmentActivity()
+    val scope = rememberCoroutineScope()
     var isVerified by remember { mutableStateOf(false) }
     var revealedKey by remember { mutableStateOf<String?>(null) }
     var revealedSeed by remember { mutableStateOf<String?>(null) }
@@ -453,11 +455,13 @@ fun WalletDetailFullScreen(
             title = "Reveal Wallet Secrets",
             subtitle = "Use biometrics to unlock",
             onSuccess = {
-                val k = viewModel.revealPrivateKeyWithBiometric(wallet)
-                if (k != null) {
-                    revealedKey = k
-                    revealedSeed = if (hasSeed) viewModel.revealMnemonicWithBiometric(wallet) else null
-                    isVerified = true
+                scope.launch {
+                    val k = viewModel.revealPrivateKeyWithBiometric(wallet)
+                    if (k != null) {
+                        revealedKey = k
+                        revealedSeed = if (hasSeed) viewModel.revealMnemonicWithBiometric(wallet) else null
+                        isVerified = true
+                    }
                 }
             }
         )
@@ -480,7 +484,7 @@ fun WalletDetailFullScreen(
             PinVerificationContent(
                 title = "Enter PIN",
                 subtitle = "Enter 6-digit PIN to reveal secrets",
-                onVerify = { pin -> viewModel.verifyPin(pin) },
+                onVerifyAsync = { pin -> viewModel.verifyPin(pin) },
                 onSuccess = { pin ->
                     val k = viewModel.revealPrivateKey(wallet, pin)
                     if (k != null) {

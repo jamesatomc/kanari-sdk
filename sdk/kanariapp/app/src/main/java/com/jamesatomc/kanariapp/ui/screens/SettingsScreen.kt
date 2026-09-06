@@ -31,12 +31,14 @@ import com.jamesatomc.kanariapp.ui.components.ScaffoldWithBackBar
 import com.jamesatomc.kanariapp.ui.components.showBiometricPrompt
 import com.jamesatomc.kanariapp.ui.theme.ThemeMode
 import com.jamesatomc.kanariapp.wallet.WalletViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: WalletViewModel, onLogout: () -> Unit, onBack: () -> Unit) {
     val currentEnv by viewModel.environment.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
+    val scope = rememberCoroutineScope()
     var showPinDialog by remember { mutableStateOf(false) }
     var showEnvDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -96,41 +98,45 @@ fun SettingsScreen(viewModel: WalletViewModel, onLogout: () -> Unit, onBack: () 
                 checked = biometricEnabled,
                 enabled = biometricAvailable,
                 onCheckedChange = { enabled ->
-                    if (!enabled) {
-                        viewModel.setBiometricEnabled(false)
-                        Toast.makeText(context, "Biometric disabled", Toast.LENGTH_SHORT).show()
-                    } else {
-                        if (activity == null) {
-                            val ok = viewModel.setBiometricEnabled(true)
-                            Toast.makeText(
-                                context,
-                                if (ok) "Biometric enabled" else "Unlock with PIN first",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            return@SettingsSwitchItem
-                        }
-                        showBiometricPrompt(
-                            activity = activity,
-                            title = "Enable Biometric Unlock",
-                            subtitle = "Authenticate to enable fingerprint unlock",
-                            onSuccess = {
+                    scope.launch {
+                        if (!enabled) {
+                            viewModel.setBiometricEnabled(false)
+                            Toast.makeText(context, "Biometric disabled", Toast.LENGTH_SHORT).show()
+                        } else {
+                            if (activity == null) {
                                 val ok = viewModel.setBiometricEnabled(true)
                                 Toast.makeText(
                                     context,
                                     if (ok) "Biometric enabled" else "Unlock with PIN first",
                                     Toast.LENGTH_SHORT
                                 ).show()
-                            },
-                            onError = { errorCode, errString ->
-                                if (errorCode != androidx.biometric.BiometricPrompt.ERROR_USER_CANCELED && errorCode != androidx.biometric.BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
-                                    Toast.makeText(context, "Biometric error: $errString", Toast.LENGTH_SHORT)
-                                        .show()
-                                }
-                            },
-                            onFailed = {
-                                Toast.makeText(context, "Biometric not recognized", Toast.LENGTH_SHORT).show()
+                                return@launch
                             }
-                        )
+                            showBiometricPrompt(
+                                activity = activity,
+                                title = "Enable Biometric Unlock",
+                                subtitle = "Authenticate to enable fingerprint unlock",
+                                onSuccess = {
+                                    scope.launch {
+                                        val ok = viewModel.setBiometricEnabled(true)
+                                        Toast.makeText(
+                                            context,
+                                            if (ok) "Biometric enabled" else "Unlock with PIN first",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                onError = { errorCode, errString ->
+                                    if (errorCode != androidx.biometric.BiometricPrompt.ERROR_USER_CANCELED && errorCode != androidx.biometric.BiometricPrompt.ERROR_NEGATIVE_BUTTON) {
+                                        Toast.makeText(context, "Biometric error: $errString", Toast.LENGTH_SHORT)
+                                            .show()
+                                    }
+                                },
+                                onFailed = {
+                                    Toast.makeText(context, "Biometric not recognized", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                        }
                     }
                 })
             Spacer(Modifier.height(24.dp))
@@ -157,7 +163,7 @@ fun SettingsScreen(viewModel: WalletViewModel, onLogout: () -> Unit, onBack: () 
     }
     if (showPinDialog) ChangePinDialog(
         onDismiss = { showPinDialog = false },
-        onConfirm = { old, new -> viewModel.changePin(old, new) })
+        onConfirmAsync = { old, new -> viewModel.changePin(old, new) })
     if (showEnvDialog) EnvironmentDialog(
         currentEnv = currentEnv,
         onDismiss = { showEnvDialog = false },
@@ -169,7 +175,7 @@ fun SettingsScreen(viewModel: WalletViewModel, onLogout: () -> Unit, onBack: () 
 }
 
 @Composable
-fun ChangePinDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Boolean) {
+fun ChangePinDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Boolean = { _, _ -> false }, onConfirmAsync: (suspend (String, String) -> Boolean)? = null) {
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -178,7 +184,7 @@ fun ChangePinDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Boolea
         )
     ) {
         Surface(color = MaterialTheme.colorScheme.background) {
-            ChangePinFullScreenContent(onDismiss = onDismiss, onConfirm = onConfirm)
+            ChangePinFullScreenContent(onDismiss = onDismiss, onConfirm = onConfirm, onConfirmAsync = onConfirmAsync)
         }
     }
 }

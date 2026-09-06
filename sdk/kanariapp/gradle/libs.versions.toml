@@ -18,9 +18,10 @@ biometric = "1.4.0-alpha02"
 composeAdaptive = "1.4.0-alpha01"
 composeAdaptiveSuite = "1.4.0"
 coil = "3.6.2"
-securityCrypto = "1.1.0"
 playServicesCodeScanner = "16.1.0"
 qrcodeKotlin = "4.5.0"
+datastore = "1.2.1"
+tink = "1.23.0"
 
 
 [libraries]
@@ -59,9 +60,10 @@ androidx-compose-material3-adaptive-layout = { group = "androidx.compose.materia
 androidx-compose-material3-adaptive-navigation = { group = "androidx.compose.material3.adaptive", name = "adaptive-navigation", version.ref = "composeAdaptive" }
 androidx-compose-material3-adaptive-navigationsuite = { group = "androidx.compose.material3", name = "material3-adaptive-navigation-suite", version.ref = "composeAdaptiveSuite" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
-androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "playServicesCodeScanner" }
 qrcode-kotlin = { group = "io.github.g0dkar", name = "qrcode-kotlin", version.ref = "qrcodeKotlin" }
+androidx-datastore = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
