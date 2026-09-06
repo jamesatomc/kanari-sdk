@@ -18,6 +18,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -88,7 +89,7 @@ fun DashboardScreen(
         ) {
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxWidth().height(180.dp),
+                modifier = Modifier.fillMaxWidth().height(210.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 pageSpacing = 12.dp
             ) { page ->
@@ -113,7 +114,6 @@ fun DashboardScreen(
                         WalletCard(
                             w,
                             if (activeWallet?.id == w.id) tokenBalances else emptyList(),
-                            onDelete = { walletToDelete = w },
                             onViewDetails = { walletForDetails = w })
                     }
                 } else AddWalletCard(onNavigateToWalletGen)
@@ -127,7 +127,7 @@ fun DashboardScreen(
                 LoadingButton(
                     onClick = onNavigateToSend,
                     text = "Send",
-                    icon = Icons.Default.Public,
+                    icon = Icons.AutoMirrored.Filled.Send,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = KanariColors.Lime,
@@ -188,7 +188,15 @@ fun DashboardScreen(
     }
     walletForDetails?.let { w ->
         FullScreenDialog(onDismiss = { walletForDetails = null }) {
-            WalletDetailFullScreen(wallet = w, viewModel = viewModel, onDismiss = { walletForDetails = null })
+            WalletDetailFullScreen(
+                wallet = w,
+                viewModel = viewModel,
+                onDismiss = { walletForDetails = null },
+                onDeleteRequest = {
+                    walletToDelete = w
+                    walletForDetails = null
+                }
+            )
         }
     }
 }
@@ -197,7 +205,6 @@ fun DashboardScreen(
 fun WalletCard(
     wallet: WalletRecord,
     tokenBalances: List<com.jamesatomc.kanariapp.network.models.TokenBalance>,
-    onDelete: () -> Unit,
     onViewDetails: () -> Unit
 ) {
     val curveInfo = remember(wallet.curveType) { getCurveInfo(wallet.curveType) }
@@ -242,56 +249,56 @@ fun WalletCard(
 
             IsometricCoinStack(
                 modifier = Modifier
-                    .size(120.dp)
+                    .size(130.dp)
                     .align(Alignment.BottomEnd)
-                    .padding(end = 4.dp, bottom = 4.dp)
-                    .graphicsLayer { alpha = 0.25f }
+                    .offset(x = 10.dp, y = 10.dp)
+                    .graphicsLayer { alpha = 0.2f }
             )
 
-            Column(Modifier.fillMaxSize().padding(20.dp)) {
+            Column(Modifier.fillMaxSize().padding(24.dp)) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.3f),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.AccountBalanceWallet,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.8f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
                         Text(
                             wallet.name,
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                shadow = Shadow(
+                                    color = Color.Black.copy(alpha = 0.3f),
+                                    offset = Offset(0f, 1f),
+                                    blurRadius = 2f
+                                )
+                            ),
+                            color = Color.White
                         )
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = onViewDetails,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Visibility,
-                                contentDescription = "View details",
-                                modifier = Modifier.size(22.dp),
-                                tint = Color.White
-                            )
-                        }
-                        IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete",
-                                modifier = Modifier.size(20.dp),
-                                tint = Color.White.copy(alpha = 0.8f)
-                            )
-                        }
+                    IconButton(
+                        onClick = onViewDetails,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Visibility,
+                            contentDescription = "View details",
+                            modifier = Modifier.size(22.dp),
+                            tint = Color.White
+                        )
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 CurveBadge(curveInfo)
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(20.dp))
                 val t = tokenBalances.find { it.tokenType == "0x2::kanari::KANARI" }
                 Text(
                     "Balance",
@@ -305,50 +312,50 @@ fun WalletCard(
                     ),
                     color = Color.White.copy(alpha = 0.9f)
                 )
-                Text(
-                    formatAmount(t?.getEffectiveAmount() ?: 0L, t?.decimals ?: 9, 2),
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        letterSpacing = 0.5.sp,
-                        shadow = Shadow(
-                            color = Color.Black.copy(alpha = 0.4f),
-                            offset = Offset(0f, 4f),
-                            blurRadius = 8f
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        formatAmount(t?.getEffectiveAmount() ?: 0L, t?.decimals ?: 9, 2),
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            letterSpacing = 0.5.sp,
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 0.4f),
+                                offset = Offset(0f, 4f),
+                                blurRadius = 8f
+                            )
                         )
                     )
-                )
-                Text(
-                    " KANARI",
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Medium,
-                        color = Color.White.copy(alpha = 0.8f),
-                        shadow = Shadow(
-                            color = Color.Black.copy(alpha = 0.3f),
-                            offset = Offset(0f, 2f),
-                            blurRadius = 4f
-                        )
-                    ),
-                    modifier = Modifier.padding(bottom = 2.dp)
-                )
+                    Text(
+                        " KANARI",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White.copy(alpha = 0.75f),
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 0.3f),
+                                offset = Offset(0f, 2f),
+                                blurRadius = 4f
+                            )
+                        ),
+                        modifier = Modifier.padding(bottom = 4.dp, start = 4.dp)
+                    )
+                }
 
                 Spacer(Modifier.weight(1f))
 
-                Surface(
-                    color = Color.Black.copy(alpha = 0.4f),
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
-                ) {
-                    Box(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-                        CopyableAddressRow(
-                            wallet.address,
-                            short = true,
-                            textStyle = MaterialTheme.typography.labelMedium.copy(
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
+                CopyableAddressRow(
+                    wallet.address,
+                    short = false,
+                    textStyle = MaterialTheme.typography.labelMedium.copy(
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontWeight = FontWeight.Bold,
+                        shadow = Shadow(
+                            color = Color.Black.copy(alpha = 0.3f),
+                            offset = Offset(0f, 1f),
+                            blurRadius = 2f
                         )
-                    }
-                }
+                    )
+                )
             }
         }
     }
@@ -376,27 +383,38 @@ fun AddWalletCard(onClick: () -> Unit) {
 
 @Composable
 fun AssetItem(token: com.jamesatomc.kanariapp.network.models.TokenBalance) {
+    val displayType = remember(token.tokenType) {
+        val parts = token.tokenType.split("::")
+        if (parts.size >= 3) "${parts[parts.size - 2]}::${parts.last()}" else token.tokenType
+    }
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
     ) {
         ListItem(
             leadingContent = { TokenIcon(token) },
-            headlineContent = { Text(token.symbol, style = MaterialTheme.typography.titleSmall) },
-            supportingContent = { Text(token.tokenType, maxLines = 1, style = MaterialTheme.typography.bodySmall) },
-            trailingContent = {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        formatAmount(token.getEffectiveAmount(), token.decimals),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            headlineContent = {
+                Text(
+                    token.symbol,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            supportingContent = {
+                Text(
+                    displayType,
+                    maxLines = 1,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
-                }
+                )
+            },
+            trailingContent = {
+                Text(
+                    formatAmount(token.getEffectiveAmount(), token.decimals),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             },
             colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
         )
@@ -419,7 +437,12 @@ fun ObjectItem(obj: com.jamesatomc.kanariapp.network.models.ObjectInfo) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WalletDetailFullScreen(wallet: WalletRecord, viewModel: WalletViewModel, onDismiss: () -> Unit) {
+fun WalletDetailFullScreen(
+    wallet: WalletRecord,
+    viewModel: WalletViewModel,
+    onDismiss: () -> Unit,
+    onDeleteRequest: () -> Unit
+) {
     val ctx = LocalContext.current
     val activity = ctx.findFragmentActivity()
     var isVerified by remember { mutableStateOf(false) }
@@ -600,6 +623,18 @@ fun WalletDetailFullScreen(wallet: WalletRecord, viewModel: WalletViewModel, onD
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 )
+
+                Spacer(Modifier.height(12.dp))
+
+                TextButton(
+                    onClick = onDeleteRequest,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error.copy(alpha = 0.8f))
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Delete Wallet Permanent", style = MaterialTheme.typography.labelLarge)
+                }
             }
         }
     }

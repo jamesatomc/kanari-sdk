@@ -333,10 +333,10 @@ fun SectionHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
-                    .size(width = 4.dp, height = 18.dp)
-                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp))
+                    .size(width = 2.dp, height = 16.dp)
+                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.dp))
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
             Text(
                 title,
                 style = MaterialTheme.typography.titleSmall.copy(
@@ -883,8 +883,7 @@ fun CopyableAddressRow(
         Text(
             text = if (short) address.toShortAddress() else address,
             style = textStyle.copy(
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                fontFamily = FontFamily.Monospace
             ),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
