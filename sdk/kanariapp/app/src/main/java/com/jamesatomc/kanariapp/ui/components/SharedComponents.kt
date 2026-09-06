@@ -9,17 +9,11 @@ import android.graphics.Bitmap
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -44,10 +38,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -76,7 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import kotlin.math.pow
 import androidx.core.graphics.set
 import androidx.core.graphics.createBitmap
-import com.jamesatomc.kanariapp.ui.theme.LocalKanariGradients
+
 
 // ---------- Utils ----------
 
@@ -127,14 +118,6 @@ fun copyToClipboard(
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
     Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
-}
-
-@Composable
-fun triggerHapticFeedback(type: HapticFeedbackType = HapticFeedbackType.LongPress) {
-    val haptic = LocalHapticFeedback.current
-    SideEffect {
-        haptic.performHapticFeedback(type)
-    }
 }
 
 fun extractAddressFromQr(raw: String): String {
@@ -236,7 +219,7 @@ fun ScaffoldWithBackBar(
     title: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    containerColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.background,
+    containerColor: Color = MaterialTheme.colorScheme.background,
     content: @Composable (PaddingValues) -> Unit
 ) {
     Scaffold(
@@ -444,47 +427,14 @@ fun rememberBiometricAvailable(viewModel: com.jamesatomc.kanariapp.wallet.Wallet
     LaunchedEffect(Unit) {
         try {
             val enabled = viewModel.isBiometricEnabled()
-            if (!enabled) available = false
-            else available = androidx.biometric.BiometricManager.from(context)
+            available = if (!enabled) false
+            else androidx.biometric.BiometricManager.from(context)
                 .canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG) == androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS
         } catch (_: Exception) {
             available = false
         }
     }
     return available
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DropdownSelector(
-    label: String,
-    items: List<String>,
-    selectedIndex: Int,
-    onSelected: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true
-) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        OutlinedTextField(
-            value = items.getOrElse(selectedIndex) { "" },
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = modifier.menuAnchor().fillMaxWidth(),
-            enabled = enabled,
-            shape = RoundedCornerShape(12.dp)
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            items.forEachIndexed { index, item ->
-                DropdownMenuItem(
-                    text = { Text(item) },
-                    onClick = { onSelected(index); expanded = false }
-                )
-            }
-        }
-    }
 }
 
 @Composable
@@ -552,7 +502,7 @@ fun CurveBadge(curveInfo: CurveInfo, modifier: Modifier = Modifier) {
     }
 }
 
-fun android.content.Context.findFragmentActivity(): androidx.fragment.app.FragmentActivity? {
+fun Context.findFragmentActivity(): androidx.fragment.app.FragmentActivity? {
     var ctx = this
     while (ctx is android.content.ContextWrapper) {
         if (ctx is androidx.fragment.app.FragmentActivity) return ctx
@@ -798,69 +748,84 @@ fun KanariTopBar(
     onSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier) {
-        TopAppBar(
-            title = {
-                Row(
-                    modifier = Modifier.clickable { onEnvClick() },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        "Kanari Wallet",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                        shape = RoundedCornerShape(20.dp),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        )
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .statusBarsPadding()
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+            shape = RoundedCornerShape(20.dp),
+            shadowElevation = 4.dp,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            TopAppBar(
+                title = {
+                    Row(
+                        modifier = Modifier.clickable { onEnvClick() },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Row(
-                            Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Text(
+                            "Kanari Wallet",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
                         ) {
-                            Box(
-                                Modifier.size(8.dp).background(
-                                    when (environmentName.lowercase()) {
-                                        "dev" -> com.jamesatomc.kanariapp.ui.theme.KanariColors.Lime
-                                        "mainnet" -> com.jamesatomc.kanariapp.ui.theme.KanariColors.Lavender
-                                        else -> MaterialTheme.colorScheme.primary
-                                    }, CircleShape
+                            Row(
+                                Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    Modifier.size(6.dp).background(
+                                        when (environmentName.lowercase()) {
+                                            "dev" -> com.jamesatomc.kanariapp.ui.theme.KanariColors.Lime
+                                            "mainnet" -> com.jamesatomc.kanariapp.ui.theme.KanariColors.Lavender
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }, CircleShape
+                                    )
                                 )
-                            )
-                            Text(
-                                environmentName.uppercase(),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.5.sp
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Icon(
-                                Icons.Default.ArrowDropDown,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                                Text(
+                                    environmentName.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
-                }
-            },
-            actions = {
-                IconButton(onClick = onReceive) { Icon(Icons.Default.QrCode, contentDescription = "Receive") }
-                IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings") }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface,
-                scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
+                },
+                actions = {
+                    IconButton(onClick = onReceive) { Icon(Icons.Default.QrCode, contentDescription = "Receive") }
+                    IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings") }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    scrolledContainerColor = Color.Transparent
+                )
             )
-        )
-        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+        }
     }
 }
 
@@ -1011,7 +976,7 @@ fun TokenIcon(token: TokenBalance, modifier: Modifier = Modifier) {
 fun DetailRowShared(
     label: String,
     value: String,
-    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface
+    valueColor: Color = MaterialTheme.colorScheme.onSurface
 ) {
     Column(Modifier.fillMaxWidth()) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

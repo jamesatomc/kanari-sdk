@@ -15,15 +15,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
+
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
-
-// KanariExtendedColors is defined in Color.kt as KanariColors
-// Re-export for backward compatibility
-val KanariExtendedColors = com.jamesatomc.kanariapp.ui.theme.KanariColors
-val LocalKanariExtended = staticCompositionLocalOf { KanariExtendedColors }
 
 @Immutable
 data class KanariGradients(

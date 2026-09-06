@@ -129,7 +129,7 @@ fun RegisterScreen(
                             RequirementRow("One digit", password.contains(Regex("[0-9]")))
                             RequirementRow(
                                 "One special character",
-                                password.contains(Regex("[!@#\$%^&*(),.?\":{}|<>]"))
+                                password.contains(Regex("[!@#$%^&*(),.?\":{}|<>]"))
                             )
                         }
                     }

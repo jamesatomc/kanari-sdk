@@ -2,7 +2,6 @@ package com.jamesatomc.kanariapp.ui.components
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -11,7 +10,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.*
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.jamesatomc.kanariapp.ui.theme.KanariColors
 import kotlin.math.*
@@ -31,7 +29,7 @@ fun IsometricWalletIllustration(
     val floatY by infiniteTransition.animateFloat(
         initialValue = 0f, targetValue = -12f,
         animationSpec = infiniteRepeatable(tween(2500, easing = EaseInOutSine), RepeatMode.Reverse),
-        label = "floatY"
+        label = "floaty"
     )
     val sweepPos by infiniteTransition.animateFloat(
         initialValue = -0.5f, targetValue = 1.5f,
@@ -203,7 +201,7 @@ fun IsometricNetworkOrbit(
         val nodeR = 12.dp.toPx()
 
         nodeLabels.forEachIndexed { i, label ->
-            val angle = Math.toRadians((rotation + i * (360.0 / nodeLabels.size)).toDouble())
+            val angle = Math.toRadians((rotation + i * (360.0 / nodeLabels.size)))
             val nx = cx + orbitRadius * cos(angle).toFloat()
             val ny = cy + orbitRadius * sin(angle).toFloat()
 
@@ -242,88 +240,6 @@ fun IsometricNetworkOrbit(
                 drawText(label, nx, ny + 3.5.dp.toPx(), paint)
             }
         }
-    }
-}
-
-@Composable
-fun IsometricShieldLock(
-    modifier: Modifier = Modifier,
-    shadowColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-) {
-    val infiniteTransition = rememberInfiniteTransition()
-    val floatY by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = -6f,
-        animationSpec = infiniteRepeatable(tween(2200, easing = EaseInOutSine), RepeatMode.Reverse)
-    )
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.2f, targetValue = 0.5f,
-        animationSpec = infiniteRepeatable(tween(1800), RepeatMode.Reverse)
-    )
-
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
-
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(Lime.copy(alpha = glowAlpha * 0.3f), Color.Transparent),
-                center = Offset(cx, cy + floatY), radius = w * 0.35f
-            ),
-            radius = w * 0.35f, center = Offset(cx, cy + floatY)
-        )
-
-        val shieldW = w * 0.45f
-        val shieldH = w * 0.5f
-        val shieldX = cx - shieldW / 2f
-        val shieldY = cy - shieldH / 2f + floatY
-
-        val shieldPath = Path().apply {
-            moveTo(shieldX + shieldW / 2f, shieldY)
-            lineTo(shieldX + shieldW, shieldY + shieldH * 0.25f)
-            lineTo(shieldX + shieldW * 0.9f, shieldY + shieldH * 0.7f)
-            quadraticBezierTo(
-                shieldX + shieldW / 2f, shieldY + shieldH * 1.05f,
-                shieldX + shieldW * 0.1f, shieldY + shieldH * 0.7f
-            )
-            lineTo(shieldX, shieldY + shieldH * 0.25f)
-            close()
-        }
-
-        drawPath(
-            path = shieldPath,
-            brush = Brush.linearGradient(
-                colors = listOf(Purple, Purple.copy(alpha = 0.6f)),
-                start = Offset(shieldX, shieldY),
-                end = Offset(shieldX + shieldW, shieldY + shieldH)
-            )
-        )
-
-        val lockW = shieldW * 0.3f
-        val lockH = shieldH * 0.22f
-        val lockX = cx - lockW / 2f
-        val lockY = cy - lockH / 2f + floatY + shieldH * 0.05f
-
-        drawRoundRect(
-            color = Lime,
-            topLeft = Offset(lockX, lockY + lockH * 0.35f),
-            size = Size(lockW, lockH * 0.65f),
-            cornerRadius = CornerRadius(3.dp.toPx())
-        )
-        drawArc(
-            color = Lime,
-            startAngle = 180f, sweepAngle = 180f, useCenter = false,
-            topLeft = Offset(lockX + lockW * 0.15f, lockY),
-            size = Size(lockW * 0.7f, lockH * 0.7f),
-            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
-        )
-
-        drawCircle(
-            color = shadowColor,
-            radius = 2.5.dp.toPx(),
-            center = Offset(cx, lockY + lockH * 0.6f)
-        )
     }
 }
 
@@ -392,97 +308,3 @@ fun IsometricCoinStack(modifier: Modifier = Modifier) {
     }
 }
 
-@Composable
-fun IsometricGlobeChain(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition(label = "globeChain")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(30000, easing = LinearEasing)),
-        label = "rotation"
-    )
-    val pulse by infiniteTransition.animateFloat(
-        initialValue = 0.9f, targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(tween(2500, easing = EaseInOutSine), RepeatMode.Reverse),
-        label = "pulse"
-    )
-
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
-        val globeR = w * 0.3f * pulse
-
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Purple.copy(alpha = 0.3f),
-                    Purple.copy(alpha = 0.05f),
-                    Color.Transparent
-                ),
-                center = Offset(cx, cy), radius = globeR
-            ),
-            radius = globeR, center = Offset(cx, cy)
-        )
-
-        drawCircle(
-            color = Purple.copy(alpha = 0.5f),
-            radius = globeR,
-            center = Offset(cx, cy),
-            style = Stroke(width = 1.5.dp.toPx())
-        )
-
-        drawOval(
-            color = Purple.copy(alpha = 0.3f),
-            topLeft = Offset(cx - globeR, cy - globeR * 0.5f),
-            size = Size(globeR * 2, globeR),
-            style = Stroke(width = 1.dp.toPx())
-        )
-        drawOval(
-            color = Purple.copy(alpha = 0.3f),
-            topLeft = Offset(cx - globeR * 0.5f, cy - globeR),
-            size = Size(globeR, globeR * 2),
-            style = Stroke(width = 1.dp.toPx())
-        )
-
-        val chainCount = 6
-        val chainR = globeR * 0.12f
-        for (i in 0 until chainCount) {
-            val angle = Math.toRadians((rotation + i * (360.0 / chainCount)).toDouble())
-            val dist = globeR * 0.85f
-            val bx = cx + dist * cos(angle).toFloat()
-            val by = cy + dist * sin(angle).toFloat() * 0.5f
-
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Lime, Lime.copy(alpha = 0.3f)),
-                    center = Offset(bx, by), radius = chainR
-                ),
-                radius = chainR, center = Offset(bx, by)
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.4f),
-                radius = chainR * 0.3f,
-                center = Offset(bx - chainR * 0.2f, by - chainR * 0.2f)
-            )
-
-            val nextAngle = Math.toRadians((rotation + (i + 1) * (360.0 / chainCount)).toDouble())
-            val nx = cx + dist * cos(nextAngle).toFloat()
-            val ny = cy + dist * sin(nextAngle).toFloat() * 0.5f
-            drawLine(
-                color = Lime.copy(alpha = 0.4f),
-                start = Offset(bx, by),
-                end = Offset(nx, ny),
-                strokeWidth = 1.dp.toPx()
-            )
-        }
-
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(Lime.copy(alpha = 0.15f), Color.Transparent),
-                center = Offset(cx, cy), radius = globeR * 1.5f
-            ),
-            radius = globeR * 1.5f, center = Offset(cx, cy)
-        )
-    }
-}

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import androidx.core.content.edit
 
 class WalletViewModel(application: Application) : AndroidViewModel(application) {
     private val walletStorage = WalletStorage(application)
@@ -49,8 +50,6 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
 
     private var client = KanariClient(_environment.value)
 
-    fun getClient(): KanariClient = client
-
     private val prefs = application.getSharedPreferences("kanari_prefs", Context.MODE_PRIVATE)
 
     private val _themeMode = MutableStateFlow(loadThemeMode())
@@ -70,11 +69,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setThemeMode(mode: ThemeMode) {
         _themeMode.value = mode
-        prefs.edit().putString("theme_mode", mode.name).apply()
-    }
-
-    fun refreshBiometricState() {
-        _biometricEnabled.value = walletStorage.isBiometricEnabled()
+        prefs.edit { putString("theme_mode", mode.name) }
     }
 
     init {

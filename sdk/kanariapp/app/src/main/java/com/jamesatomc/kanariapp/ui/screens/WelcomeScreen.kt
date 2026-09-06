@@ -38,12 +38,6 @@ fun WelcomeScreen(
     var hasWallet by remember { mutableStateOf(walletStorage.loadWallets().isNotEmpty()) }
     LaunchedEffect(Unit) { hasWallet = walletStorage.loadWallets().isNotEmpty() }
 
-    val infiniteTransition = rememberInfiniteTransition()
-    val orbRotation by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(26000, easing = LinearEasing))
-    )
-
     val animProgress = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         animProgress.animateTo(1f, tween(900, easing = EaseOutCubic))

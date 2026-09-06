@@ -35,6 +35,7 @@ data class WalletRecord(
     val encryption: String = "pin_aes_gcm_pbkdf2_v1"
 )
 
+@Suppress("DEPRECATION")
 class WalletStorage(context: Context) {
     private val sharedPrefs by lazy {
         val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
@@ -115,7 +116,7 @@ class WalletStorage(context: Context) {
         val data = sharedPrefs.getString(KEY_WALLETS, null) ?: return emptyList()
         return try {
             json.decodeFromString(data)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             emptyList()
         }
     }

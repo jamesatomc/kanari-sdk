@@ -34,6 +34,7 @@ import com.jamesatomc.kanariapp.ui.components.*
 import com.jamesatomc.kanariapp.ui.theme.LocalKanariGradients
 import com.jamesatomc.kanariapp.wallet.WalletRecord
 import com.jamesatomc.kanariapp.wallet.WalletStorage
+import com.jamesatomc.kanariapp.wallet.WalletViewModel
 import com.kanari.kanari_crypto.KanariCrypto
 import com.kanari.kanari_crypto.model.CurveInfoModel
 import com.kanari.kanari_crypto.model.KeyPairModel
@@ -49,7 +50,8 @@ fun KeyGenerationScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     defaultCurve: String = KanariCrypto.DEFAULT_CURVE,
-    onKeyPairGenerated: ((KeyPairModel) -> Unit)? = null
+    onKeyPairGenerated: ((KeyPairModel) -> Unit)? = null,
+    viewModel: WalletViewModel? = null
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -114,7 +116,7 @@ fun KeyGenerationScreen(
                     PinVerificationContent(
                         title = "Save Wallet",
                         subtitle = "Enter 6-digit PIN to encrypt your wallet",
-                        onVerify = { pin -> walletStorage.verifyPin(pin) },
+                        onVerify = { pin -> !walletStorage.hasPin() || walletStorage.verifyPin(pin) },
                         onSuccess = { pin ->
                             scope.launch {
                                 runCatching {
@@ -133,6 +135,7 @@ fun KeyGenerationScreen(
                                     existing.add(record)
                                     walletStorage.saveWallets(existing)
                                     if (!walletStorage.hasPin()) walletStorage.savePin(pin)
+                                    viewModel?.loadWallets()
                                     snackbarHostState.showSnackbar("Wallet saved successfully!")
                                     showSaveDialog = false
                                     onBack()
@@ -151,7 +154,7 @@ fun KeyGenerationScreen(
             SmartTabRow(
                 selectedTabIndex = selectedTab,
                 tabs = tabs,
-                onTabSelected = { 
+                onTabSelected = {
                     selectedTab = it
                     mnemonic = null
                     keyPairs = emptyList()
