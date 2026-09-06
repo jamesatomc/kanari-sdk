@@ -77,7 +77,7 @@ fun validateAddress(address: String): String? {
     val trimmed = address.trim()
     if (trimmed.isEmpty()) return "Recipient address required"
     val clean = trimmed.removePrefix("0x")
-    if (clean.isEmpty() || clean.length > 64 || !clean.matches(Regex("^[0-9a-fA-F]+$")))
+    if (clean.isEmpty() || clean.length > 64 || (!clean.matches(Regex("^[0-9a-fA-F]+$"))))
         return "Invalid recipient address format"
     return null
 }
@@ -123,7 +123,7 @@ fun extractAddressFromQr(raw: String): String {
 data class CurveInfo(val displayName: String, val description: String, val isPostQuantum: Boolean)
 
 fun getCurveInfo(curveType: String): CurveInfo = when (curveType) {
-    "K256" -> CurveInfo("K256 (secp256k1)", "Bitcoin/Ethereum", false)
+    "K256" -> CurveInfo("K256 (secp256k1)", "Bitcoin/Ethereum", isPostQuantum = false)
     "P256" -> CurveInfo("P256 (secp256r1)", "NIST P-256", false)
     "Ed25519" -> CurveInfo("Ed25519", "EdDSA - Fast modern", false)
     "Dilithium2" -> CurveInfo("Dilithium2", "Post-Quantum NIST Level 2", true)

@@ -34,7 +34,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
     private val _transactions = MutableStateFlow<List<TransactionDetails>>(emptyList())
     val transactions: StateFlow<List<TransactionDetails>> = _transactions.asStateFlow()
 
-    private val _isLoading = MutableStateFlow(false)
+    private val _isLoading = MutableStateFlow(value = false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
@@ -85,7 +85,7 @@ class WalletViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 val records = walletStorage.loadWallets()
                 _wallets.value = records
-                if (records.isNotEmpty() && _activeWallet.value == null) {
+                if (records.isNotEmpty() && (_activeWallet.value == null)) {
                     _activeWallet.value = records.first()
                 }
             } catch (e: Exception) {

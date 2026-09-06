@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeyTemplates
+import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.integration.android.AndroidKeysetManager
 import kotlinx.coroutines.flow.first
@@ -55,7 +56,7 @@ class WalletStorage(private val context: Context) {
             .withMasterKeyUri("android-keystore://kanari_master_key_alias")
             .build()
             .keysetHandle
-            .getPrimitive(Aead::class.java)
+            .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
     }
 
     companion object {
