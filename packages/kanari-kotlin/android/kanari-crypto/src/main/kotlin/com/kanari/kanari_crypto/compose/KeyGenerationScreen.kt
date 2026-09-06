@@ -115,7 +115,7 @@ fun KeyGenerationScreen(
                 )
             }
 
-            // แสดงส่วนตั้งค่าเพิ่มเติมเฉพาะกลุ่ม Classic/Hybrid ที่รองรับ Mnemonic
+            // Show additional settings only for Classic/Hybrid groups that support Mnemonic
             if (selectedCurveInfo?.isPostQuantum == false || selectedCurveInfo?.isHybrid == true) {
                 OutlinedTextField(
                     value = derivationPath,
@@ -137,9 +137,9 @@ fun KeyGenerationScreen(
                     scope.launch {
                         isLoading = true
                         val currentCurve = selectedCurveInfo?.name ?: defaultCurve
-                        // ถ้าเป็น Curve กลุ่ม PQ (แบบเดี่ยว) จะสร้าง Keypair โดยตรง
+                        // For single PQ curves, generate the keypair directly
                         val isPqOnly = selectedCurveInfo?.isPostQuantum == true && selectedCurveInfo?.isHybrid == false
-                        
+
                         runCatching {
                             if (isPqOnly) {
                                 val pair = KanariCrypto.generateKeypair(currentCurve)
@@ -147,7 +147,7 @@ fun KeyGenerationScreen(
                             } else {
                                 val words = KanariCrypto.generateMnemonic(12)
                                 val pairs = if (addressCount > 1) {
-                                    // ใช้ฟังก์ชัน deriveMultipleAddresses
+                                    // Use deriveMultipleAddresses
                                     KanariCrypto.deriveMultipleAddresses(
                                         words,
                                         derivationPath,
@@ -155,7 +155,7 @@ fun KeyGenerationScreen(
                                         addressCount
                                     )
                                 } else {
-                                    // ใช้ฟังก์ชัน deriveKeypairFromPath (หรือ default ถ้า path ว่าง)
+                                    // Use deriveKeypairFromPath (or the default if path is empty)
                                     val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" }
                                     val pair = KanariCrypto.deriveKeypairFromPath(words, path, currentCurve)
                                     listOf(pair)
@@ -226,7 +226,7 @@ fun KeyGenerationScreen(
                 )
             }
 
-            // เพิ่มช่องว่างด้านล่างสุดเพื่อให้เลื่อนดู Private Key ได้ถนัด
+            // Add bottom spacing so the Private Key is comfortable to scroll to
             Spacer(modifier = Modifier.height(32.dp))
         }
     }

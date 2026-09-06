@@ -13,13 +13,13 @@ android {
         //noinspection OldTargetApi,EditedTargetSdkVersion
         targetSdk = 37
         versionCode = 1
-        versionName = "0.2.6"
+        versionName = "0.2.8"
     }
 
     buildTypes {
         getByName("debug") {
-            // อนุญาตให้แอปใช้หน่วยความจำขนาดใหญ่
-            // หมายเหตุ: ต้องเพิ่ม android:largeHeap="true" ใน AndroidManifest.xml ด้วย
+            // Allow the app to use a large heap
+            // Note: must also add android:largeHeap="true" in AndroidManifest.xml
         }
     }
 
