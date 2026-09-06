@@ -1,11 +1,11 @@
 # UniFFI Codegen Guide (Kanari Kotlin)
 
-คู่มือการ generate Kotlin bindings จาก Rust crate `kanari-kotlin`
+Guide for generating Kotlin bindings from the Rust crate `kanari-kotlin`
 
 ## Prerequisites
 
 - Rust toolchain
-- `cargo` ใน PATH
+- `cargo` in PATH
 
 ## Generate Kotlin bindings
 
@@ -14,7 +14,7 @@ cd packages/kanari-kotlin
 .\scripts\generate-bindings.ps1
 ```
 
-หรือรันด้วยมือ:
+Or run manually:
 
 ```powershell
 cargo run --bin uniffi-bindgen -- generate `
@@ -24,17 +24,17 @@ cargo run --bin uniffi-bindgen -- generate `
   src/kanari_kotlin.udl
 ```
 
-Output หลัก:
+Main output:
 
 - `android/kanari-crypto/src/main/kotlin/uniffi/kanari_kotlin/kanari_kotlin.kt`
 
-**อย่าแก้ไขไฟล์ generated ด้วยมือ** — แก้ที่ `src/lib.rs` แล้ว generate ใหม่
+**Do not edit generated files by hand** — edit `src/lib.rs` and regenerate
 
-## เมื่อไหร่ต้อง regenerate
+## When to regenerate
 
-- เพิ่ม/ลบ/เปลี่ยน function ใน `src/lib.rs` ที่มี `#[uniffi::export]`
-- เปลี่ยน record types (`KeyPairData`, `CurveInfo`)
-- อัปเดต `src/kanari_kotlin.udl`
+- Add/remove/change functions in `src/lib.rs` with `#[uniffi::export]`
+- Change record types (`KeyPairData`, `CurveInfo`)
+- Update `src/kanari_kotlin.udl`
 
 ## Build Android `.so` libraries
 
@@ -42,10 +42,10 @@ Output หลัก:
 .\scripts\build-android.ps1
 ```
 
-Script จะ cross-compile สำหรับ:
+The script cross-compiles for:
 
 | ABI | Rust target |
-|-----|-------------|
+| ----- | ------------- |
 | arm64-v8a | aarch64-linux-android |
 | armeabi-v7a | armv7-linux-androideabi |
 | x86_64 | x86_64-linux-android |
@@ -53,11 +53,11 @@ Script จะ cross-compile สำหรับ:
 
 Output: `android/kanari-crypto/src/main/jniLibs/<abi>/libkanari_kotlin.so`
 
-## Workflow แนะนำ
+## Recommended workflow
 
-1. แก้ Rust API ใน `src/lib.rs`
-2. Sync `src/kanari_kotlin.udl` ถ้าจำเป็น
-3. `cargo build` เพื่อ verify Rust
+1. Edit the Rust API in `src/lib.rs`
+2. Sync `src/kanari_kotlin.udl` if needed
+3. `cargo build` to verify Rust
 4. `.\scripts\generate-bindings.ps1`
 5. `.\scripts\build-android.ps1`
-6. Build Android project ใน `android/`
+6. Build the Android project in `android/`

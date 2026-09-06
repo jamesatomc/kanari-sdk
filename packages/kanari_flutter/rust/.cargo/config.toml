@@ -1,0 +1,5 @@
+# Cargo cross-compilation configuration for the Flutter Rust bridge crate
+
+[build]
+# Keep build outputs local to this crate instead of the workspace root target dir
+target-dir = "target"

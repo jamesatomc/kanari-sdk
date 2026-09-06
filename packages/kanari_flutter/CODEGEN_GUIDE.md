@@ -1,65 +1,102 @@
-# Flutter Rust Bridge Codegen Guide
+# Flutter Rust Bridge Codegen Guide (Kanari Flutter)
 
-This document explains how to use the `flutter_rust_bridge_codegen` tool to generate bindings between Rust and Flutter in the Kanari SDK project.
+Guide for generating Dart/Rust bindings from the Rust crate `rust/` for the Flutter package `flutter/kanari_crypto`
+
+## Structure
+
+```md
+packages/kanari_flutter/
+├── rust/                   # Rust crate (FRB API in src/api.rs)
+│   ├── frb.yml             # FRB config
+│   └── src/frb_generated.rs
+├── flutter/
+│   └── kanari_crypto/      # Flutter package
+│       ├── lib/            # Dart API + bindings
+│       └── android/src/main/jniLibs/   # .so files for Android
+└── scripts/
+    ├── generate-bindings.ps1
+    ├── build-android.ps1
+    └── build-ios.ps1
+```
 
 ## Prerequisites
 
-- **Flutter Rust Bridge (FRB) CLI**: Ensure you have the generator installed.
+- Rust toolchain
+- [flutter_rust_bridge_codegen](https://cjycode.com/flutter_rust_bridge_guide/) CLI:
+
   ```bash
   cargo install flutter_rust_bridge_codegen
   ```
 
-## Configuration File
+- For Android: Android NDK + `ANDROID_NDK_HOME` or `ANDROID_HOME`
 
-The project uses a configuration file named `frb.yml` located in the `packages/kanari_flutter/rust/` directory. This file defines the input and output paths for the generator.
+## Generate bindings
 
-### Current Configuration (`rust/frb.yml`)
-
-```yaml
-rust_input: "crate::api"
-dart_output: "../flutter/kanari_crypto/lib/src/frb_generated.dart"
-rust_root: "."
-dart_root: "../flutter/kanari_crypto"
+```powershell
+cd packages/kanari_flutter
+.\scripts\generate-bindings.ps1
 ```
 
-- **rust_input**: The Rust module containing the functions to export (using FRB v2 syntax).
-- **rust_root**: The root directory of the Rust crate.
-- **dart_root**: The root directory of the Flutter package.
-- **dart_output**: The destination for the generated Dart code.
-
-## Generating Bindings
-
-To generate or update the bindings, navigate to the Rust package directory and run the following command:
-
-### Command
+Or run manually:
 
 ```bash
 cd packages/kanari_flutter/rust
 flutter_rust_bridge_codegen generate --config-file frb.yml
 ```
 
-### What happens during generation?
+Main outputs:
 
-1. **Rust Analysis**: The tool parses your Rust code in `src/api.rs` (referenced by `crate::api`).
-2. **Binding Creation**: It generates `src/frb_generated.rs` in Rust and several files in Dart under `lib/src/frb_generated.dart/`.
-3. **Module Injection**: It automatically adds `mod frb_generated;` to your `lib.rs` if it's missing.
-4. **Formatting**: It runs `dart format` and `cargo fmt` on the generated files.
+- Dart: `flutter/kanari_crypto/lib/src/frb_generated.dart`
+- Rust: `rust/src/frb_generated.rs`
+
+**Do not edit generated files by hand** — edit `rust/src/api.rs` and regenerate
+
+## When to regenerate
+
+- Add/remove/change functions in `rust/src/api.rs`
+- Change record types / enums in the API
+- Update `rust/frb.yml`
+
+## Build Android `.so` libraries
+
+```powershell
+cd packages/kanari_flutter
+.\scripts\build-android.ps1            # release (default)
+.\scripts\build-android.ps1 -Profile debug
+```
+
+The script cross-compiles for:
+
+| ABI | Rust target |
+| ----- | ------------- |
+| arm64-v8a | aarch64-linux-android |
+| armeabi-v7a | armv7-linux-androideabi |
+| x86_64 | x86_64-linux-android |
+| x86 | i686-linux-android |
+
+Output: `flutter/kanari_crypto/android/src/main/jniLibs/<abi>/librust.so`
+
+## Example usage
+
+```dart
+import 'package:kanari_crypto/kanari_crypto.dart';
+
+final mnemonic = await generateMnemonicApi(wordCount: BigInt.from(12));
+final keypair = await generateKeypairApi(curveName: curves.first.name);
+```
+
+## Recommended workflow
+
+1. Edit the Rust API in `rust/src/api.rs`
+2. `cargo build` to verify Rust
+3. `.\scripts\generate-bindings.ps1`
+4. `.\scripts\build-android.ps1`
+5. Build/test the Flutter package in `flutter/kanari_crypto`
 
 ## Troubleshooting
 
 ### Common Errors
 
-- **"Prefix not found"**: This usually happens if the command is run from the wrong directory. Always run it from the directory containing `frb.yml` or provide absolute paths.
-- **"Please migrate configuration rust_input"**: FRB v2 requires `crate::api` instead of `src/api.rs`. Ensure your `frb.yml` follows the new syntax.
-- **Path Canonicalization**: On Windows, ensure paths in `frb.yml` use forward slashes `/` or escaped backslashes `\\` to avoid issues with the tool's internal path handling.
-
-## Integration in Flutter
-
-After generating the code, the bindings are exposed through the `kanari_crypto` library. You can import them in your Flutter app:
-
-```dart
-import 'package:kanari_crypto/kanari_crypto.dart';
-
-// Example usage
-final mnemonic = await generateMnemonicApi(wordCount: BigInt.from(12));
-```
+- **"Prefix not found"**: run from the directory containing `frb.yml` or specify absolute paths
+- **"Please migrate configuration rust_input"**: FRB v2 uses `crate::api` instead of `src/api.rs`
+- **Path Canonicalization**: on Windows use forward slashes `/` in `frb.yml`

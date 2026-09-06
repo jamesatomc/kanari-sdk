@@ -11,7 +11,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // เพิ่มบรรทัดนี้เพื่อขยายขีดจำกัดหน่วยความจำสำหรับ Native Library (PQ algorithms)
+        // Add this line to raise the memory limit for the Native Library (PQ algorithms)
         System.setProperty("jna.nosys", "true")
         
         enableEdgeToEdge()

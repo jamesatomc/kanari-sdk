@@ -1,40 +1,40 @@
 # Kanari Kotlin / Jetpack Compose
 
-Android library สำหรับ Kanari cryptographic SDK ที่รองรับ **Jetpack Compose** โดยใช้ Rust core ผ่าน [UniFFI](https://mozilla.github.io/uniffi-rs/).
+Android library for the Kanari cryptographic SDK that supports **Jetpack Compose**, backed by the Rust core via [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
-## โครงสร้าง
+## Structure
 
-```
+```md
 packages/kanari-kotlin/
 ├── src/                    # Rust FFI (UniFFI)
 ├── android/
 │   ├── kanari-crypto/      # Android library + Compose UI
-│   └── sample/             # ตัวอย่าง Compose app
+│   └── sample/             # Sample Compose app
 └── scripts/
     ├── generate-bindings.ps1
     └── build-android.ps1
 ```
 
-## ความสามารถ
+## Features
 
-- สร้าง keypair, mnemonic, HD derivation
+- Keypair, mnemonic and HD derivation generation
 - Sign / verify, Blake3 hash
-- รองรับ post-quantum และ hybrid curves
-- **Jetpack Compose UI** พร้อมใช้:
+- Support for post-quantum and hybrid curves
+- **Jetpack Compose UI** ready to use:
   - `KanariTheme` — Material 3 theme
-  - `KeyGenerationScreen` — หน้าสร้าง wallet
+  - `KeyGenerationScreen` — wallet creation screen
   - `WalletAddressCard`, `MnemonicDisplay`, `CurveSelector`
 
-## การติดตั้งในโปรเจกต์ Compose
+## Installing in a Compose project
 
-1. เพิ่ม module ใน `settings.gradle.kts`:
+1. Add the module in `settings.gradle.kts`:
 
 ```kotlin
 include(":kanari-crypto")
 project(":kanari-crypto").projectDir = file("../packages/kanari-kotlin/android/kanari-crypto")
 ```
 
-2. เพิ่ม dependency:
+1. Add the dependency:
 
 ```kotlin
 dependencies {
@@ -42,11 +42,11 @@ dependencies {
 }
 ```
 
-3. Build native library ก่อน compile Android (ดูด้านล่าง)
+1. Build the native library before compiling for Android (see below)
 
 ## Build native library
 
-**Prerequisites:** Rust, Android NDK, `ANDROID_NDK_HOME` หรือ `ANDROID_HOME`
+**Prerequisites:** Rust, Android NDK, `ANDROID_NDK_HOME` or `ANDROID_HOME`
 
 ```powershell
 cd packages/kanari-kotlin
@@ -55,14 +55,14 @@ cd packages/kanari-kotlin
 
 ## Generate Kotlin bindings
 
-หลังแก้ไข Rust API:
+After editing the Rust API:
 
 ```powershell
 cd packages/kanari-kotlin
 .\scripts\generate-bindings.ps1
 ```
 
-## ตัวอย่างการใช้งาน
+## Usage examples
 
 ### Crypto API
 
@@ -91,7 +91,7 @@ setContent {
 }
 ```
 
-## รัน sample app
+## Run the sample app
 
 ```powershell
 cd packages/kanari-kotlin
@@ -100,6 +100,6 @@ cd android
 gradle :sample:installDebug
 ```
 
-## ดูเพิ่มเติม
+## See also
 
-- [CODEGEN_GUIDE.md](./CODEGEN_GUIDE.md) — รายละเอียด UniFFI codegen
+- [CODEGEN_GUIDE.md](./CODEGEN_GUIDE.md) — UniFFI codegen details
