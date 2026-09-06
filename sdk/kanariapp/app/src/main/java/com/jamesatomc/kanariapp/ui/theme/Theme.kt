@@ -9,18 +9,28 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
+
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-// KanariExtendedColors is defined in Color.kt as KanariColors
-// Re-export for backward compatibility
-val KanariExtendedColors = com.jamesatomc.kanariapp.ui.theme.KanariColors
-val LocalKanariExtended = staticCompositionLocalOf { KanariExtendedColors }
+@Immutable
+data class KanariGradients(
+    val primary: Brush,
+    val secondary: Brush,
+    val multi: Brush,
+    val glass: Brush
+)
+
+val LocalKanariGradients = staticCompositionLocalOf<KanariGradients> {
+    error("No KanariGradients provided")
+}
 
 private val KanariLightScheme = lightColorScheme(
     primary = Color(0xFF111B18),                // Ink
@@ -55,9 +65,9 @@ private val KanariLightScheme = lightColorScheme(
     surfaceBright = Color(0xFFFFFDF7),
     surfaceContainerLowest = Color(0xFFFFFDF7),
     surfaceContainerLow = Color(0xFFFBF8EF),
-    surfaceContainer = Color(0xFFF1EEE5),
-    surfaceContainerHigh = Color(0xFFE9E6DD),
-    surfaceContainerHighest = Color(0xFFDFDCD3)
+    surfaceContainer = Color(0xFFEBE8DB),      // Darker for better contrast
+    surfaceContainerHigh = Color(0xFFDFDCD3),
+    surfaceContainerHighest = Color(0xFFD5D2C9)
 )
 
 private val KanariDarkScheme = darkColorScheme(
@@ -93,9 +103,9 @@ private val KanariDarkScheme = darkColorScheme(
     surfaceBright = Color(0xFF2B3531),
     surfaceContainerLowest = Color(0xFF070C0B),
     surfaceContainerLow = Color(0xFF121A17),
-    surfaceContainer = Color(0xFF17211E),      // DarkPaper
-    surfaceContainerHigh = Color(0xFF202B27),
-    surfaceContainerHighest = Color(0xFF2A3531)
+    surfaceContainer = Color(0xFF1E2825),      // Lighter for better definition
+    surfaceContainerHigh = Color(0xFF28322F),
+    surfaceContainerHighest = Color(0xFF323C39)
 )
 
 enum class ThemeMode { LIGHT, DARK, SYSTEM }
@@ -123,6 +133,13 @@ fun KanariAppTheme(
         else -> KanariLightScheme
     }
 
+    val gradients = KanariGradients(
+        primary = Brush.linearGradient(KanariColors.LimeGradient),
+        secondary = Brush.linearGradient(KanariColors.PurpleGradient),
+        multi = Brush.linearGradient(KanariColors.MultiGradient),
+        glass = Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.2f), Color.White.copy(alpha = 0.05f)))
+    )
+
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -134,5 +151,7 @@ fun KanariAppTheme(
         }
     }
 
-    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+    CompositionLocalProvider(LocalKanariGradients provides gradients) {
+        MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+    }
 }

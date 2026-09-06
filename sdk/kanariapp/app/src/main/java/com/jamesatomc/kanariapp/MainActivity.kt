@@ -1,7 +1,6 @@
 package com.jamesatomc.kanariapp
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
@@ -124,7 +123,10 @@ fun MainNavigation(viewModel: WalletViewModel) {
             )
         }
         composable(Screen.WalletGeneration.route) {
-            KeyGenerationScreen(onBack = { navController.popBackStack() })
+            KeyGenerationScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() }
+            )
         }
         composable(Screen.Unlock.route) {
             UnlockScreen(

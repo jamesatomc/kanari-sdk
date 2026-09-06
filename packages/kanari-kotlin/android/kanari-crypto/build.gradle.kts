@@ -55,7 +55,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
 
     implementation(libs.kotlinx.serialization.json)
-    implementation(libs.kotlinx.serialization.bcs)
     implementation("net.java.dev.jna:jna:5.19.1@aar")
 
     debugImplementation(libs.androidx.ui.tooling)

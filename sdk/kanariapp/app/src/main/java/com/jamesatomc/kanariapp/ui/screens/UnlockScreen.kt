@@ -2,8 +2,8 @@ package com.jamesatomc.kanariapp.ui.screens
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.jamesatomc.kanariapp.ui.components.PinVerificationContent
@@ -18,6 +18,7 @@ fun UnlockScreen(viewModel: WalletViewModel, onUnlockSuccess: () -> Unit, onBack
     val context = LocalContext.current
     val activity = context.findFragmentActivity()
     val canUseBiometric = rememberBiometricAvailable(viewModel)
+    val scope = rememberCoroutineScope()
 
     fun onBiometric() {
         if (activity == null) return
@@ -25,7 +26,11 @@ fun UnlockScreen(viewModel: WalletViewModel, onUnlockSuccess: () -> Unit, onBack
             activity = activity,
             title = "Unlock Kanari Wallet",
             subtitle = "Use biometrics to unlock",
-            onSuccess = { if (viewModel.unlockWithBiometric()) onUnlockSuccess() }
+            onSuccess = {
+                scope.launch {
+                    if (viewModel.unlockWithBiometric()) onUnlockSuccess()
+                }
+            }
         )
     }
 
@@ -33,7 +38,7 @@ fun UnlockScreen(viewModel: WalletViewModel, onUnlockSuccess: () -> Unit, onBack
         PinVerificationContent(
             title = "Welcome Back",
             subtitle = "Enter your 6-digit PIN to unlock your wallet",
-            onVerify = { pin -> viewModel.unlock(pin) },
+            onVerifyAsync = { pin -> viewModel.unlock(pin) },
             onSuccess = { _: String -> onUnlockSuccess() },
             biometricEnabled = canUseBiometric,
             onBiometric = ::onBiometric,

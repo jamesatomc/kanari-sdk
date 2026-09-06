@@ -1,5 +1,6 @@
 package com.jamesatomc.kanariapp.compose
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -29,7 +30,7 @@ import com.jamesatomc.kanariapp.ui.components.copyToClipboard
 fun WalletAddressCard(
     address: String,
     label: String = "Address",
-    modifier: Modifier = Modifier,
+    @SuppressLint("ModifierParameter") modifier: Modifier = Modifier,
     onCopied: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current

@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -12,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -21,12 +23,10 @@ import androidx.navigation.NavController
 import com.jamesatomc.kanariapp.ui.components.LoadingButton
 import com.jamesatomc.kanariapp.ui.components.RecipientAddressField
 import com.jamesatomc.kanariapp.ui.components.formatAmount
-import com.jamesatomc.kanariapp.ui.components.formatMist
 import com.jamesatomc.kanariapp.ui.components.parseAmountToMist
 import com.jamesatomc.kanariapp.ui.components.validateAddress
 import com.jamesatomc.kanariapp.wallet.WalletViewModel
 import kotlinx.coroutines.launch
-import kotlin.math.pow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,33 +90,46 @@ fun MainScreen(
                     )
                 )
             ) {
-                Column {
-                    // 2px tail / handle that moves with navbar - stays visible as peek
-                    HorizontalDivider(
-                        thickness = 2.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                    )
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        contentColor = MaterialTheme.colorScheme.onSurface
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .padding(bottom = 8.dp) // Offset from the bottom edge
+                        .navigationBarsPadding()
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.95f),
+                        shape = RoundedCornerShape(20.dp), // Reduced curvature for a more sophisticated look
+                        shadowElevation = 2.dp,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        navItems.forEachIndexed { index, item ->
-                            NavigationBarItem(
-                                icon = {
-                                    Icon(
-                                        if (selectedItem == index) item.activeIcon else item.inactiveIcon,
-                                        contentDescription = item.label
+                        NavigationBar(
+                            containerColor = Color.Transparent, // Color handled by Surface
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                            tonalElevation = 0.dp,
+                            modifier = Modifier.height(80.dp)
+                        ) {
+                            navItems.forEachIndexed { index, item ->
+                                NavigationBarItem(
+                                    icon = {
+                                        Icon(
+                                            if (selectedItem == index) item.activeIcon else item.inactiveIcon,
+                                            contentDescription = item.label
+                                        )
+                                    },
+                                    label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
+                                    selected = selectedItem == index,
+                                    onClick = { selectedItem = index },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer
                                     )
-                                },
-                                label = { Text(item.label) },
-                                selected = selectedItem == index,
-                                onClick = { selectedItem = index },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer
                                 )
-                            )
+                            }
                         }
                     }
                 }
@@ -253,9 +266,9 @@ fun SendScreenContent(viewModel: WalletViewModel, onBack: () -> Unit) {
                 if (amt == null || amt == 0uL) {
                     error = "Invalid amount"; return@LoadingButton
                 }
-                val addrError = validateAddress(recipient)
-                if (addrError != null) {
-                    error = addrError; return@LoadingButton
+                val adderError = validateAddress(recipient)
+                if (adderError != null) {
+                    error = adderError; return@LoadingButton
                 }
                 scope.launch {
                     isLoading = true; error = null

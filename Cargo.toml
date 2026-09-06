@@ -165,7 +165,7 @@ fs2 = "0.4.3"                                                                   
 # Database & Persistent Storage
 # ============================================================================
 rocksdb = "0.25.0"                                                                  # High-performance embedded DB
-zstd = "0.13.3"                                                                     # Compression for storage/network
+zstd = "0.14.0"                                                                     # Compression for storage/network
 
 # ============================================================================
 # Caching & Performance Optimization
@@ -197,7 +197,7 @@ prometheus = "0.14.0"
 # CLI, Configuration & Utilities
 # ============================================================================
 clap = { version = "4.6.6", features = ["derive"] }                                 # CLI argument parsing
-dirs = "6.0.0"                                                                      # Platform-specific directories
+dirs = "7.0.0"                                                                      # Platform-specific directories
 walkdir = "2.5.0"                                                                   # Directory traversal
 num_cpus = "1.17.0"                                                                 # CPU core detection
 regex = "1.13.1"                                                                    # Regular expressions for validation
@@ -260,7 +260,7 @@ rusqlite = { version = "0.40.2", features = ["bundled", "chrono", "serde_json"] 
 # ============================================================================
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
-syn = { version = "3.0.4", features = ["full"] }
+syn = { version = "3.0.5", features = ["full"] }
 
 # ============================================================================
 # Miscellaneous Utilities

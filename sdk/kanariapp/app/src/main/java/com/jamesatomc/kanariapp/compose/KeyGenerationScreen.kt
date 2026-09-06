@@ -2,9 +2,9 @@ package com.jamesatomc.kanariapp.compose
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,15 +23,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.jamesatomc.kanariapp.ui.components.PinVerificationContent
+import com.jamesatomc.kanariapp.ui.components.*
 import com.jamesatomc.kanariapp.wallet.WalletRecord
 import com.jamesatomc.kanariapp.wallet.WalletStorage
+import com.jamesatomc.kanariapp.wallet.WalletViewModel
 import com.kanari.kanari_crypto.KanariCrypto
 import com.kanari.kanari_crypto.model.CurveInfoModel
 import com.kanari.kanari_crypto.model.KeyPairModel
@@ -47,9 +47,10 @@ fun KeyGenerationScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     defaultCurve: String = KanariCrypto.DEFAULT_CURVE,
-    onKeyPairGenerated: ((KeyPairModel) -> Unit)? = null
+    onKeyPairGenerated: ((KeyPairModel) -> Unit)? = null,
+    viewModel: WalletViewModel? = null
 ) {
-    val snackbarHostState = remember { SnackbarHostState() }
+    val snackState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     val context = LocalContext.current
@@ -80,14 +81,18 @@ fun KeyGenerationScreen(
         if (curves.isNotEmpty() && selectedCurveInfo == null) selectedCurveInfo =
             curves.find { it.name == defaultCurve } ?: curves.first()
     }
-    LaunchedEffect(errorMessage) { errorMessage?.let { snackbarHostState.showSnackbar(it); errorMessage = null } }
-    Scaffold(modifier = modifier, snackbarHost = { SnackbarHost(snackbarHostState) }, topBar = {
+    LaunchedEffect(errorMessage) { errorMessage?.let { snackState.showSnackbar(it); errorMessage = null } }
+    Scaffold(modifier = modifier, snackbarHost = { SnackbarHost(snackState) }, topBar = {
         TopAppBar(
             title = {
-                Text(
-                    "Kanari Key Generator",
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    KanariLogo(modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "Key Generator",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
             },
             navigationIcon = {
                 IconButton(onClick = onBack) {
@@ -112,7 +117,7 @@ fun KeyGenerationScreen(
                     PinVerificationContent(
                         title = "Save Wallet",
                         subtitle = "Enter 6-digit PIN to encrypt your wallet",
-                        onVerify = { pin -> walletStorage.verifyPin(pin) },
+                        onVerifyAsync = { pin -> !walletStorage.hasPin() || walletStorage.verifyPin(pin) },
                         onSuccess = { pin ->
                             scope.launch {
                                 runCatching {
@@ -131,7 +136,8 @@ fun KeyGenerationScreen(
                                     existing.add(record)
                                     walletStorage.saveWallets(existing)
                                     if (!walletStorage.hasPin()) walletStorage.savePin(pin)
-                                    snackbarHostState.showSnackbar("Wallet saved successfully!")
+                                    viewModel?.loadWallets()
+                                    snackState.showSnackbar("Wallet saved successfully!")
                                     showSaveDialog = false
                                     onBack()
                                 }.onFailure { errorMessage = "Failed to save: ${it.message}" }
@@ -146,37 +152,24 @@ fun KeyGenerationScreen(
             Modifier.fillMaxSize().padding(padding).verticalScroll(scrollState).navigationBarsPadding().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            TabRow(
+            SmartTabRow(
                 selectedTabIndex = selectedTab,
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
-                contentColor = MaterialTheme.colorScheme.primary,
-                divider = {},
-                modifier = Modifier.clip(RoundedCornerShape(12.dp))
-            ) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTab == index,
-                        onClick = {
-                            selectedTab = index; mnemonic = null; keyPairs = emptyList(); importInput =
-                            ""; errorMessage = null
-                        },
-                        text = {
-                            Text(
-                                title,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.padding(vertical = 12.dp)
-                            )
-                        })
+                tabs = tabs,
+                onTabSelected = {
+                    selectedTab = it
+                    mnemonic = null
+                    keyPairs = emptyList()
+                    importInput = ""
+                    errorMessage = null
                 }
-            }
-            ElevatedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            )
+            DetailSectionCard(glass = true) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(
                         if (selectedTab == 0) "Wallet Settings" else "Import Details",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.ExtraBold
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     if (selectedTab == 1) {
@@ -250,7 +243,7 @@ fun KeyGenerationScreen(
                     )
                 }
             }
-            Button(
+            LoadingButton(
                 onClick = {
                     scope.launch {
                         isLoading = true
@@ -269,11 +262,10 @@ fun KeyGenerationScreen(
                                         currentCurve,
                                         addressCount
                                     ) else {
-                                        val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" };
-                                        val pair =
-                                            KanariCrypto.deriveKeypairFromPath(words, path, currentCurve); listOf(
-                                            pair
-                                        )
+                                    val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" }
+                                    val pair =
+                                        KanariCrypto.deriveKeypairFromPath(words, path, currentCurve)
+                                    listOf(pair)
                                     }
                                     words to pairs
                                 }
@@ -288,38 +280,18 @@ fun KeyGenerationScreen(
                                 }
                             }
                         }.onSuccess { (words, pairs) ->
-                            mnemonic = words; keyPairs = pairs; pairs.firstOrNull()
-                            ?.let { onKeyPairGenerated?.invoke(it) }
+                            mnemonic = words
+                            keyPairs = pairs
+                            pairs.firstOrNull()?.let { onKeyPairGenerated?.invoke(it) }
                         }.onFailure { errorMessage = it.message ?: "Operation failed" }
                         isLoading = false
                     }
                 },
-                enabled = !isLoading,
-                modifier = Modifier.fillMaxWidth().height(64.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                contentPadding = PaddingValues(16.dp)
-            ) {
-                if (isLoading) CircularProgressIndicator(
-                    Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 3.dp
-                )
-                else Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        if (selectedTab == 0) Icons.Default.Refresh else Icons.Default.FileDownload,
-                        contentDescription = null
-                    )
-                    Spacer(Modifier.size(8.dp))
-                    Text(
-                        if (selectedTab == 0) "Generate Secure Wallet" else "Import Existing Wallet",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
-                    )
-                }
-            }
+                isLoading = isLoading,
+                text = if (selectedTab == 0) "Generate Secure Wallet" else "Import Existing Wallet",
+                icon = if (selectedTab == 0) Icons.Default.Refresh else Icons.Default.FileDownload,
+                modifier = Modifier.fillMaxWidth()
+            )
             if (mnemonic != null || keyPairs.isNotEmpty()) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -338,7 +310,9 @@ fun KeyGenerationScreen(
                         Icon(
                             Icons.Default.Save,
                             contentDescription = null
-                        ); Spacer(Modifier.size(8.dp)); Text("Save Wallet")
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text("Save Wallet")
                     }
                 }
                 mnemonic?.let { words ->
@@ -382,11 +356,11 @@ fun KeyGenerationScreen(
                             WalletAddressCard(
                                 address = pair.address,
                                 label = "Public Address",
-                                onCopied = { scope.launch { snackbarHostState.showSnackbar("Address copied") } })
+                                onCopied = { scope.launch { snackState.showSnackbar("Address copied") } })
                             WalletAddressCard(
                                 address = pair.privateKey,
                                 label = "Private Key (Hex)",
-                                onCopied = { scope.launch { snackbarHostState.showSnackbar("Private key copied") } })
+                                onCopied = { scope.launch { snackState.showSnackbar("Private key copied") } })
                         }
                     }
                 }

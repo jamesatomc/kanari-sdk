@@ -22,14 +22,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jamesatomc.kanariapp.network.models.TransactionDetails
-import com.jamesatomc.kanariapp.ui.components.CopyableAddressRow
 import com.jamesatomc.kanariapp.ui.components.DetailRowShared
 import com.jamesatomc.kanariapp.ui.components.LoadingEmptyState
 import com.jamesatomc.kanariapp.ui.components.copyToClipboard
 import com.jamesatomc.kanariapp.ui.components.formatAmount
-import com.jamesatomc.kanariapp.ui.components.formatMist
 import com.jamesatomc.kanariapp.wallet.WalletViewModel
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,8 +72,8 @@ fun HistoryScreen(viewModel: WalletViewModel) {
 }
 
 private fun TransactionDetails.isIncomingTo(walletAddress: String?): Boolean {
-    val myAddr = walletAddress?.lowercase() ?: return false
-    return !(myAddr == sender.lowercase() || myAddr == senderAddress?.lowercase())
+    val myAdder = walletAddress?.lowercase() ?: return false
+    return !(myAdder == sender.lowercase() || myAdder == senderAddress?.lowercase())
 }
 
 @Composable
@@ -137,7 +134,7 @@ fun TransactionDetailSheet(tx: TransactionDetails, isIncoming: Boolean, onDismis
         tx.effects?.let { eff ->
             DetailRowShared(label = "Effects Status", value = eff.status)
             DetailRowShared(label = "Effects Gas", value = eff.gasUsed.toString())
-            if (!eff.objectChanges.isNullOrEmpty()) {
+            if (eff.objectChanges.isNotEmpty()) {
                 Text(
                     "Object Changes (${eff.objectChanges.size})",
                     style = MaterialTheme.typography.titleSmall,

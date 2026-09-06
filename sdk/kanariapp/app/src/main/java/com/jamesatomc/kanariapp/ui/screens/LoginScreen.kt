@@ -62,7 +62,6 @@ fun LoginScreen(
             Spacer(Modifier.height(16.dp))
 
             AuthHeroSection(
-                icon = Icons.AutoMirrored.Filled.Login,
                 title = "Welcome Back",
                 subtitle = "Sign in to access your Kanari wallet and synced sessions."
             )

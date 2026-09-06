@@ -35,14 +35,8 @@ fun WelcomeScreen(
 ) {
     val context = LocalContext.current
     val walletStorage = remember { WalletStorage(context) }
-    var hasWallet by remember { mutableStateOf(walletStorage.loadWallets().isNotEmpty()) }
+    var hasWallet by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { hasWallet = walletStorage.loadWallets().isNotEmpty() }
-
-    val infiniteTransition = rememberInfiniteTransition()
-    val orbRotation by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(26000, easing = LinearEasing))
-    )
 
     val animProgress = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
@@ -73,19 +67,9 @@ fun WelcomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "K",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
+                    com.jamesatomc.kanariapp.ui.components.KanariLogo(
+                        modifier = Modifier.size(36.dp)
+                    )
                     Spacer(Modifier.width(10.dp))
                     Text(
                         "KANARI",
