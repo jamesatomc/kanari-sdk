@@ -6,7 +6,7 @@
 
 [![build
 status](https://img.shields.io/github/actions/workflow/status/asonnino/mysticeti/code.yaml?branch=main&logo=github&style=flat-square)](https://github.com/asonnino/mysticeti/actions)
-[![rustc](https://img.shields.io/badge/rustc-1.92+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![rustc](https://img.shields.io/badge/rustc-1.98+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![license](https://img.shields.io/badge/license-Apache-blue.svg?style=flat-square)](LICENSE)
 
 This repository provides reference implementations of several uncertified DAG-based consensus
@@ -17,8 +17,9 @@ network and failure scenarios.
 
 This repository currently supports [Mysticeti](https://sonnino.com/papers/mysticeti.pdf),
 [Mahi-Mahi](https://sonnino.com/papers/mahi-mahi.pdf),
-[Blue Bottle](https://sonnino.com/papers/bluebottle.pdf), [Cordial
-Miners](https://arxiv.org/abs/2205.09174) (both the partially synchronous and asynchronous
+[Blue Bottle](https://sonnino.com/papers/bluebottle.pdf) (both the partially synchronous and asynchronous
+variants),
+[Cordial Miners](https://arxiv.org/abs/2205.09174) (both the partially synchronous and asynchronous
 variants), [Nemo-Nemo](https://sonnino.com/papers/nemo-nemo.pdf),
 [Orcaella](https://sonnino.com/papers/orcaella.pdf), and a DAG variant of
 [Hydrangea](https://eprint.iacr.org/2025/1112).
@@ -73,6 +74,16 @@ Running for 20 seconds…
   scenarios with the discrete-event simulator.
 - [Geo-replicated testbeds](docs/orchestrator.md) — a walkthrough for spinning up and benchmarking a
   distributed deployment on the cloud.
+
+## Formal Verification
+
+The `lean/` directory contains a Lean 4 + Mathlib formalization of the safety and
+liveness of DagHydrangea (called Hydrozoan in the paper). Every proof is
+kernel-checked; the human-reviewed surface is the small set of definition and
+statement files listed in `lean/README.md`. Build it with `cd lean && lake build`
+(fetch prebuilt Mathlib first with `lake exe cache get`). The paper's theory-only
+variant, Optimal-Hydrozoan, is formalized alongside a mirror of this development
+in [gdanezis/lean-dag](https://github.com/gdanezis/lean-dag).
 
 ## License
 

@@ -27,6 +27,18 @@ crate's `replica` binary.
 See `docs/architecture.md`, `docs/simulator.md`, and `docs/orchestrator.md` for deeper
 design notes.
 
+## Lean formalization
+
+`lean/` holds a Lean 4 + mathlib formalization of the safety and liveness
+arguments of Hydrozoan (the paper name of `DagHydrangea`); the paper's
+theory-only variant Optimal-Hydrozoan lives in `gdanezis/lean-dag` as a peer
+arc of this development's mirror there. It is a separate lake project, not a Cargo crate:
+`cd lean && lake build`; `python3 lean/scripts/check_no_holes.py` scans for proof
+holes. Its own `lean/CLAUDE.md` carries the working rules (trust partition, phase
+workflow, frozen core) and takes precedence inside that directory. CI runs it via
+`.github/workflows/lean.yml` on changes under `lean/`. The `.lake/` build cache is
+gitignored; `lake exe cache get` fetches prebuilt mathlib.
+
 ## Common commands
 
 ```sh
@@ -36,6 +48,7 @@ cargo test -p consensus              # test one crate
 cargo test                           # test the workspace
 cargo clippy --workspace --all-targets
 cargo fmt
+(cd lean && lake build)              # kernel-check the Lean formalization
 ```
 
 A pre-commit hook chain runs on every commit: `cargo-fmt`, `clippy`, `cargo-test`,
@@ -63,8 +76,9 @@ the voting round, reconciled with the certified slow path by a graded indirect r
   individual commits onto `main`, keeping each clean conventional-commit step in the
   history. Squash collapses a PR into one commit and loses that. Merge commits are
   disabled on this repo (`allow_merge_commit: false`), so rebase is the history-preserving
-  option. When a branch falls behind `main`, rebase your local un-pushed work onto the
-  updated tip; don't force-push rewritten shared history.
+  option. When a branch falls behind `main`, rebase it onto the updated tip **before
+  pushing**. **Never force-push** — a pushed branch (even a PR branch Claude created)
+  counts as shared history: fix it with follow-up commits, or ask before any rewrite.
 - **Commit messages** follow Conventional Commits (`feat(consensus):`, `fix(dag):`,
   `refactor(...)`, `test(...)`, …).
 - **Test-only APIs** are gated behind `#[cfg(any(test, feature = "test-utils"))]`.
