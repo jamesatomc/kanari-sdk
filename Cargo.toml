@@ -97,7 +97,7 @@ libp2p-tcp = { version = "0.44.1", features = ["tokio"] }
 libp2p-yamux = "0.47.0"
 
 ## HTTP/Web APIs
-reqwest = { version = "0.13.4", features = ["json"] }
+reqwest = { version = "0.13.5", features = ["json"] }
 axum = "0.8.9"
 tower-http = { version = "0.7.1", features = ["cors", "limit", "timeout"] }
 tower = { version = "0.5.3", features = ["limit", "util"] }
@@ -265,7 +265,7 @@ syn = { version = "3.0.5", features = ["full"] }
 # ============================================================================
 # Miscellaneous Utilities
 # ============================================================================
-uniffi = { version = "0.32.0" }
+uniffi = { version = "0.32.1" }
 
 # ============================================================================
 
