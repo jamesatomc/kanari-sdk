@@ -21,7 +21,9 @@ pub struct AddWallet {
     /// Password for wallet encryption
     #[arg(short, long)]
     pub password: String,
-    /// Curve type (ed25519, k256, p256, ed25519+dilithium3, k256+dilithium3, dilithium2, dilithium3, dilithium5)
+    /// Curve type (ed25519, k256, p256, ed25519+dilithium3, k256+dilithium3,
+    /// dilithium2, dilithium3, dilithium5, falcon512, falcon1024,
+    /// sphincs-plus-sha256-robust)
     #[arg(short, long, default_value = "ed25519")]
     pub curve: String,
     /// BIP32 derivation path (default: m/44'/637'/0'/0/0)
@@ -77,12 +79,7 @@ impl AddWallet {
             eprintln!("Private Key: {}", *imported.private_key);
             eprintln!("Curve Type: {:?}", curve_type);
         } else if let Some(seed_phrase) = &self.seed {
-            // Importing from BIP39 seed phrases only works for classical curves.
-            if curve_type.is_post_quantum() || curve_type.is_hybrid() {
-                return Err(anyhow::anyhow!(
-                    "Import from seed phrase is not supported for post-quantum or hybrid curves; use CreateWallet to generate such keys"
-                ));
-            }
+            // BIP39 seed import works for all curves (classical, PQC, hybrid).
             let kp = derive_keypair_from_path(seed_phrase, "", &self.path, curve_type)
                 .require("Import from seed phrase failed")?;
 
