@@ -93,7 +93,7 @@ let node_hash = hash_node(&left_child, &right_child);
 
 ## Architecture
 
-```
+```md
 Root (depth 0)
 ├─ Node (depth 1) - left subtree
 │  ├─ Node (depth 2)
@@ -126,7 +126,7 @@ for depth in (0..256).rev() {
 ## Comparison with Transaction Merkle Tree
 
 | Feature | SMT | Transaction Merkle Tree |
-|---------|-----|-------------------------|
+| --------- | ----- | ------------------------- |
 | **Purpose** | State storage | Transaction verification |
 | **Keyspace** | 256-bit (sparse) | Transaction count (dense) |
 | **Storage** | RocksDB (persistent) | In-memory (ephemeral) |
