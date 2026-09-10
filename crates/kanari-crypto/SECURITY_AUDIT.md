@@ -706,3 +706,45 @@ The Kanari Crypto module represents a **state-of-the-art implementation** of cry
 **Current Review Date:** March 21, 2026  
 **Next Review Date:** June 21, 2026 (6 months)  
 **Next Full Audit Date:** September 21, 2026 (Annual)
+
+---
+
+## Addendum — Deterministic PQC/Hybrid Mnemonic Derivation (2026-09-10)
+
+**Scope:** `keypair_from_mnemonic` / new `keypair_from_seed` for all 8 PQC/hybrid
+`CurveType`s, `keys/mnemonic.rs` KDF, seeded providers in
+`signatures/falcon_provider.rs`, PQC HD derivation in `hd_wallet.rs`.
+Self-reviewed (not an independent third-party audit).
+
+**Construction:** sub-seed = `SHAKE256("Kanari-PQC-Mnemonic-v1" || 0x00 ||
+label || 0x00 || bip39_seed)` with a unique label per algorithm;
+HD paths use a separate domain `"Kanari-HD-PQC-v1" || curve || path || seed`.
+Stored PQC secrets reuse the exact formats of randomly generated keys, so
+import/validation/sign/verify paths are unchanged.
+
+**Evidence:**
+- `cargo test -p kanari-crypto`: 219 passed, 0 failed (incl. new KAT target
+  `kat_test` with 22 frozen vectors in `tests/fixtures/pqc_mnemonic_kat.json`,
+  new `prop_fuzz_pqc_mnemonic_derivation`, updated attack-simulation tests).
+- `cargo clippy -p kanari-crypto --all-targets`: zero warnings.
+- `cargo check` in `fuzz/`: clean; nightly libFuzzer runs `key-generation`
+  (now covering all 11 curves + seed/mnemonic determinism) via existing CI
+  (`kanari-crypto-nightly-fuzz.yml`).
+- Panic review: every new slice index is preceded by an exact-length guard;
+  empty Falcon seeds rejected; short seeds rejected before use.
+
+**Accepted residual risks:**
+1. No KAT against external reference implementations for the derivation layer
+   (vectors freeze OUR behavior; they do not prove equivalence with another
+   implementation).
+2. `slh-dsa 0.2.0-rc.5` remains release-candidate/unaudited upstream; kept in
+   default features deliberately (on-chain Move native depends on it) with a
+   documented cfg-gated kill-switch (see `KEY_SIGNATURE_PATH_AUDIT.md`).
+3. `slh_keygen_internal` is a doc-hidden upstream API (FIPS-205 internal
+   keygen used correctly, but fragile across upstream upgrades — pin/lockfile
+   covers `fuzz/`, workspace `Cargo.lock` covers the rest).
+4. Hybrid classical half intentionally equals the standalone classical key for
+   the same mnemonic (linkable by design; documented in tests and audit).
+5. `--no-default-features` build was already broken before this change
+   (unconditional `use ml_dsa` in `ml_dsa_provider`); not regressed, noted
+   for follow-up.

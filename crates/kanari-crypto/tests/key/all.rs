@@ -296,14 +296,74 @@ mod tests {
     }
 
     #[test]
-    fn test_pqc_mnemonic_not_supported() {
-        // PQC algorithms don't support BIP39 derivation
-        let mnemonic = generate_mnemonic(12).unwrap();
-        let result = keypair_from_mnemonic(&mnemonic, CurveType::Dilithium3);
-        assert!(
-            result.is_err(),
-            "PQC should not support mnemonic derivation yet"
-        );
+    fn test_pqc_mnemonic_supported() {
+        // All PQC and hybrid algorithms support deterministic BIP39 derivation.
+        // Use a fixed test mnemonic (do not use in production).
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let curves = [
+            CurveType::Dilithium2,
+            CurveType::Dilithium3,
+            CurveType::Dilithium5,
+            CurveType::SphincsPlusSha256Robust,
+            CurveType::Falcon512,
+            CurveType::Falcon1024,
+            CurveType::Ed25519Dilithium3,
+            CurveType::K256Dilithium3,
+        ];
+
+        let mut addresses = std::collections::HashSet::new();
+        for curve in curves {
+            // Derivation succeeds
+            let kp = keypair_from_mnemonic(mnemonic, curve)
+                .unwrap_or_else(|e| panic!("{curve} should support mnemonic derivation: {e}"));
+            assert_eq!(kp.curve_type, curve);
+            assert!(kp.address.starts_with("0x"), "address prefix");
+            assert!(
+                kp.pqc_public_key.is_some(),
+                "{curve} should carry a PQC public key"
+            );
+
+            // Deterministic: same mnemonic reproduces the same keypair
+            let kp2 = keypair_from_mnemonic(mnemonic, curve).expect("repeat derivation");
+            assert_eq!(
+                kp.address, kp2.address,
+                "{curve} derivation not deterministic"
+            );
+            assert_eq!(kp.public_key, kp2.public_key);
+
+            // Private-key roundtrip reproduces the same keypair
+            let raw = kp.export_private_key_secure().to_string();
+            let kp3 = keypair_from_private_key(&raw, curve).expect("private-key import");
+            assert_eq!(kp.address, kp3.address, "{curve} roundtrip mismatch");
+            assert_eq!(kp.public_key, kp3.public_key);
+
+            // import_from_seed_phrase agrees as well
+            let imported = import_from_seed_phrase(mnemonic, curve).expect("seed import");
+            assert_eq!(kp.address, imported.address);
+
+            // Every algorithm gets independent key material
+            assert!(
+                addresses.insert(kp.address.clone()),
+                "address collision for {curve}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pqc_mnemonic_hybrid_classical_matches_standalone() {
+        // The classical half of a hybrid mnemonic key must equal the plain
+        // classical key derived from the same mnemonic.
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let ed = keypair_from_mnemonic(mnemonic, CurveType::Ed25519).unwrap();
+        let hybrid_ed = keypair_from_mnemonic(mnemonic, CurveType::Ed25519Dilithium3).unwrap();
+        let hybrid_classical = hybrid_ed.public_key.split(':').next().unwrap();
+        assert_eq!(hybrid_classical, ed.public_key);
+
+        let k256 = keypair_from_mnemonic(mnemonic, CurveType::K256).unwrap();
+        let hybrid_k256 = keypair_from_mnemonic(mnemonic, CurveType::K256Dilithium3).unwrap();
+        let hybrid_classical = hybrid_k256.public_key.split(':').next().unwrap();
+        assert_eq!(hybrid_classical, k256.public_key);
     }
 
     // ============================================================================

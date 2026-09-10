@@ -5,6 +5,7 @@
 
 use kanari_crypto::{
     CurveType, generate_keypair, keypair_from_mnemonic, keypair_from_private_key,
+    keypair_from_seed,
     keys::{extract_raw_key, format_private_key},
 };
 use libfuzzer_sys::fuzz_target;
@@ -17,8 +18,8 @@ fuzz_target!(|data: &[u8]| {
     let curve_indicator = data[0];
     let key_data = &data[1..];
 
-    // Test key generation for different curves
-    let curve_type = match curve_indicator % 9 {
+    // Test key generation for different curves (all 11 supported types)
+    let curve_type = match curve_indicator % 11 {
         0 => CurveType::K256,
         1 => CurveType::P256,
         2 => CurveType::Ed25519,
@@ -26,8 +27,10 @@ fuzz_target!(|data: &[u8]| {
         4 => CurveType::Dilithium3,
         5 => CurveType::Dilithium5,
         6 => CurveType::SphincsPlusSha256Robust,
-        7 => CurveType::Ed25519Dilithium3,
-        8 => CurveType::K256Dilithium3,
+        7 => CurveType::Falcon512,
+        8 => CurveType::Falcon1024,
+        9 => CurveType::Ed25519Dilithium3,
+        10 => CurveType::K256Dilithium3,
         _ => return,
     };
 
@@ -74,30 +77,46 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(re_extracted, raw_key, "Re-extracted key should match");
     }
 
-    // Test mnemonic import (only for classical curves)
-    if matches!(
-        curve_type,
-        CurveType::K256 | CurveType::P256 | CurveType::Ed25519
-    ) {
-        // Try to parse key_data as UTF-8 for mnemonic testing
-        if let Ok(mnemonic_str) = std::str::from_utf8(key_data) {
-            // Only test with valid-looking mnemonics (avoid panics from invalid formats)
-            if mnemonic_str.split_whitespace().count() == 12
-                || mnemonic_str.split_whitespace().count() == 24
-            {
-                let result = keypair_from_mnemonic(mnemonic_str, curve_type);
+    // Test mnemonic import (all curves support deterministic BIP39 derivation)
+    // Try to parse key_data as UTF-8 for mnemonic testing
+    if let Ok(mnemonic_str) = std::str::from_utf8(key_data) {
+        // Only test with valid-looking mnemonics (avoid panics from invalid formats)
+        if mnemonic_str.split_whitespace().count() == 12
+            || mnemonic_str.split_whitespace().count() == 24
+        {
+            let result = keypair_from_mnemonic(mnemonic_str, curve_type);
 
-                // If mnemonic is valid, should succeed
-                if result.is_ok() {
-                    let kp = result.unwrap();
-                    assert!(
-                        kp.address.starts_with("0x"),
-                        "Mnemonic-derived address should be valid"
-                    );
-                }
-                // Invalid mnemonics may fail - that's acceptable
+            // If mnemonic is valid, should succeed
+            if let Ok(kp) = result {
+                assert!(
+                    kp.address.starts_with("0x"),
+                    "Mnemonic-derived address should be valid"
+                );
+                // Determinism: same mnemonic must reproduce the same keypair
+                let kp2 = keypair_from_mnemonic(mnemonic_str, curve_type)
+                    .expect("repeat mnemonic derivation must succeed");
+                assert_eq!(kp.address, kp2.address, "Derivation must be deterministic");
+                assert_eq!(kp.public_key, kp2.public_key);
             }
+            // Invalid mnemonics may fail - that's acceptable, must not panic
         }
+    }
+
+    // Test raw seed derivation (new API; requires >= 64 bytes of material)
+    if key_data.len() >= 64 {
+        if let Ok(kp) = keypair_from_seed(key_data, curve_type) {
+            assert!(
+                kp.address.starts_with("0x"),
+                "Seed-derived address should be valid"
+            );
+            let kp2 = keypair_from_seed(key_data, curve_type)
+                .expect("repeat seed derivation must succeed");
+            assert_eq!(
+                kp.address, kp2.address,
+                "Seed derivation must be deterministic"
+            );
+        }
+        // Short/invalid seeds may fail - that's acceptable, must not panic
     }
 
     // Test private key import

@@ -31,11 +31,11 @@ fn main() {
         Err(e) => eprintln!("Verification error: {}", e),
     }
 
-    // 4) PQC mnemonic attempt (may not be supported for mnemonic-derived PQC keys)
+    // 4) PQC mnemonic derivation (supported: deterministic Dilithium3 from mnemonic)
     let long_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     match keypair_from_mnemonic(long_mnemonic, CurveType::Dilithium3) {
-        Ok(kp) => println!("Unexpected PQC mnemonic success: {}", kp.get_address()),
-        Err(e) => eprintln!("Expected PQC mnemonic error: {}", e),
+        Ok(kp) => println!("PQC mnemonic derivation succeeded: {}", kp.get_address()),
+        Err(e) => eprintln!("Unexpected PQC mnemonic error: {}", e),
     }
 
     // 5) Cross-algorithm check: sign with K256, attempt to verify with Dilithium3

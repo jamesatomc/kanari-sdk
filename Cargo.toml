@@ -225,7 +225,7 @@ data-encoding = "2.11.1"                                                        
 # Time & Date Handling
 # ============================================================================
 chrono = { version = "0.4.45", features = ["serde"] }
-uuid = { version = "1.26.0", features = ["v4", "serde"] }
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
 
 # ============================================================================
 # Mathematics & Numerics

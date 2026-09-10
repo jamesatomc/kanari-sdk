@@ -38,10 +38,20 @@
 //! - Monitor security advisories regularly
 //! - Dilithium3 / ML-DSA-65 (NIST Level 3) is recommended for most use cases
 //!
-//! ## Mnemonic Derivation Limitations
-//! - Only classical curves (K256, P256, Ed25519) support BIP39 mnemonic derivation
-//! - PQC algorithms generate fresh keys without HD wallet derivation
-//! - For PQC keys, use `generate_keypair()` for fresh key generation
+//! ## Mnemonic Derivation
+//! All curves — classical, post-quantum, and hybrid — support deterministic
+//! derivation from a BIP39 mnemonic via [`keypair_from_mnemonic`] (which uses
+//! `bip39::Mnemonic`), or directly from 64 bytes of seed material via
+//! [`keypair_from_seed`].
+//!
+//! - Classical curves (K256, P256, Ed25519) use the first 32 bytes of the
+//!   BIP39 seed, following the usual BIP39 convention.
+//! - PQC and hybrid curves derive domain-separated sub-seeds with SHAKE256
+//!   (`"Kanari-PQC-Mnemonic-v1" || label || seed`), so every algorithm gets
+//!   independent key material from the same mnemonic and the same
+//!   seed + curve always reproduces the same keypair.
+//! - Stored PQC secrets use the exact same format as randomly generated keys,
+//!   so import, validation, signing, and verification paths work unchanged.
 
 use bip39::Mnemonic;
 use rand::TryRng;
@@ -55,6 +65,7 @@ mod classical;
 mod format;
 mod hybrid;
 mod metadata;
+mod mnemonic;
 mod pqc;
 
 pub use classical::generate_ed25519_keypair;
@@ -70,6 +81,8 @@ pub use hybrid::{
     generate_hybrid_ed25519_dilithium3_keypair, generate_hybrid_k256_dilithium3_keypair,
 };
 pub use metadata::{AlgorithmFamily, AlgorithmMetadata, UsageProfile};
+
+use crate::signatures::ml_dsa_provider::ML_DSA_SEED_BYTES;
 
 /// Supported cryptographic algorithms (Classical + Post-Quantum)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -318,6 +331,61 @@ pub fn generate_keypair(curve_type: CurveType) -> Result<KeyPair, KeyError> {
 /// Generate a keypair from a mnemonic phrase
 pub fn keypair_from_mnemonic(phrase: &str, curve_type: CurveType) -> Result<KeyPair, KeyError> {
     classical::keypair_from_mnemonic(phrase, curve_type)
+}
+
+/// Generate a keypair deterministically from seed material.
+///
+/// `seed` must hold at least 64 bytes (e.g. a BIP39 seed from
+/// `bip39::Mnemonic::to_seed`). Classical curves use the first 32 bytes;
+/// post-quantum and hybrid curves derive domain-separated sub-seeds from the
+/// full 64 bytes, so the same seed always reproduces the same keypair for a
+/// given curve, while different curves get independent keys.
+pub fn keypair_from_seed(seed: &[u8], curve_type: CurveType) -> Result<KeyPair, KeyError> {
+    if seed.len() < 64 {
+        return Err(KeyError::GenerationFailed(
+            "Seed material must be at least 64 bytes".to_string(),
+        ));
+    }
+    match curve_type {
+        CurveType::K256 => classical::keypair_from_k256_raw(&seed[0..32], false),
+        CurveType::P256 => classical::keypair_from_p256_raw(&seed[0..32], false),
+        CurveType::Ed25519 => classical::keypair_from_ed25519_raw(&seed[0..32], false),
+        CurveType::Dilithium2 => {
+            let s = mnemonic::derive_mnemonic_seed(seed, "ML-DSA-44", ML_DSA_SEED_BYTES);
+            pqc::dilithium2_keypair_from_seed(&s)
+        }
+        CurveType::Dilithium3 => {
+            let s = mnemonic::derive_mnemonic_seed(seed, "ML-DSA-65", ML_DSA_SEED_BYTES);
+            pqc::dilithium3_keypair_from_seed(&s)
+        }
+        CurveType::Dilithium5 => {
+            let s = mnemonic::derive_mnemonic_seed(seed, "ML-DSA-87", ML_DSA_SEED_BYTES);
+            pqc::dilithium5_keypair_from_seed(&s)
+        }
+        CurveType::SphincsPlusSha256Robust => {
+            let s = mnemonic::derive_mnemonic_seed(
+                seed,
+                "SLH-DSA-SHA2-256f",
+                pqc::SLH_DSA_MNEMONIC_SEED_BYTES,
+            );
+            pqc::sphincs_keypair_from_seed(&s)
+        }
+        CurveType::Falcon512 => {
+            let s =
+                mnemonic::derive_mnemonic_seed(seed, "FN-DSA-512", pqc::FALCON_MNEMONIC_SEED_BYTES);
+            pqc::falcon512_keypair_from_seed(&s)
+        }
+        CurveType::Falcon1024 => {
+            let s = mnemonic::derive_mnemonic_seed(
+                seed,
+                "FN-DSA-1024",
+                pqc::FALCON_MNEMONIC_SEED_BYTES,
+            );
+            pqc::falcon1024_keypair_from_seed(&s)
+        }
+        CurveType::Ed25519Dilithium3 => hybrid::hybrid_ed25519_dilithium3_from_seed(seed),
+        CurveType::K256Dilithium3 => hybrid::hybrid_k256_dilithium3_from_seed(seed),
+    }
 }
 
 /// Generate a keypair from a private key

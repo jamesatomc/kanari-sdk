@@ -5,13 +5,15 @@ use sha3::{Digest, Sha3_256};
 use zeroize::Zeroizing;
 
 use crate::signatures::falcon_provider::{
-    generate_falcon512_keypair_bytes, generate_falcon1024_keypair_bytes,
+    generate_falcon512_keypair_bytes, generate_falcon512_keypair_bytes_from_seed,
+    generate_falcon1024_keypair_bytes, generate_falcon1024_keypair_bytes_from_seed,
     validate_falcon512_secret_public, validate_falcon1024_secret_public,
 };
 use crate::signatures::ml_dsa_provider::{
     ML_DSA_44_PUBLIC_KEY_BYTES, ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_87_PUBLIC_KEY_BYTES,
-    derive_mldsa44_public_key, derive_mldsa65_public_key, derive_mldsa87_public_key,
-    generate_mldsa44_keypair_bytes, generate_mldsa65_keypair_bytes, generate_mldsa87_keypair_bytes,
+    ML_DSA_SEED_BYTES, derive_mldsa44_public_key, derive_mldsa65_public_key,
+    derive_mldsa87_public_key, generate_mldsa44_keypair_bytes, generate_mldsa65_keypair_bytes,
+    generate_mldsa87_keypair_bytes,
 };
 #[cfg(feature = "slh-dsa")]
 use crate::signatures::slh_dsa_provider::{
@@ -91,6 +93,130 @@ pub(super) fn generate_falcon512_keypair() -> Result<KeyPair, KeyError> {
 
 pub(super) fn generate_falcon1024_keypair() -> Result<KeyPair, KeyError> {
     let (public_key, secret_key) = generate_falcon1024_keypair_bytes()
+        .map_err(|e| KeyError::GenerationFailed(e.to_string()))?;
+    pqc_keypair_from_parts(
+        &public_key,
+        &secret_key,
+        CurveType::Falcon1024,
+        true,
+        KANAFALCON_PREFIX,
+    )
+}
+
+/// Seed length required by [`sphincs_keypair_from_seed`]: three 32-byte
+/// components (sk_seed || sk_prf || pk_seed) for SLH-DSA-SHA2-256f.
+pub(super) const SLH_DSA_MNEMONIC_SEED_BYTES: usize = 96;
+
+/// Seed length fed to the Falcon deterministic key generator (absorbed into
+/// SHAKE256 internally; matches the 48-byte seed used by random generation).
+pub(super) const FALCON_MNEMONIC_SEED_BYTES: usize = 48;
+
+/// Deterministically build a Dilithium2 (ML-DSA-44) keypair from a 32-byte seed.
+///
+/// The stored secret is the seed itself, identical in format to randomly
+/// generated keys, so import/validation paths work unchanged.
+pub(super) fn dilithium2_keypair_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    if seed.len() != ML_DSA_SEED_BYTES {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let public_key = derive_mldsa44_public_key(seed).map_err(|_| KeyError::InvalidPrivateKey)?;
+    pqc_keypair_from_parts(
+        &public_key,
+        seed,
+        CurveType::Dilithium2,
+        true,
+        KANAMLDSA_PREFIX,
+    )
+}
+
+/// Deterministically build a Dilithium3 (ML-DSA-65) keypair from a 32-byte seed.
+pub(super) fn dilithium3_keypair_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    if seed.len() != ML_DSA_SEED_BYTES {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let public_key = derive_mldsa65_public_key(seed).map_err(|_| KeyError::InvalidPrivateKey)?;
+    pqc_keypair_from_parts(
+        &public_key,
+        seed,
+        CurveType::Dilithium3,
+        true,
+        KANAMLDSA_PREFIX,
+    )
+}
+
+/// Deterministically build a Dilithium5 (ML-DSA-87) keypair from a 32-byte seed.
+pub(super) fn dilithium5_keypair_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    if seed.len() != ML_DSA_SEED_BYTES {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let public_key = derive_mldsa87_public_key(seed).map_err(|_| KeyError::InvalidPrivateKey)?;
+    pqc_keypair_from_parts(
+        &public_key,
+        seed,
+        CurveType::Dilithium5,
+        true,
+        KANAMLDSA_PREFIX,
+    )
+}
+
+/// Deterministically build an SLH-DSA-SHA2-256f keypair from a 96-byte seed.
+///
+/// The seed is split into sk_seed || sk_prf || pk_seed (32 bytes each) and fed
+/// to the FIPS-205 internal key generation. The stored secret is the full
+/// 128-byte private key, identical in format to randomly generated keys.
+#[cfg(feature = "slh-dsa")]
+pub(super) fn sphincs_keypair_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    use slh_dsa::{Sha2_256f, SigningKey, signature::Keypair as _};
+
+    if seed.len() != SLH_DSA_MNEMONIC_SEED_BYTES {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let signing_key =
+        SigningKey::<Sha2_256f>::slh_keygen_internal(&seed[0..32], &seed[32..64], &seed[64..96]);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let secret_key = signing_key.to_bytes();
+    pqc_keypair_from_parts(
+        public_key.as_slice(),
+        secret_key.as_slice(),
+        CurveType::SphincsPlusSha256Robust,
+        false,
+        KANASLHDSA_PREFIX,
+    )
+}
+
+#[cfg(not(feature = "slh-dsa"))]
+pub(super) fn sphincs_keypair_from_seed(_seed: &[u8]) -> Result<KeyPair, KeyError> {
+    Err(KeyError::GenerationFailed(
+        "SphincsPlusSha256Robust requires slh-dsa or pqc feature".to_string(),
+    ))
+}
+
+/// Deterministically build an FN-DSA-512 keypair from caller-supplied seed bytes.
+///
+/// The seed is absorbed into SHAKE256 by the provider; pass at least 32 bytes
+/// of domain-separated entropy. The stored secret is the full Falcon private
+/// key, identical in format to randomly generated keys.
+pub(super) fn falcon512_keypair_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    if seed.is_empty() {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let (public_key, secret_key) = generate_falcon512_keypair_bytes_from_seed(seed)
+        .map_err(|e| KeyError::GenerationFailed(e.to_string()))?;
+    pqc_keypair_from_parts(
+        &public_key,
+        &secret_key,
+        CurveType::Falcon512,
+        true,
+        KANAFALCON_PREFIX,
+    )
+}
+
+/// Deterministically build an FN-DSA-1024 keypair from caller-supplied seed bytes.
+pub(super) fn falcon1024_keypair_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    if seed.is_empty() {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let (public_key, secret_key) = generate_falcon1024_keypair_bytes_from_seed(seed)
         .map_err(|e| KeyError::GenerationFailed(e.to_string()))?;
     pqc_keypair_from_parts(
         &public_key,

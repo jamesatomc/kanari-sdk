@@ -128,16 +128,7 @@ pub(super) fn keypair_from_mnemonic(
     let mnemonic = Mnemonic::parse_in(Language::English, phrase)
         .map_err(|e| KeyError::InvalidMnemonic(e.to_string()))?;
     let seed = Zeroizing::new(mnemonic.to_seed(""));
-    let bytes = &seed[0..32];
-
-    match curve_type {
-        CurveType::K256 => keypair_from_k256_raw(bytes, false),
-        CurveType::P256 => keypair_from_p256_raw(bytes, false),
-        CurveType::Ed25519 => keypair_from_ed25519_raw(bytes, false),
-        _ => Err(KeyError::GenerationFailed(
-            "Post-quantum algorithms don't support BIP39 mnemonic derivation yet. Use generate_keypair() instead.".to_string(),
-        )),
-    }
+    super::keypair_from_seed(seed.as_ref(), curve_type)
 }
 
 pub(super) fn keypair_from_k256_private_key(
@@ -161,7 +152,7 @@ pub(super) fn keypair_from_ed25519_private_key(
     keypair_from_ed25519_raw_with_format(raw_private_key, Some(private_key))
 }
 
-fn keypair_from_k256_raw(
+pub(super) fn keypair_from_k256_raw(
     raw_private_key: &[u8],
     canonical_only: bool,
 ) -> Result<KeyPair, KeyError> {
@@ -189,7 +180,7 @@ fn keypair_from_k256_raw(
     })
 }
 
-fn keypair_from_p256_raw(
+pub(super) fn keypair_from_p256_raw(
     raw_private_key: &[u8],
     canonical_only: bool,
 ) -> Result<KeyPair, KeyError> {
@@ -216,7 +207,7 @@ fn keypair_from_p256_raw(
     })
 }
 
-fn keypair_from_ed25519_raw(
+pub(super) fn keypair_from_ed25519_raw(
     raw_private_key: &[u8],
     canonical_only: bool,
 ) -> Result<KeyPair, KeyError> {

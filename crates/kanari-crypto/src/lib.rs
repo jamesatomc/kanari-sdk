@@ -174,7 +174,7 @@ pub use compression::{compress_data, decompress_data};
 pub use keys::{
     AlgorithmFamily, AlgorithmMetadata, CurveType, KeyError, KeyPair, UsageProfile,
     generate_hybrid_ed25519_dilithium3_keypair, generate_hybrid_k256_dilithium3_keypair,
-    generate_keypair, keypair_from_mnemonic, keypair_from_private_key,
+    generate_keypair, keypair_from_mnemonic, keypair_from_private_key, keypair_from_seed,
 };
 
 // Re-export primitive trait layer

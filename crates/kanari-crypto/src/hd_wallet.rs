@@ -6,6 +6,7 @@
 //! Small helpers to derive child private keys and produce KeyPairs compatible
 //! with the rest of the crate.
 
+use crate::keys::keypair_from_seed;
 use crate::keys::{CurveType, KANARI_KEY_PREFIX, KeyPair, keypair_from_private_key};
 use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic};
@@ -46,11 +47,26 @@ pub fn derive_keypair_from_path(
     derivation_path: &str,
     curve: CurveType,
 ) -> Result<KeyPair, HdError> {
-    // Early reject for post-quantum / hybrid curves: HD derivation is not supported
+    // Post-quantum / hybrid curves cannot use BIP32 (secp256k1-specific), so
+    // derive path-bound seed material with SHAKE256 instead and build the
+    // keypair deterministically from it. Different paths yield different keys.
     if curve.is_post_quantum() {
-        return Err(HdError::DerivationFailed(
-            "Post-quantum curves do not support HD derivation".to_string(),
+        use zeroize::Zeroizing;
+
+        let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_phrase)
+            .map_err(|e| HdError::InvalidMnemonic(e.to_string()))?;
+        let seed = mnemonic.to_seed(password);
+        let material = Zeroizing::new(crate::hashs::hash_data_shake256_custom_chunks(
+            &[
+                b"Kanari-HD-PQC-v1".as_ref(),
+                curve.to_string().as_bytes(),
+                derivation_path.as_bytes(),
+                seed.as_ref(),
+            ],
+            64,
         ));
+        return keypair_from_seed(material.as_ref(), curve)
+            .map_err(|e| HdError::DerivationFailed(e.to_string()));
     }
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_phrase)
         .map_err(|e| HdError::InvalidMnemonic(e.to_string()))?;
