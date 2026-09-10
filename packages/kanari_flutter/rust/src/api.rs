@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use kanari_crypto::keys::{
-    CurveType, generate_keypair, keypair_from_mnemonic, keypair_from_private_key,
+    CurveType, KeyPair, generate_keypair, keypair_from_mnemonic, keypair_from_private_key,
+    keypair_from_seed,
 };
 use kanari_crypto::signatures::{sign_message, verify_signature_with_curve};
 use kanari_crypto::{hash_data_blake3, hd_wallet, keys};
@@ -35,25 +36,13 @@ pub fn generate_keypair_api(curve_name: String) -> Result<KeyPairData, String> {
 
     let kp = generate_keypair(curve).map_err(|e| format!("Key generation failed: {}", e))?;
 
-    // Clone the pieces we need to avoid moving out of `kp` more than once
-    let public_key_clone = kp.public_key.clone();
-    let address_clone = kp.address.clone();
-    let tagged_address = kp.tagged_address();
-    let pqc_clone = kp.pqc_public_key.clone();
-    let raw_public_key =
-        hex::decode(pqc_clone.unwrap_or_else(|| public_key_clone.clone())).unwrap_or_default();
-
-    Ok(KeyPairData {
-        private_key: kp.private_key.to_string(),
-        public_key: public_key_clone,
-        address: address_clone,
-        tagged_address,
-        raw_public_key,
-        curve_type: format!("{:?}", curve),
-    })
+    Ok(to_keypair_data(&kp, curve))
 }
 
-/// Derive a keypair from a mnemonic (BIP39)
+/// Derive a keypair from a mnemonic (BIP39).
+///
+/// All curves are supported, including post-quantum and hybrid curves, which
+/// derive domain-separated sub-seeds deterministically from the BIP39 seed.
 pub fn derive_keypair_from_mnemonic(
     mnemonic: String,
     curve_name: String,
@@ -61,28 +50,29 @@ pub fn derive_keypair_from_mnemonic(
     let curve = parse_curve_type(&curve_name)
         .ok_or_else(|| format!("Unsupported curve type: {}", curve_name))?;
 
-    if curve.is_post_quantum() {
-        return Err("Post-quantum curves do not support BIP39 derivation".to_string());
-    }
-
     let kp = keypair_from_mnemonic(&mnemonic, curve)
         .map_err(|e| format!("Mnemonic derivation failed: {}", e))?;
 
-    let public_key_clone = kp.public_key.clone();
-    let address_clone = kp.address.clone();
-    let tagged_address = kp.tagged_address();
-    let pqc_clone = kp.pqc_public_key.clone();
-    let raw_public_key =
-        hex::decode(pqc_clone.unwrap_or_else(|| public_key_clone.clone())).unwrap_or_default();
+    Ok(to_keypair_data(&kp, curve))
+}
 
-    Ok(KeyPairData {
-        private_key: kp.private_key.to_string(),
-        public_key: public_key_clone,
-        address: address_clone,
-        tagged_address,
-        raw_public_key,
-        curve_type: format!("{:?}", curve),
-    })
+/// Derive a keypair deterministically from raw seed material.
+///
+/// `seed` must hold at least 64 bytes (e.g. a BIP39 seed). Classical curves
+/// use the first 32 bytes; post-quantum and hybrid curves derive
+/// domain-separated sub-seeds, so the same seed always reproduces the same
+/// keypair for a given curve.
+pub fn derive_keypair_from_seed_api(
+    seed: Vec<u8>,
+    curve_name: String,
+) -> Result<KeyPairData, String> {
+    let curve = parse_curve_type(&curve_name)
+        .ok_or_else(|| format!("Unsupported curve type: {}", curve_name))?;
+
+    let kp =
+        keypair_from_seed(&seed, curve).map_err(|e| format!("Seed derivation failed: {}", e))?;
+
+    Ok(to_keypair_data(&kp, curve))
 }
 
 /// Import a keypair from a provided private key
@@ -96,21 +86,7 @@ pub fn import_keypair_from_private_key(
     let kp = keypair_from_private_key(&private_key, curve)
         .map_err(|e| format!("Private key import failed: {}", e))?;
 
-    let public_key_clone = kp.public_key.clone();
-    let address_clone = kp.address.clone();
-    let tagged_address = kp.tagged_address();
-    let pqc_clone = kp.pqc_public_key.clone();
-    let raw_public_key =
-        hex::decode(pqc_clone.unwrap_or_else(|| public_key_clone.clone())).unwrap_or_default();
-
-    Ok(KeyPairData {
-        private_key: kp.private_key.to_string(),
-        public_key: public_key_clone,
-        address: address_clone,
-        tagged_address,
-        raw_public_key,
-        curve_type: format!("{:?}", curve),
-    })
+    Ok(to_keypair_data(&kp, curve))
 }
 
 /// Sign a message
@@ -165,23 +141,7 @@ pub fn derive_keypair_from_path_api(
     let kp = hd_wallet::derive_keypair_from_path(&mnemonic, "", &derivation_path, curve)
         .map_err(|e| format!("Path derivation failed: {}", e))?;
 
-    let public_key_clone = kp.public_key.clone();
-    let tagged_address = kp.tagged_address();
-    let raw_public_key = hex::decode(
-        kp.pqc_public_key
-            .clone()
-            .unwrap_or_else(|| public_key_clone.clone()),
-    )
-    .unwrap_or_default();
-
-    Ok(KeyPairData {
-        private_key: kp.private_key.to_string(),
-        public_key: public_key_clone,
-        address: kp.address,
-        tagged_address,
-        raw_public_key,
-        curve_type: format!("{:?}", curve),
-    })
+    Ok(to_keypair_data(&kp, curve))
 }
 
 /// Derive multiple addresses from a mnemonic using a path template
@@ -200,25 +160,7 @@ pub fn derive_multiple_addresses_api(
 
     Ok(keypairs
         .into_iter()
-        .map(|kp| {
-            let public_key_clone = kp.public_key.clone();
-            let tagged_address = kp.tagged_address();
-            let raw_public_key = hex::decode(
-                kp.pqc_public_key
-                    .clone()
-                    .unwrap_or_else(|| public_key_clone.clone()),
-            )
-            .unwrap_or_default();
-
-            KeyPairData {
-                private_key: kp.private_key.to_string(),
-                public_key: public_key_clone,
-                address: kp.address,
-                tagged_address,
-                raw_public_key,
-                curve_type: format!("{:?}", curve),
-            }
-        })
+        .map(|kp| to_keypair_data(&kp, curve))
         .collect())
 }
 
@@ -251,6 +193,25 @@ pub fn list_supported_curves() -> Vec<CurveInfo> {
 }
 
 // --- Helper Internals ---
+fn to_keypair_data(kp: &KeyPair, curve: CurveType) -> KeyPairData {
+    let public_key = kp.public_key.clone();
+    let raw_public_key = hex::decode(
+        kp.pqc_public_key
+            .clone()
+            .unwrap_or_else(|| public_key.clone()),
+    )
+    .unwrap_or_default();
+
+    KeyPairData {
+        private_key: kp.private_key.to_string(),
+        public_key,
+        address: kp.address.clone(),
+        tagged_address: kp.tagged_address(),
+        raw_public_key,
+        curve_type: format!("{:?}", curve),
+    }
+}
+
 fn parse_curve_type(name: &str) -> Option<CurveType> {
     match name {
         "K256" => Some(CurveType::K256),

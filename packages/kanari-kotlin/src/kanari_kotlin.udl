@@ -2,9 +2,10 @@ namespace kanari_kotlin {
   // Keypair Generation
   KeyPairData generate_keypair_api(string curve_name);
 
-  // Mnemonic and Derivation
+  // Mnemonic and Derivation (all curves incl. PQC/hybrid supported)
   string generate_mnemonic_api(u32 word_count);
   KeyPairData derive_keypair_from_mnemonic(string mnemonic, string curve_name);
+  KeyPairData derive_keypair_from_seed_api(sequence<u8> seed, string curve_name);
   KeyPairData derive_keypair_from_path_api(string mnemonic, string derivation_path, string curve_name);
   sequence<KeyPairData> derive_multiple_addresses_api(string mnemonic, string path_template, string curve_name, u32 count);
 

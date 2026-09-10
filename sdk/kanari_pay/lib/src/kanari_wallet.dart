@@ -28,29 +28,25 @@ class KanariWallet {
     return RegExp(r"^m(\/[0-9]+'?)+$").hasMatch(path);
   }
 
-  /// Generate a new wallet with a specific curve and random mnemonic
+  /// Generate a new wallet with a specific curve and random mnemonic.
+  /// All curves (classical, post-quantum, hybrid) derive deterministically
+  /// from the mnemonic.
   static Future<KanariWallet> generate({
     required KanariCurve curve,
     String derivationPath = defaultDerivationPath,
   }) async {
     final normalizedPath = normalizeDerivationPath(derivationPath);
-    if (curve.isPostQuantum) {
-      // PQC curves use direct random generation as they don't support BIP39 yet
-      final keyPair = await generateKeypairApi(curveName: curve.name);
-      return KanariWallet(keyPair);
-    } else {
-      final mnemonic = await generateMnemonicApi(wordCount: BigInt.from(12));
-      final keyPair = await deriveKeypairFromPathApi(
-        mnemonic: mnemonic,
-        derivationPath: normalizedPath,
-        curveName: curve.name,
-      );
-      return KanariWallet(
-        keyPair,
-        mnemonic: mnemonic,
-        derivationPath: normalizedPath,
-      );
-    }
+    final mnemonic = await generateMnemonicApi(wordCount: BigInt.from(12));
+    final keyPair = await deriveKeypairFromPathApi(
+      mnemonic: mnemonic,
+      derivationPath: normalizedPath,
+      curveName: curve.name,
+    );
+    return KanariWallet(
+      keyPair,
+      mnemonic: mnemonic,
+      derivationPath: normalizedPath,
+    );
   }
 
   /// Create a wallet from a mnemonic

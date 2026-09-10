@@ -839,17 +839,16 @@ class HomeScreenState extends State<HomeScreen> {
                 }).toList(),
                 onChanged: (val) => setState(() => selectedCurve = val!),
               ),
-              if (!selectedCurve.isPostQuantum) ...[
-                const SizedBox(height: 16),
-                TextField(
-                  controller: derivationPathController,
-                  decoration: const InputDecoration(
-                    labelText: 'HD Path',
-                    hintText: KanariWallet.defaultDerivationPath,
-                    border: OutlineInputBorder(),
-                  ),
+              // All curves support HD path derivation.
+              const SizedBox(height: 16),
+              TextField(
+                controller: derivationPathController,
+                decoration: const InputDecoration(
+                  labelText: 'HD Path',
+                  hintText: KanariWallet.defaultDerivationPath,
+                  border: OutlineInputBorder(),
                 ),
-              ],
+              ),
             ],
           ),
           actions: [
@@ -860,11 +859,8 @@ class HomeScreenState extends State<HomeScreen> {
             FilledButton(
               onPressed: () async {
                 final walletState = context.read<WalletState>();
-                final derivationPath = selectedCurve.isPostQuantum
-                    ? KanariWallet.defaultDerivationPath
-                    : derivationPathController.text.trim();
-                if (!selectedCurve.isPostQuantum &&
-                    !KanariWallet.isValidDerivationPath(derivationPath)) {
+                final derivationPath = derivationPathController.text.trim();
+                if (!KanariWallet.isValidDerivationPath(derivationPath)) {
                   showAppErrorSnackBar(
                     context,
                     "Invalid HD path. Example: ${KanariWallet.defaultDerivationPath}",

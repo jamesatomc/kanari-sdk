@@ -678,6 +678,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kanari_kotlin_checksum_func_derive_keypair_from_path_api(
     ): Int
+    external fun uniffi_kanari_kotlin_checksum_func_derive_keypair_from_seed_api(
+    ): Int
     external fun uniffi_kanari_kotlin_checksum_func_derive_multiple_addresses_api(
     ): Int
     external fun uniffi_kanari_kotlin_checksum_func_generate_keypair_api(
@@ -710,6 +712,8 @@ internal object UniffiLib {
     external fun uniffi_kanari_kotlin_fn_func_derive_keypair_from_mnemonic(`mnemonic`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kanari_kotlin_fn_func_derive_keypair_from_path_api(`mnemonic`: RustBuffer.ByValue,`derivationPath`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kanari_kotlin_fn_func_derive_keypair_from_seed_api(`seed`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kanari_kotlin_fn_func_derive_multiple_addresses_api(`mnemonic`: RustBuffer.ByValue,`pathTemplate`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,`count`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -851,6 +855,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kanari_kotlin_checksum_func_derive_keypair_from_path_api() and 0xFFFF) != 58579) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kanari_kotlin_checksum_func_derive_keypair_from_seed_api() and 0xFFFF) != 26953) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_kanari_kotlin_checksum_func_derive_multiple_addresses_api() and 0xFFFF) != 5280) {
@@ -1316,6 +1323,18 @@ public object FfiConverterSequenceTypeKeyPairData: FfiConverterRustBuffer<List<K
         
         FfiConverterString.lower(`mnemonic`),
         FfiConverterString.lower(`derivationPath`),
+        FfiConverterString.lower(`curveName`),_status)
+}
+    )
+    }
+    
+ fun `deriveKeypairFromSeedApi`(`seed`: List<kotlin.UByte>, `curveName`: kotlin.String): KeyPairData {
+            return FfiConverterTypeKeyPairData.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kanari_kotlin_fn_func_derive_keypair_from_seed_api(
+    
+        
+        FfiConverterSequenceUByte.lower(`seed`),
         FfiConverterString.lower(`curveName`),_status)
 }
     )

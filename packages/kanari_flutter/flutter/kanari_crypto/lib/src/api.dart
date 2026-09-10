@@ -6,19 +6,36 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `parse_curve_type`
+// These functions are ignored because they are not marked as `pub`: `parse_curve_type`, `to_keypair_data`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `fmt`
 
 /// Generate a keypair for the specified curve type
 Future<KeyPairData> generateKeypairApi({required String curveName}) =>
     RustLib.instance.api.crateApiGenerateKeypairApi(curveName: curveName);
 
-/// Derive a keypair from a mnemonic (BIP39)
+/// Derive a keypair from a mnemonic (BIP39).
+///
+/// All curves are supported, including post-quantum and hybrid curves, which
+/// derive domain-separated sub-seeds deterministically from the BIP39 seed.
 Future<KeyPairData> deriveKeypairFromMnemonic({
   required String mnemonic,
   required String curveName,
 }) => RustLib.instance.api.crateApiDeriveKeypairFromMnemonic(
   mnemonic: mnemonic,
+  curveName: curveName,
+);
+
+/// Derive a keypair deterministically from raw seed material.
+///
+/// `seed` must hold at least 64 bytes (e.g. a BIP39 seed). Classical curves
+/// use the first 32 bytes; post-quantum and hybrid curves derive
+/// domain-separated sub-seeds, so the same seed always reproduces the same
+/// keypair for a given curve.
+Future<KeyPairData> deriveKeypairFromSeedApi({
+  required List<int> seed,
+  required String curveName,
+}) => RustLib.instance.api.crateApiDeriveKeypairFromSeedApi(
+  seed: seed,
   curveName: curveName,
 );
 

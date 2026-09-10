@@ -401,7 +401,7 @@ fn prop_fuzz_key_generation() {
 
 ### Fuzz Test Results
 
-```
+```md
 running 5 tests
 ✅ test prop_fuzz_password_validation ... ok
 ✅ test prop_fuzz_hash_functions ... ok
@@ -448,15 +448,15 @@ finished in 4.38s
 ### Classical Elliptic Curve Cryptography (ECC)
 
 | Algorithm | Curve | Security Level | Use Case |
-|-----------|-------|----------------|----------|
+| ----------- | ------- | ---------------- | ---------- |
 | K256 | secp256k1 | 128-bit | Bitcoin/Ethereum compatibility |
 | P256 | secp256r1 | 128-bit | NIST standard |
 | Ed25519 | Curve25519 | 128-bit | Modern signatures |
 
-### Post-Quantum Cryptography (PQC)
+### Supported Post-Quantum Cryptography (PQC) Schemes
 
 | Algorithm | Type | NIST Level | Signature Size |
-|-----------|------|------------|----------------|
+| ----------- | ------ | ------------ | ---------------- |
 | Dilithium2 | Lattice | 2 | ~2.5 KB |
 | Dilithium3 | Lattice | 3 | ~4 KB (Recommended) |
 | Dilithium5 | Lattice | 5 | ~5 KB |
@@ -465,14 +465,14 @@ finished in 4.38s
 ### Hybrid Schemes
 
 | Scheme | Components | Security |
-|--------|-----------|----------|
+| -------- | ----------- | ---------- |
 | Ed25519Dilithium3 | Ed25519 + Dilithium3 | Quantum-safe |
 | K256Dilithium3 | secp256k1 + Dilithium3 | Quantum-safe + EVM-compatible |
 
 ## 📊 Security Metrics
 
 | Category | Rating | Notes |
-|----------|--------|-------|
+| ---------- | -------- | ------- |
 | **Cryptographic Strength** | ⭐⭐⭐⭐⭐ | NIST-approved algorithms |
 | **Memory Safety** | ⭐⭐⭐⭐⭐ | Rust + zeroize |
 | **Side-Channel Resistance** | ⭐⭐⭐⭐⭐ | Constant-time operations |
@@ -490,7 +490,7 @@ finished in 4.38s
 #### Bug Fix Impact
 
 | Metric | Before Fix | After Fix | Improvement |
-|--------|-----------|-----------|-------------|
+| -------- | ----------- | ----------- | ------------- |
 | **Timing Attack Vulnerability** | 🔴 CRITICAL | ✅ RESOLVED | Eliminated |
 | **Security Policy Compliance** | 🟡 Partial | ✅ Full | 100% compliant |
 | **Production Risk Level** | 🟡 Medium | ✅ Low | Reduced |
@@ -499,7 +499,7 @@ finished in 4.38s
 #### Fuzz Testing Results
 
 | Test Suite | Tests Run | Passed | Failed | Time |
-|------------|-----------|--------|--------|------|
+| ------------ | ----------- | -------- | -------- | ------ |
 | **Unit Tests** | 145 | 145 | 0 | ~2s |
 | **Property-Based Fuzz Tests** | 5 | 5 | 0 | ~4.38s |
 | **Total** | 150 | 150 | 0 | ~6.5s |
@@ -723,6 +723,7 @@ Stored PQC secrets reuse the exact formats of randomly generated keys, so
 import/validation/sign/verify paths are unchanged.
 
 **Evidence:**
+
 - `cargo test -p kanari-crypto`: 219 passed, 0 failed (incl. new KAT target
   `kat_test` with 22 frozen vectors in `tests/fixtures/pqc_mnemonic_kat.json`,
   new `prop_fuzz_pqc_mnemonic_derivation`, updated attack-simulation tests).
@@ -734,6 +735,7 @@ import/validation/sign/verify paths are unchanged.
   empty Falcon seeds rejected; short seeds rejected before use.
 
 **Accepted residual risks:**
+
 1. No KAT against external reference implementations for the derivation layer
    (vectors freeze OUR behavior; they do not prove equivalence with another
    implementation).

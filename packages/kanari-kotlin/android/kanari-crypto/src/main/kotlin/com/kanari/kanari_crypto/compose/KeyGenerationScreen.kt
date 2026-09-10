@@ -115,53 +115,45 @@ fun KeyGenerationScreen(
                 )
             }
 
-            // Show additional settings only for Classic/Hybrid groups that support Mnemonic
-            if (selectedCurveInfo?.isPostQuantum == false || selectedCurveInfo?.isHybrid == true) {
-                OutlinedTextField(
-                    value = derivationPath,
-                    onValueChange = { derivationPath = it },
-                    label = { Text("Derivation Path (e.g. m/44'/0'/0'/0/0)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+            // All curves (classical, PQC, hybrid) support deterministic
+            // mnemonic/path derivation.
+            OutlinedTextField(
+                value = derivationPath,
+                onValueChange = { derivationPath = it },
+                label = { Text("Derivation Path (e.g. m/44'/0'/0'/0/0)") },
+                modifier = Modifier.fillMaxWidth()
+            )
 
-                OutlinedTextField(
-                    value = if (addressCount == 0) "" else addressCount.toString(),
-                    onValueChange = { addressCount = it.toIntOrNull() ?: 0 },
-                    label = { Text("Number of addresses to derive") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+            OutlinedTextField(
+                value = if (addressCount == 0) "" else addressCount.toString(),
+                onValueChange = { addressCount = it.toIntOrNull() ?: 0 },
+                label = { Text("Number of addresses to derive") },
+                modifier = Modifier.fillMaxWidth()
+            )
 
             Button(
                 onClick = {
                     scope.launch {
                         isLoading = true
                         val currentCurve = selectedCurveInfo?.name ?: defaultCurve
-                        // For single PQ curves, generate the keypair directly
-                        val isPqOnly = selectedCurveInfo?.isPostQuantum == true && selectedCurveInfo?.isHybrid == false
 
                         runCatching {
-                            if (isPqOnly) {
-                                val pair = KanariCrypto.generateKeypair(currentCurve)
-                                null to listOf(pair)
+                            val words = KanariCrypto.generateMnemonic(12)
+                            val pairs = if (addressCount > 1) {
+                                // Use deriveMultipleAddresses
+                                KanariCrypto.deriveMultipleAddresses(
+                                    words,
+                                    derivationPath,
+                                    currentCurve,
+                                    addressCount
+                                )
                             } else {
-                                val words = KanariCrypto.generateMnemonic(12)
-                                val pairs = if (addressCount > 1) {
-                                    // Use deriveMultipleAddresses
-                                    KanariCrypto.deriveMultipleAddresses(
-                                        words,
-                                        derivationPath,
-                                        currentCurve,
-                                        addressCount
-                                    )
-                                } else {
-                                    // Use deriveKeypairFromPath (or the default if path is empty)
-                                    val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" }
-                                    val pair = KanariCrypto.deriveKeypairFromPath(words, path, currentCurve)
-                                    listOf(pair)
-                                }
-                                words to pairs
+                                // Use deriveKeypairFromPath (or the default if path is empty)
+                                val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" }
+                                val pair = KanariCrypto.deriveKeypairFromPath(words, path, currentCurve)
+                                listOf(pair)
                             }
+                            words to pairs
                         }.onSuccess { (words, pairs) ->
                             mnemonic = words
                             keyPairs = pairs
