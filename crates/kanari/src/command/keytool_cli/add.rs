@@ -21,7 +21,7 @@ pub struct AddWallet {
     /// Password for wallet encryption
     #[arg(short, long)]
     pub password: String,
-    /// Curve type (ed25519, k256, p256, ed25519+dilithium3, k256+dilithium3)
+    /// Curve type (ed25519, k256, p256, ed25519+dilithium3, k256+dilithium3, dilithium2, dilithium3, dilithium5)
     #[arg(short, long, default_value = "ed25519")]
     pub curve: String,
     /// BIP32 derivation path (default: m/44'/637'/0'/0/0)
@@ -37,6 +37,12 @@ impl AddWallet {
             "p256" | "secp256r1" => CurveType::P256,
             "ed25519+dilithium3" | "ed25519_dilithium3" => CurveType::Ed25519Dilithium3,
             "k256+dilithium3" | "k256_dilithium3" => CurveType::K256Dilithium3,
+            "dilithium2" => CurveType::Dilithium2,
+            "dilithium3" => CurveType::Dilithium3,
+            "dilithium5" => CurveType::Dilithium5,
+            "falcon512" => CurveType::Falcon512,
+            "falcon1024" => CurveType::Falcon1024,
+            "sphincs-plus-sha256-robust" => CurveType::SphincsPlusSha256Robust,
             other => {
                 eprintln!("Unknown curve '{}', falling back to Ed25519", other);
                 CurveType::Ed25519
