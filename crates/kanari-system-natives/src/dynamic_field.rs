@@ -404,6 +404,9 @@ pub fn make_all(gas_params: GasParameters) -> impl Iterator<Item = (String, Nati
         Arc::new(move |context, ty_args, args| native_remove(remove_gas, context, ty_args, args));
     let exists_: NativeFunction =
         Arc::new(move |context, ty_args, args| native_exists_(exists_gas, context, ty_args, args));
+    let exists_with_type: NativeFunction = Arc::new(move |context, ty_args, args| {
+        native_exists_with_type(exists_gas, context, ty_args, args)
+    });
 
     make_module_natives([
         ("add", add),
@@ -411,6 +414,7 @@ pub fn make_all(gas_params: GasParameters) -> impl Iterator<Item = (String, Nati
         ("borrow", borrow),
         ("remove", remove),
         ("exists_", exists_),
+        ("exists_with_type", exists_with_type),
     ])
 }
 
@@ -539,4 +543,50 @@ fn native_exists_(
         context.gas_used(),
         smallvec![Value::bool(field_exists(context, &location)?)],
     ))
+}
+
+fn field_exists_with_type(
+    context: &mut NativeContext,
+    location: &FieldLocation,
+    value_spec: &ValueSpec,
+) -> PartialVMResult<bool> {
+    let mut cached_type = None;
+    let mut cached_state = None;
+    crate::native_ext::with_ext_mut_or_default::<DynamicFieldsExt, _>(context, |ext| {
+        if let Some(entry) = ext.fields.get(&DynamicFieldsExt::field_key(location)) {
+            cached_type = Some(entry.value_spec.type_name.clone());
+            cached_state = Some(entry.state);
+        }
+    });
+
+    if let Some(state) = cached_state {
+        return Ok(state != DynamicFieldState::Deleted
+            && cached_type.as_deref() == Some(value_spec.type_name.as_str()));
+    }
+
+    if !ensure_field_loaded(context, location, value_spec)? {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+fn native_exists_with_type(
+    gas_base: InternalGas,
+    context: &mut NativeContext,
+    ty_args: Vec<Type>,
+    mut arguments: VecDeque<Value>,
+) -> PartialVMResult<NativeResult> {
+    use move_vm_types::natives::function::NativeResult as NR;
+
+    native_charge_gas_early_exit!(context, gas_base);
+    expect_native_signature(arguments.len(), 2, ty_args.len(), 2)?;
+
+    let name = pop_name_arg(&mut arguments)?;
+    let uid_ref = pop_arg!(arguments, Reference);
+    let location = parse_field_location(context, &ty_args[0], uid_ref, name)?;
+    let value_spec = parse_value_spec(context, &ty_args[1])?;
+    let exists = field_exists_with_type(context, &location, &value_spec)?;
+
+    Ok(NR::ok(context.gas_used(), smallvec![Value::bool(exists)]))
 }

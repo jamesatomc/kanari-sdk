@@ -62,4 +62,40 @@ module kanari_system::math_tests {
         // (10 * 20) / 4 = 50
         assert!(math::mul_div_u64(10, 20, 4) == 50, 0);
     }
+
+    #[test]
+    fun test_u128_min_max_and_diff() {
+        assert!(math::min_u128(10, 20) == 10, 10);
+        assert!(math::max_u128(10, 20) == 20, 11);
+        assert!(math::diff_u128(20, 7) == 13, 12);
+        assert!(math::diff_u128(7, 20) == 13, 13);
+        assert!(math::diff_u128(9, 9) == 0, 14);
+    }
+
+    #[test]
+    fun test_mul_div_round_up_u64() {
+        assert!(math::mul_div_round_up_u64(10, 20, 4) == 50, 20);
+        assert!(math::mul_div_round_up_u64(10, 20, 3) == 67, 21);
+        assert!(math::mul_div_round_up_u64(0, 20, 3) == 0, 22);
+    }
+
+    #[test]
+    fun test_divide_and_round_up_u128() {
+        assert!(math::divide_and_round_up_u128(10, 2) == 5, 30);
+        assert!(math::divide_and_round_up_u128(10, 3) == 4, 31);
+        assert!(math::divide_and_round_up_u128(0, 3) == 0, 32);
+    }
+
+    #[test]
+    fun test_diff_u64() {
+        assert!(math::diff_u64(20, 7) == 13, 40);
+        assert!(math::diff_u64(7, 20) == 13, 41);
+        assert!(math::diff_u64(9, 9) == 0, 42);
+    }
+
+    #[test]
+    #[expected_failure(location = kanari_system::math, abort_code = math::E_DIVIDE_BY_ZERO)]
+    fun test_mul_div_round_up_zero_denominator() {
+        math::mul_div_round_up_u64(10, 20, 0);
+    }
 }
