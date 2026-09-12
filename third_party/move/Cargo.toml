@@ -117,7 +117,7 @@ sha3 = "0.12.0"
 shell-words = "1.1.1"
 simplelog = "0.12.2"
 similar = "3.1.2"
-smallvec = "1.16.0"
+smallvec = "1.16.1"
 stacker = "0.1.25"
 static_assertions = "1.1.0"
 syn = { version = "3.0.5", features = ["derive"] }
@@ -126,8 +126,8 @@ tera = "2.1.0"
 thiserror = "2.0.20"
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 tokio = { version = "1.53.1", features = ["full"] }
-toml = "1.1.5"
-toml_edit = { version = "0.25.13" }
+toml = "1.1.6"
+toml_edit = { version = "0.25.15" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 treeline = "0.1.0"
