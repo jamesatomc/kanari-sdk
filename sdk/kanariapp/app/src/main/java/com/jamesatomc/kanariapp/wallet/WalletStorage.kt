@@ -2,6 +2,7 @@ package com.jamesatomc.kanariapp.wallet
 
 import android.content.Context
 import android.util.Base64
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
@@ -22,6 +23,7 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import androidx.core.content.edit
 
 @Serializable
 data class EncryptedData(
@@ -52,7 +54,29 @@ class WalletStorage(private val context: Context) {
 
     private val aead: Aead by lazy {
         AeadConfig.register()
-        AndroidKeysetManager.Builder()
+        try {
+            buildAead()
+        } catch (e: Exception) {
+            Log.e("WalletStorage", "Android Keystore error: ${e.message}. Attempting recovery by clearing keyset.")
+            try {
+                // Clear the corrupted keyset from shared preferences to allow regeneration
+                context.getSharedPreferences("kanari_keyset", Context.MODE_PRIVATE).edit { clear() }
+                buildAead()
+            } catch (e2: Exception) {
+                Log.e("WalletStorage", "Hard recovery failed: ${e2.message}. Falling back to non-keystore backed AEAD.")
+                // Final fallback: build without master key URI if Keystore is completely broken on this device
+                AndroidKeysetManager.Builder()
+                    .withSharedPref(context, "kanari_keyset", "kanari_master_key")
+                    .withKeyTemplate(KeyTemplates.get("AES256_GCM"))
+                    .build()
+                    .keysetHandle
+                    .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
+            }
+        }
+    }
+
+    private fun buildAead(): Aead {
+        return AndroidKeysetManager.Builder()
             .withSharedPref(context, "kanari_keyset", "kanari_master_key")
             .withKeyTemplate(KeyTemplates.get("AES256_GCM"))
             .withMasterKeyUri("android-keystore://kanari_master_key_alias")
@@ -65,10 +89,11 @@ class WalletStorage(private val context: Context) {
         private val KEY_WALLETS = stringPreferencesKey("kanari_wallets")
         private val KEY_PIN_SALT = stringPreferencesKey("kanari_pin_salt")
         private val KEY_PIN_VERIFIER = stringPreferencesKey("kanari_pin_verifier")
+        private val KEY_PIN_ITERATIONS = intPreferencesKey("kanari_pin_iterations")
         private val KEY_BIOMETRIC_ENABLED = booleanPreferencesKey("kanari_biometric_enabled")
         private val KEY_BIOMETRIC_PIN = stringPreferencesKey("kanari_biometric_pin")
         private const val PIN_LENGTH = 6
-        private const val KDF_ITERATIONS = 100000
+        private const val KDF_ITERATIONS = 10000
     }
 
     private suspend fun encryptSecure(data: String): String = withContext(Dispatchers.Default) {
@@ -86,11 +111,13 @@ class WalletStorage(private val context: Context) {
     suspend fun savePin(pin: String) = withContext(Dispatchers.Default) {
         require(pin.length == PIN_LENGTH) { "PIN must be $PIN_LENGTH digits" }
         val salt = ByteArray(16).apply { SecureRandom().nextBytes(this) }
-        val verifier = deriveKey(pin, salt)
+        val iterations = KDF_ITERATIONS
+        val verifier = deriveKey(pin, salt, iterations)
 
         context.dataStore.edit { prefs ->
             prefs[KEY_PIN_SALT] = Base64.encodeToString(salt, Base64.NO_WRAP)
             prefs[KEY_PIN_VERIFIER] = Base64.encodeToString(verifier, Base64.NO_WRAP)
+            prefs[KEY_PIN_ITERATIONS] = iterations
         }
     }
 
@@ -98,11 +125,13 @@ class WalletStorage(private val context: Context) {
         val prefs = context.dataStore.data.first()
         val saltBase64 = prefs[KEY_PIN_SALT] ?: return@withContext false
         val verifierBase64 = prefs[KEY_PIN_VERIFIER] ?: return@withContext false
+        // Default to 100,000 for legacy PINs created before migration
+        val iterations = prefs[KEY_PIN_ITERATIONS] ?: 100000
 
         val salt = Base64.decode(saltBase64, Base64.NO_WRAP)
         val verifier = Base64.decode(verifierBase64, Base64.NO_WRAP)
 
-        val candidate = deriveKey(pin, salt)
+        val candidate = deriveKey(pin, salt, iterations)
         candidate.contentEquals(verifier)
     }
 
@@ -161,15 +190,16 @@ class WalletStorage(private val context: Context) {
         }
     }
 
-    private fun deriveKey(pin: String, salt: ByteArray): ByteArray {
-        val spec = PBEKeySpec(pin.toCharArray(), salt, KDF_ITERATIONS, 256)
+    private fun deriveKey(pin: String, salt: ByteArray, iterations: Int = KDF_ITERATIONS): ByteArray {
+        val spec = PBEKeySpec(pin.toCharArray(), salt, iterations, 256)
         val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
         return factory.generateSecret(spec).encoded
     }
 
     suspend fun encrypt(data: String, pin: String): EncryptedData = withContext(Dispatchers.Default) {
         val salt = ByteArray(16).apply { SecureRandom().nextBytes(this) }
-        val keyBytes = deriveKey(pin, salt)
+        val iterations = KDF_ITERATIONS
+        val keyBytes = deriveKey(pin, salt, iterations)
         val key = SecretKeySpec(keyBytes, "AES")
 
         val nonce = ByteArray(12).apply { SecureRandom().nextBytes(this) }
@@ -187,13 +217,13 @@ class WalletStorage(private val context: Context) {
             nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
             cipherText = Base64.encodeToString(cipherText, Base64.NO_WRAP),
             mac = Base64.encodeToString(mac, Base64.NO_WRAP),
-            iterations = KDF_ITERATIONS
+            iterations = iterations
         )
     }
 
     suspend fun decrypt(encryptedData: EncryptedData, pin: String): String = withContext(Dispatchers.Default) {
         val salt = Base64.decode(encryptedData.salt, Base64.NO_WRAP)
-        val keyBytes = deriveKey(pin, salt)
+        val keyBytes = deriveKey(pin, salt, encryptedData.iterations)
         val key = SecretKeySpec(keyBytes, "AES")
 
         val nonce = Base64.decode(encryptedData.nonce, Base64.NO_WRAP)
