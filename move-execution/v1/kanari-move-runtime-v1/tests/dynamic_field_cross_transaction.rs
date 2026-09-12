@@ -90,6 +90,18 @@ fn dynamic_field_persists_across_runtime_instances() -> Result<()> {
         .context("read persisted dynamic field value")?;
     assert_eq!(read_before_update, JsonValue::from(41u64));
 
+    let typed_exists = second_runtime
+        .execute_view_function(
+            TESTER_ADDR,
+            MODULE_NAME,
+            "has_value_with_type",
+            &[],
+            &[object_arg(&host_id)?, bcs::to_bytes(&7u64)?],
+            &[host_object_input(&host_id, *module_id.address(), false)],
+        )
+        .context("check persisted dynamic field type")?;
+    assert_eq!(typed_exists, JsonValue::from(1u64));
+
     let update_changes = second_runtime
         .execute_entry_function_with_object_context_and_persistence(
             &module_id,
@@ -180,7 +192,7 @@ fn create_test_package() -> Result<PathBuf> {
     fs::write(package_dir.join("Move.toml"), manifest)?;
 
     let source = format!(
-        "module tester::{module_name} {{\n    use kanari_system::dynamic_field;\n    use kanari_system::object::{{Self, UID}};\n    use kanari_system::transfer;\n    use kanari_system::tx_context::{{Self, TxContext}};\n\n    struct Host has key, store {{\n        id: UID,\n    }}\n\n    public entry fun create_host(ctx: &mut TxContext) {{\n        let host = Host {{ id: object::new(ctx) }};\n        transfer::public_transfer(host, tx_context::sender(ctx));\n    }}\n\n    public entry fun add_value(host: &mut Host, key: u64, value: u64) {{\n        dynamic_field::add<u64, u64>(&mut host.id, key, value);\n        object::save_object(host);\n    }}\n\n    public entry fun write_value(host: &mut Host, key: u64, value: u64) {{\n        *dynamic_field::borrow_mut<u64, u64>(&mut host.id, key) = value;\n        object::save_object(host);\n    }}\n\n    public entry fun remove_value(host: &mut Host, key: u64) {{\n        let _ = dynamic_field::remove<u64, u64>(&mut host.id, key);\n        object::save_object(host);\n    }}\n\n    public fun read_value(host: &Host, key: u64): u64 {{\n        *dynamic_field::borrow<u64, u64>(&host.id, key)\n    }}\n\n    public fun has_value(host: &Host, key: u64): bool {{\n        dynamic_field::exists_<u64>(&host.id, key)\n    }}\n}}\n",
+        "module tester::{module_name} {{\n    use kanari_system::dynamic_field;\n    use kanari_system::object::{{Self, UID}};\n    use kanari_system::transfer;\n    use kanari_system::tx_context::{{Self, TxContext}};\n\n    struct Host has key, store {{\n        id: UID,\n    }}\n\n    public entry fun create_host(ctx: &mut TxContext) {{\n        let host = Host {{ id: object::new(ctx) }};\n        transfer::public_transfer(host, tx_context::sender(ctx));\n    }}\n\n    public entry fun add_value(host: &mut Host, key: u64, value: u64) {{\n        dynamic_field::add<u64, u64>(&mut host.id, key, value);\n        object::save_object(host);\n    }}\n\n    public entry fun write_value(host: &mut Host, key: u64, value: u64) {{\n        *dynamic_field::borrow_mut<u64, u64>(&mut host.id, key) = value;\n        object::save_object(host);\n    }}\n\n    public entry fun remove_value(host: &mut Host, key: u64) {{\n        let _ = dynamic_field::remove<u64, u64>(&mut host.id, key);\n        object::save_object(host);\n    }}\n\n    public fun read_value(host: &Host, key: u64): u64 {{\n        *dynamic_field::borrow<u64, u64>(&host.id, key)\n    }}\n\n    public fun has_value(host: &Host, key: u64): bool {{\n        dynamic_field::exists_<u64>(&host.id, key)\n    }}\n\n    public fun has_value_with_type(host: &Host, key: u64): bool {{\n        dynamic_field::exists_with_type<u64, u64>(&host.id, key)\n    }}\n}}\n",
         module_name = MODULE_NAME,
     );
     fs::write(

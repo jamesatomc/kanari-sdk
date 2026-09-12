@@ -250,10 +250,8 @@ module kanari_system::bcs {
     #[test]
     #[expected_failure(abort_code = ELenOutOfRange)]
     fun test_uleb_len_fail() {
-        let value = vector[0xff, 0xff, 0xff, 0xff, 0xff];
-        let bytes = new(to_bytes(&value));
-        let _fail = peel_vec_length(&mut bytes);
-        abort 2 // TODO: make this test fail
+        let bytes = new(vector[0xff, 0xff, 0xff, 0xff, 0xff]);
+        peel_vec_length(&mut bytes);
     }
 
     #[test]

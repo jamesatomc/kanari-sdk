@@ -19,6 +19,9 @@ module kanari_system::multisig {
     use kanari_system::object::{Self, UID};
     use kanari_system::tx_context::{Self, TxContext};
     use kanari_system::event;
+    use kanari_system::coin;
+    use kanari_system::kanari::KANARI;
+    use kanari_system::dynamic_object_field;
     
     // --- Error Codes ---
     const E_NOT_OWNER: u64 = 1;
@@ -48,6 +51,8 @@ module kanari_system::multisig {
         threshold: u64,
         transaction_count: u64,
     }
+
+    struct WalletBalanceKey has copy, drop, store {}
     
     /// Transaction proposal stored in the wallet
     struct TransactionProposal has key, store, drop {
@@ -136,6 +141,11 @@ module kanari_system::multisig {
             threshold,
             transaction_count: 0,
         };
+        dynamic_object_field::add<WalletBalanceKey, coin::Coin<KANARI>>(
+            &mut wallet.id,
+            WalletBalanceKey {},
+            coin::zero<KANARI>(ctx),
+        );
         
         // Emit event
         let wallet_id = object::uid_to_inner(&wallet.id);
@@ -146,6 +156,54 @@ module kanari_system::multisig {
         });
         
         wallet
+    }
+
+    /// Deposit KANARI into the multisig wallet.
+    public fun deposit(wallet: &mut MultisigWallet, funds: coin::Coin<KANARI>) {
+        if (dynamic_object_field::exists_(&wallet.id, WalletBalanceKey {})) {
+            coin::join(
+                dynamic_object_field::borrow_mut<WalletBalanceKey, coin::Coin<KANARI>>(
+                    &mut wallet.id,
+                    WalletBalanceKey {},
+                ),
+                funds,
+            );
+        } else {
+            dynamic_object_field::add(&mut wallet.id, WalletBalanceKey {}, funds);
+        };
+    }
+
+    /// Initialize custody storage for a wallet created before balance storage existed.
+    public fun initialize_balance(wallet: &mut MultisigWallet, ctx: &mut TxContext) {
+        if (!dynamic_object_field::exists_(&wallet.id, WalletBalanceKey {})) {
+            dynamic_object_field::add(
+                &mut wallet.id,
+                WalletBalanceKey {},
+                coin::zero<KANARI>(ctx),
+            );
+        };
+    }
+
+    public fun balance(wallet: &MultisigWallet): u64 {
+        if (dynamic_object_field::exists_(&wallet.id, WalletBalanceKey {})) {
+            coin::value(dynamic_object_field::borrow<WalletBalanceKey, coin::Coin<KANARI>>(
+                &wallet.id,
+                WalletBalanceKey {},
+            ))
+        } else {
+            0
+        }
+    }
+
+    #[test_only]
+    fun destroy_wallet(wallet: MultisigWallet) {
+        let MultisigWallet { id, owners: _, threshold: _, transaction_count: _ } = wallet;
+        let balance = dynamic_object_field::remove<WalletBalanceKey, coin::Coin<KANARI>>(
+            &mut id,
+            WalletBalanceKey {},
+        );
+        coin::destroy_zero(balance);
+        object::delete(id);
     }
     
     /// Propose a transfer transaction
@@ -443,34 +501,20 @@ module kanari_system::multisig {
     fun execute_by_type(
         wallet: &mut MultisigWallet,
         proposal: &TransactionProposal,
-        ctx: &TxContext,
+        ctx: &mut TxContext,
     ) {
         let wallet_id = object::id_to_address(&proposal.wallet_id);
         
         if (proposal.tx_type == TX_TYPE_TRANSFER) {
-            // Handle transfer transaction
-            // Note: Actual coin transfer requires integration with kanari_system::coin module
-            // This is a placeholder for future implementation
-            let _target = proposal.target_address;
             let amount = proposal.amount;
-            
-            // Validate amount is not zero
             assert!(amount > 0, E_INVALID_THRESHOLD);
-            
-            // TODO: Implement actual transfer logic when coin module integration is available
-            // Future implementation should:
-            // 1. Get wallet's coin balance from storage
-            // 2. Check if balance >= amount
-            // 3. If insufficient, abort with: assert!(balance >= amount, E_INSUFFICIENT_BALANCE);
-            // 4. Otherwise, execute the transfer using kanari_system::coin::transfer
-            
-            // For demonstration purposes, we validate that amount doesn't exceed a reasonable limit
-            // This prevents accidental transfers of extremely large amounts
-            let max_transfer_amount = 1000000000000u64; // 1 trillion units as safety limit
-            assert!(amount <= max_transfer_amount, E_INSUFFICIENT_BALANCE);
-            
-            // Log transfer attempt with timestamp from context
-            let _timestamp = tx_context::epoch_timestamp_ms(ctx);
+            let balance = dynamic_object_field::borrow_mut<WalletBalanceKey, coin::Coin<KANARI>>(
+                &mut wallet.id,
+                WalletBalanceKey {},
+            );
+            assert!(coin::value(balance) >= amount, E_INSUFFICIENT_BALANCE);
+            let funds = coin::split(balance, amount, ctx);
+            kanari_system::transfer::public_transfer(funds, proposal.target_address);
         } else if (proposal.tx_type == TX_TYPE_EXECUTE_FUNCTION) {
             // Handle function execution transaction
             // This would execute a custom Move function call
@@ -492,10 +536,10 @@ module kanari_system::multisig {
             // Emit event to indicate owner was removed
             emit_owner_changed_event(wallet_id, 1, proposal.target_address);
         } else if (proposal.tx_type == TX_TYPE_CHANGE_THRESHOLD) {
-            // Handle change threshold transaction
-            // Decode new threshold from payload
-            let _new_threshold_bytes = &proposal.payload;
-            // TODO: Deserialize and apply new threshold
+            let new_threshold = decode_u64(&proposal.payload);
+            assert!(new_threshold > 0, E_INVALID_THRESHOLD);
+            assert!(new_threshold <= (vector::length(&wallet.owners) as u64), E_INVALID_THRESHOLD);
+            wallet.threshold = new_threshold;
         } else {
             // Unknown transaction type
             assert!(false, E_INVALID_TRANSACTION_TYPE);
@@ -503,6 +547,17 @@ module kanari_system::multisig {
         
         // Mark transaction as executed
         wallet.transaction_count = wallet.transaction_count + 1;
+    }
+
+    fun decode_u64(bytes: &vector<u8>): u64 {
+        assert!(vector::length(bytes) == 8, E_INVALID_TRANSACTION_TYPE);
+        let value = 0u64;
+        let i = 0u64;
+        while (i < 8) {
+            value = value | ((*vector::borrow(bytes, i) as u64) << ((i as u8) * 8));
+            i = i + 1;
+        };
+        value
     }
     
     /// Emit owner changed event
@@ -636,8 +691,7 @@ module kanari_system::multisig {
         assert!(is_owner(&wallet, @0x3), 4);
         
         // Consume wallet by deleting its UID
-        let MultisigWallet { id, owners: _, threshold: _, transaction_count: _ } = wallet;
-        object::delete(id);
+        destroy_wallet(wallet);
     }
     
     #[test_only]
@@ -681,8 +735,7 @@ module kanari_system::multisig {
         assert!(!has_enough_approvals(&wallet, &proposal), 1);
         
         // Consume objects by deleting their UIDs
-        let MultisigWallet { id: wallet_id, owners: _, threshold: _, transaction_count: _ } = wallet;
-        object::delete(wallet_id);
+        destroy_wallet(wallet);
         
         let TransactionProposal { id: proposal_id, wallet_id: _, tx_type: _, proposer: _, target_address: _, amount: _, payload: _, description: _, approvers: _, executed: _, created_at: _ } = proposal;
         object::delete(proposal_id);
@@ -710,8 +763,7 @@ module kanari_system::multisig {
         assert!(get_proposer(&proposal) == @0x1, 1);
         
         // Consume objects by deleting their UIDs
-        let MultisigWallet { id: wallet_id, owners: _, threshold: _, transaction_count: _ } = wallet;
-        object::delete(wallet_id);
+        destroy_wallet(wallet);
         
         let TransactionProposal { id: proposal_id, wallet_id: _, tx_type: _, proposer: _, target_address: _, amount: _, payload: _, description: _, approvers: _, executed: _, created_at: _ } = proposal;
         object::delete(proposal_id);
@@ -740,8 +792,7 @@ module kanari_system::multisig {
         assert!(get_proposer(&proposal) == @0x1, 1);
         
         // Consume objects by deleting their UIDs
-        let MultisigWallet { id: wallet_id, owners: _, threshold: _, transaction_count: _ } = wallet;
-        object::delete(wallet_id);
+        destroy_wallet(wallet);
         
         let TransactionProposal { id: proposal_id, wallet_id: _, tx_type: _, proposer: _, target_address: _, amount: _, payload: _, description: _, approvers: _, executed: _, created_at: _ } = proposal;
         object::delete(proposal_id);
@@ -767,7 +818,27 @@ module kanari_system::multisig {
         
         // This line should never be reached due to expected failure
         // But we need to consume wallet for the success path
-        let MultisigWallet { id: wallet_id, owners: _, threshold: _, transaction_count: _ } = wallet;
-        object::delete(wallet_id);
+        destroy_wallet(wallet);
+    }
+
+    #[test]
+    fun test_execute_change_threshold_applies_bcs_payload() {
+        let owners = vector::singleton(@0x1);
+        vector::push_back(&mut owners, @0x2);
+        let ctx = tx_context::new_from_hint(@0x1, 9, 0, 0, 0);
+        let wallet = create_wallet(owners, 2, &mut ctx);
+        let proposal = propose_change_threshold(
+            &wallet,
+            1,
+            string::utf8(b"Lower threshold"),
+            &mut ctx,
+        );
+
+        let approval_ctx = tx_context::new_from_hint(@0x2, 10, 0, 0, 0);
+        approve_transaction(&wallet, &mut proposal, &mut approval_ctx);
+        execute_transaction(&mut wallet, proposal, &mut ctx);
+        assert!(get_threshold(&wallet) == 1, 0);
+
+        destroy_wallet(wallet);
     }
 }

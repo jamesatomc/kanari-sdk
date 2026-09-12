@@ -11,6 +11,12 @@
 -  [Function `borrow`](#0x2_dynamic_object_field_borrow)
 -  [Function `remove`](#0x2_dynamic_object_field_remove)
 -  [Function `exists_`](#0x2_dynamic_object_field_exists_)
+-  [Function `exists_with_type`](#0x2_dynamic_object_field_exists_with_type)
+-  [Function `contains`](#0x2_dynamic_object_field_contains)
+-  [Function `attach`](#0x2_dynamic_object_field_attach)
+-  [Function `attach_if_missing`](#0x2_dynamic_object_field_attach_if_missing)
+-  [Function `detach`](#0x2_dynamic_object_field_detach)
+-  [Function `replace`](#0x2_dynamic_object_field_replace)
 
 
 <pre><code><b>use</b> <a href="object.md#0x2_object">0x2::object</a>;
@@ -76,6 +82,42 @@ Error codes
 
 
 </details>
+
+<a name="0x2_dynamic_object_field_exists_with_type"></a>
+
+## Function `exists_with_type`
+
+Returns true only when the object field exists with the requested object type.
+
+<a name="0x2_dynamic_object_field_contains"></a>
+
+## Function `contains`
+
+Convenience alias for checking whether an object field name exists.
+
+<a name="0x2_dynamic_object_field_attach"></a>
+
+## Function `attach`
+
+Attaches a key and store object to the parent object.
+
+<a name="0x2_dynamic_object_field_attach_if_missing"></a>
+
+## Function `attach_if_missing`
+
+Attaches an object only when the name is unused and returns whether it was attached.
+
+<a name="0x2_dynamic_object_field_detach"></a>
+
+## Function `detach`
+
+Detaches an object field and returns the object in an option.
+
+<a name="0x2_dynamic_object_field_replace"></a>
+
+## Function `replace`
+
+Replaces an existing object field and returns the previous object.
 
 <a name="0x2_dynamic_object_field_borrow_mut"></a>
 

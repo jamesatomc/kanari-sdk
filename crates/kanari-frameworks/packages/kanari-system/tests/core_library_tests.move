@@ -52,6 +52,20 @@ module kanari_system::core_library_tests {
     }
 
     #[test]
+    fun validated_url_accepts_http_and_https() {
+        let http = url::new_from_bytes(b"http://kanari.network");
+        let https = url::new_from_bytes(b"https://kanari.network");
+        assert!(url::is_valid(&url::inner_url(&http)), 21);
+        assert!(url::is_valid(&url::inner_url(&https)), 22);
+    }
+
+    #[test]
+    #[expected_failure(location = kanari_system::url, abort_code = 0)]
+    fun validated_url_rejects_whitespace() {
+        url::new_from_bytes(b"https://kanari.network/bad path");
+    }
+
+    #[test]
     fun clock_testing_helpers_track_monotonic_time() {
         let ctx = &mut tx_context::dummy();
         let clock_value = clock::create_for_testing(ctx);
