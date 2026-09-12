@@ -216,7 +216,7 @@ module kanari_system::collection_usage_tests {
     #[test]
     fun deny_list_usage_smoke() {
         let ctx = &mut tx_context::dummy();
-        let denylist = deny_list::new_denylist();
+        let denylist = deny_list::new_denylist<u64>(ctx);
         let denylist_ref = &mut denylist;
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
 

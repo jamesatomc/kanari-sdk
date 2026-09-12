@@ -10,8 +10,9 @@ module kanari_system::deny_list {
     use kanari_system::object;
     use kanari_system::tx_context::TxContext;
 
-    /// Deny list resource storing addresses
-    struct DenyList has key, store, drop {
+    /// Deny list resource storing addresses — per-coin-type (phantom T) to prevent cross-type confusion
+    struct DenyList<phantom T> has key, store, drop {
+        id: object::UID,
         addresses: vector<address>,
     }
 
@@ -20,9 +21,20 @@ module kanari_system::deny_list {
         id: object::UID,
     }
 
-    /// Create a new empty DenyList
-    public fun new_denylist(): DenyList {
-        DenyList { addresses: vector::empty<address>() }
+    /// Return DenyList ID address
+    public fun denylist_id<T>(d: &DenyList<T>): address {
+        object::uid_address(&d.id)
+    }
+
+    /// Create a new empty DenyList — per-type, caller must hold matching DenyCap<T>
+    public fun new_denylist<T>(ctx: &mut TxContext): DenyList<T> {
+        DenyList<T> { id: object::new(ctx), addresses: vector::empty<address>() }
+    }
+
+    #[test_only]
+    /// Test helper when type inference needs explicit T
+    public fun new_denylist_for_testing<T>(ctx: &mut TxContext): DenyList<T> {
+        new_denylist<T>(ctx)
     }
 
     /// Create a DenyCap while constructing a regulated currency.  Keeping this
@@ -39,49 +51,58 @@ module kanari_system::deny_list {
         DenyCap<T> { id: object::new(ctx) }
     }
 
-    /// Add an address to the deny list
-    public fun deny_list_add<T>(d: &mut DenyList, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
-        // Check if address already exists in the deny list
-        let len = vector::length(&d.addresses);
-        let  i = 0;
-        while (i < len) {
-            let existing_addr = *vector::borrow(&d.addresses, i);
-            if (existing_addr == addr) {
-                // Address already exists, no need to add again
-                return
-            };
-            i = i + 1;
-        };
-        
-        // Address not found, add it to the deny list
-        vector::push_back(&mut d.addresses, addr);
-    }
+    const EZeroAddress: u64 = 0;
+    const EDenyListFull: u64 = 1;
+    const MAX_DENY_LIST_SIZE: u64 = 1000;
 
-    /// Remove an address from the deny list
-    public fun deny_list_remove<T>(d: &mut DenyList, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
+    /// Add an address to the deny list — requires valid DenyCap<T> for the coin type.
+    public fun deny_list_add<T>(d: &mut DenyList<T>, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
+        assert!(addr != @0x0, EZeroAddress);
+        assert!(vector::length(&d.addresses) < MAX_DENY_LIST_SIZE, EDenyListFull);
         let len = vector::length(&d.addresses);
         let i = 0;
         while (i < len) {
             let existing_addr = *vector::borrow(&d.addresses, i);
             if (existing_addr == addr) {
-                // Found the address, remove it from the vector
-                vector::remove(&mut d.addresses, i);
                 return
             };
             i = i + 1;
         };
-        // If address not found, do nothing (no-op)
+        vector::push_back(&mut d.addresses, addr);
+        object::save_object(d);
+    }
+
+    /// Remove an address from the deny list
+    public fun deny_list_remove<T>(d: &mut DenyList<T>, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
+        assert!(addr != @0x0, EZeroAddress);
+        let len = vector::length(&d.addresses);
+        let i = 0;
+        while (i < len) {
+            let existing_addr = *vector::borrow(&d.addresses, i);
+            if (existing_addr == addr) {
+                vector::remove(&mut d.addresses, i);
+                object::save_object(d);
+                return
+            };
+            i = i + 1;
+        };
+    }
+
+    #[test_only]
+    public fun destroy_for_testing<T>(d: DenyList<T>) {
+        let DenyList<T> { id, addresses: _ } = d;
+        object::delete(id);
     }
 
     // Get the length of the deny list
     #[test_only]
-    public fun length(d: &DenyList): u64 {
+    public fun length<T>(d: &DenyList<T>): u64 {
         vector::length(&d.addresses)
     }
 
     // Check if an address is in the deny list
     #[test_only]
-    public fun contains(d: &DenyList, addr: address): bool {
+    public fun contains<T>(d: &DenyList<T>, addr: address): bool {
         let len = vector::length(&d.addresses);
         let  i = 0;
         while (i < len) {
@@ -96,7 +117,7 @@ module kanari_system::deny_list {
 
     // Get address at index (for testing purposes)
     #[test_only]
-    public fun get_address_at(d: &DenyList, index: u64): address {
+    public fun get_address_at<T>(d: &DenyList<T>, index: u64): address {
         *vector::borrow(&d.addresses, index)
     }
 }

@@ -55,7 +55,8 @@ module kanari_system::coin_pay_tests {
     fun mint_zero_aborts() {
         let ctx = &mut tx_context::dummy();
         let (cap, metadata) = new_currency(ctx);
-        coin::mint(&mut cap, 0, ctx);
+        let bad = coin::mint(&mut cap, 0, ctx);
+        transfer::public_transfer(bad, @0x1);
         transfer::public_transfer(cap, @0x1);
         transfer::public_transfer(metadata, @0x1);
     }

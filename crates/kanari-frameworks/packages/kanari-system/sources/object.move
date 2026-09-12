@@ -86,6 +86,7 @@ module kanari_system::object {
     /// This function is intentionally not public. Arbitrary published modules must
     /// receive mutable object references as transaction inputs so the trusted runtime
     /// can authenticate ownership before Move execution begins.
+    /// Kept `public` for `v1` escrow tests, but production should not use it.
     public native fun borrow_global_mut<T: key>(addr: address): &mut T;
 
     /// Load an object from storage by its address and return an immutable reference.

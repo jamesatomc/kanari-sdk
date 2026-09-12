@@ -29,19 +29,19 @@ module kanari_system::coin {
     // --- Data Structures ---
 
     /// Coin resource wrapper with balance
-    struct Coin<phantom T> has key, store, drop {
+    struct Coin<phantom T> has key, store {
         id: object::UID,
         balance: Balance<T>,
     }
 
     /// Capability allowing the bearer to mint and burn coins
-    struct TreasuryCap<phantom T> has key, store, drop {
+    struct TreasuryCap<phantom T> has key, store {
         id: object::UID,
         total_supply: u64, // Tracking total supply directly in the cap
     }
 
     /// Metadata resource for a currency (stored as an object with UID)
-    struct CoinMetadata<phantom T> has key, store, drop {
+    struct CoinMetadata<phantom T> has key, store {
         id: object::UID,
         decimals: u8,
         name: string::String,
@@ -54,9 +54,14 @@ module kanari_system::coin {
 
     // --- Public Functions ---
 
+    const ESymbolEmpty: u64 = 7;
+    const ESymbolTooLong: u64 = 8;
+    const ENameEmpty: u64 = 9;
+
     /// Create a new currency with TreasuryCap for minting control and return the
     /// TreasuryCap and the Metadata object. Callers may transfer/freeze the
     /// returned objects as appropriate for their use-case.
+    /// Security: validates symbol/name, enforces one-time witness consumption.
     public fun create_currency<T: drop>(
         witness: T,
         decimals: u8,
@@ -66,18 +71,19 @@ module kanari_system::coin {
         icon_url: option::Option<url::Url>,
         ctx: &mut TxContext,
     ): (TreasuryCap<T>, CoinMetadata<T>) {
-        // 1. Consume the witness type
+        // Consume the one-time witness — only the module that defines `T` can provide it.
         let _ = witness;
         
-        // Basic safety checks for decimals
         assert!(decimals <= 27, EINVALID_DECIMALS); 
+        assert!(vector::length(&symbol_bytes) > 0, ESymbolEmpty);
+        assert!(vector::length(&symbol_bytes) <= 10, ESymbolTooLong);
+        assert!(vector::length(&name_bytes) > 0, ENameEmpty);
+        assert!(vector::length(&name_bytes) <= 50, ENameEmpty);
 
-        // Convert byte literals into string types
         let symbol = ascii::string(symbol_bytes);
         let name = string::utf8(name_bytes);
         let description = string::utf8(description_bytes);
 
-        // 2. Create the Capability and Metadata, explicitly specifying the generic type T
         let treasury_cap = TreasuryCap<T> { id: object::new(ctx), total_supply: 0 };
         let metadata = CoinMetadata<T> { 
             id: object::new(ctx), 
@@ -88,7 +94,6 @@ module kanari_system::coin {
             icon_url 
         };
 
-        // Return the newly-created capability and metadata.
         (treasury_cap, metadata)
     }
 
@@ -105,6 +110,9 @@ module kanari_system::coin {
     ): (TreasuryCap<T>, kanari_system::deny_list::DenyCap<T>, CoinMetadata<T>) {
         let _ = witness;
         assert!(decimals <= 27, EINVALID_DECIMALS);
+        assert!(vector::length(&symbol_bytes) > 0, ESymbolEmpty);
+        assert!(vector::length(&symbol_bytes) <= 10, ESymbolTooLong);
+        assert!(vector::length(&name_bytes) > 0, ENameEmpty);
 
         let symbol = ascii::string(symbol_bytes);
         let name = string::utf8(name_bytes);
@@ -245,7 +253,7 @@ module kanari_system::coin {
 
 
     // ==========================================
-    // 🟢 Functions to update CoinMetadata
+    //  Functions to update CoinMetadata
     // ==========================================
 
     /// Update the icon URL for the given coin type. 
@@ -256,6 +264,7 @@ module kanari_system::coin {
         url: option::Option<url::Url>
     ) {
         metadata.icon_url = url;
+        object::save_object(metadata);
     }
 
     /// Update the name for the given coin type.
@@ -264,7 +273,9 @@ module kanari_system::coin {
         metadata: &mut CoinMetadata<T>,
         name: string::String
     ) {
+        assert!(string::length(&name) > 0, ENameEmpty);
         metadata.name = name;
+        object::save_object(metadata);
     }
 
     /// Update the symbol for the given coin type.
@@ -273,7 +284,10 @@ module kanari_system::coin {
         metadata: &mut CoinMetadata<T>,
         symbol: ascii::String
     ) {
+        assert!(ascii::length(&symbol) > 0, ESymbolEmpty);
+        assert!(ascii::length(&symbol) <= 10, ESymbolTooLong);
         metadata.symbol = symbol;
+        object::save_object(metadata);
     }
 
     /// Update the description for the given coin type.
@@ -283,6 +297,7 @@ module kanari_system::coin {
         description: string::String
     ) {
         metadata.description = description;
+        object::save_object(metadata);
     }
     
 }

@@ -3,6 +3,7 @@
 
 module kanari_system::collection {
     use std::string::{String, utf8};
+    use std::vector;
     use kanari_system::tx_context::{TxContext};
     use kanari_system::tx_context;
     use kanari_system::event;
@@ -23,7 +24,7 @@ module kanari_system::collection {
     }
     
     /// A capability resource that governs minting within a Collection.
-    struct NftCap has key, store, drop {
+    struct NftCap has key, store {
         id: UID,
         remaining: u64,
         issued_counter: u64,
@@ -39,6 +40,10 @@ module kanari_system::collection {
 
     const E_NO_SUPPLY: u64 = 1;
     const E_NOT_COLLECTION_CREATOR: u64 = 2;
+    const E_INVALID_SUPPLY: u64 = 3;
+    const E_SUPPLY_EXCEEDED: u64 = 4;
+    const E_NAME_EMPTY: u64 = 5;
+    const MAX_COLLECTION_SUPPLY: u64 = 1000000;
 
     /// Create a collection and its corresponding `NftCap`.
     /// Returns `(Collection, NftCap)` so callers can persist one or both.
@@ -50,34 +55,34 @@ module kanari_system::collection {
         website_url: vector<u8>,
         max_supply: u64,
     ): (Collection, NftCap) {
+        assert!(vector::length(&name) > 0, E_NAME_EMPTY);
+        assert!(vector::length(&name) <= 100, E_NAME_EMPTY);
+        assert!(vector::length(&description) <= 500, E_NAME_EMPTY);
+        assert!(max_supply > 0, E_INVALID_SUPPLY);
+        assert!(max_supply <= MAX_COLLECTION_SUPPLY, E_INVALID_SUPPLY);
         let id = object::new(ctx);
         let sender = tx_context::sender(ctx);
-        
         let collection_addr = object::uid_address(&id);
-
         let coll = Collection {
             id,
             name: utf8(name),
             description: utf8(description),
-            banner_url: kanari_system::url::new_unsafe_from_bytes(banner_url),
-            website_url: kanari_system::url::new_unsafe_from_bytes(website_url),
+            banner_url: kanari_system::url::new_from_bytes(banner_url),
+            website_url: kanari_system::url::new_from_bytes(website_url),
             creator: sender,
             max_supply,
         };
-
         let cap = NftCap {
             id: object::new(ctx),
             remaining: max_supply,
             issued_counter: 0,
-            collection_id: collection_addr, // ใช้ address ที่ดึงมา
+            collection_id: collection_addr,
         };
-
         event::emit(CollectionCreated { 
             collection_id: collection_addr, 
             creator: sender, 
             max_supply 
         });
-
         (coll, cap) 
     }  
 
@@ -109,8 +114,8 @@ module kanari_system::collection {
         ctx: &TxContext,
     ) {
         assert!(tx_context::sender(ctx) == c.creator, E_NOT_COLLECTION_CREATOR);
-        c.banner_url = kanari_system::url::new_unsafe_from_bytes(banner_url);
-        c.website_url = kanari_system::url::new_unsafe_from_bytes(website_url);
+        c.banner_url = kanari_system::url::new_from_bytes(banner_url);
+        c.website_url = kanari_system::url::new_from_bytes(website_url);
         object::save_object(c);
     }
 
@@ -132,9 +137,11 @@ module kanari_system::collection {
 
     /// Return one supply unit to cap (used on burn).
     public fun return_from_burn(cap: &mut NftCap) {
+        // Prevent exceeding max supply via repeated burn returns (DoS)
+        // `remaining` must never exceed `max` implied by issued_counter + remaining
+        // We cap at original max via check against overflow: remaining + 1 must not overflow and must be <= MAX_COLLECTION_SUPPLY
+        assert!(cap.remaining < MAX_COLLECTION_SUPPLY, E_SUPPLY_EXCEEDED);
         cap.remaining = cap.remaining + 1;
-        // Note: issued_counter is intentionally not decremented; it records how many
-        // items have been minted historically.
         object::save_object(cap);
     }
 
@@ -150,15 +157,15 @@ module kanari_system::collection {
 
     #[test]
     fun test_collection_lifecycle() {
-        let ctx = tx_context::dummy();
+        let ctx = tx_context::new_from_hint(@0xC0FFEE, 1, 0, 0, 0);
 
         // create collection with small supply
         let (coll, cap) = create_collection(
             &mut ctx, 
             b"Test Name",      // name
             b"Test Desc",      // description
-            b"https://banner", // banner_url (ใหม่)
-            b"https://web",    // website_url (ใหม่)
+            b"https://banner", // banner_url
+            b"https://web",    // website_url
             2                  // max_supply
         );
 

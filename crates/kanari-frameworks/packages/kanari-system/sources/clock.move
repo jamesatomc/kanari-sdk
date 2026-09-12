@@ -29,7 +29,8 @@ module kanari_system::clock {
     /// Create and share the singleton Clock -- this function is
     /// called exactly once, during genesis.
     public fun create(ctx: &mut TxContext) {
-        assert!(tx_context::sender(ctx) == @0x0, E_NOT_SYSTEM_ADDRESS);
+        let sender = tx_context::sender(ctx);
+        assert!(sender == @0x0 || sender == @0x2, E_NOT_SYSTEM_ADDRESS);
 
         let clock = Clock {
             id: object::new(ctx), 
@@ -37,20 +38,16 @@ module kanari_system::clock {
         };
 
         object::save_object(&clock); 
-        
-       // 🚨 Transfer ownership to System Address (@0x0)
-       // To properly clear the clock value from the function according to Move rules.
-        transfer::public_transfer(clock, @0x0);
+        transfer::public_transfer_to_system(clock);
     }
 
     /// System call: Validator (the Rust node) will call this function every time the block is closed.
     public fun consensus_commit_prologue(clock: &mut Clock, timestamp_ms: u64, ctx: &TxContext) {
-        // Requires that the call be made only through the System Validator.
-        assert!(tx_context::sender(ctx) == @0x0, E_NOT_SYSTEM_ADDRESS);
-        // Ensure that the new timestamp is greater than or equal to the current one
-        // to maintain monotonicity of time on the blockchain
+        let sender = tx_context::sender(ctx);
+        assert!(sender == @0x0 || sender == @0x2, E_NOT_SYSTEM_ADDRESS);
         assert!(timestamp_ms >= clock.timestamp_ms, E_TIMESTAMP_NOT_MONOTONIC);
         clock.timestamp_ms = timestamp_ms;
+        object::save_object(clock);
     }
 
     // =================================================================

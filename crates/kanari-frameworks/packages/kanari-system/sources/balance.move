@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 module kanari_system::balance {
+    friend kanari_system::coin;
+    friend kanari_system::pay;
 
     /// Error codes
     const ERR_INSUFFICIENT_BALANCE: u64 = 1;
@@ -18,13 +20,13 @@ module kanari_system::balance {
         total: u64,
     }
 
-    /// Create a new zero-value Balance
-    public fun zero<T>(): Balance<T> {
+    /// Create a new zero-value Balance — package-internal, use coin::zero instead.
+    public(friend) fun zero<T>(): Balance<T> {
         Balance<T> { value: 0 }
     }
 
-    /// Create a new Balance with an initial value
-    public fun create<T>(value: u64): Balance<T> {
+    /// Create a new Balance with an initial value — package-internal, use coin::mint instead.
+    public(friend) fun create<T>(value: u64): Balance<T> {
         Balance<T> { value }
     }
 
@@ -33,26 +35,22 @@ module kanari_system::balance {
         balance.value
     }
 
-    /// Increase the balance value
-    public fun increase<T>(balance: &mut Balance<T>, amount: u64) {
+    /// Increase the balance value — package-internal
+    public(friend) fun increase<T>(balance: &mut Balance<T>, amount: u64) {
         let new_value = balance.value + amount;
-        // Check for overflow
         assert!(new_value >= balance.value, ERR_OVERFLOW);
         balance.value = new_value;
     }
 
-    /// Decrease the balance value
-    public fun decrease<T>(balance: &mut Balance<T>, amount: u64) {
-        // Ensure amount is non-zero
+    /// Decrease the balance value — package-internal
+    public(friend) fun decrease<T>(balance: &mut Balance<T>, amount: u64) {
         assert!(amount > 0, ERR_ZERO_AMOUNT);
-        // Check for sufficient balance
         assert!(balance.value >= amount, ERR_INSUFFICIENT_BALANCE);
         balance.value = balance.value - amount;
     }
 
-    /// Transfer value from one Balance to another
-    public fun transfer<T>(from: &mut Balance<T>, to: &mut Balance<T>, amount: u64) {
-        // Ensure amount is non-zero
+    /// Transfer value from one Balance to another — package-internal
+    public(friend) fun transfer<T>(from: &mut Balance<T>, to: &mut Balance<T>, amount: u64) {
         assert!(amount > 0, ERR_ZERO_AMOUNT);
         decrease<T>(from, amount);
         increase<T>(to, amount);
@@ -63,8 +61,8 @@ module kanari_system::balance {
         balance.value >= amount
     }
 
-    /// Destroy the Balance and return its value
-    public fun destroy<T>(balance: Balance<T>): u64 {
+    /// Destroy the Balance and return its value — package-internal
+    public(friend) fun destroy<T>(balance: Balance<T>): u64 {
         let Balance { value } = balance;
         value
     }
@@ -75,12 +73,9 @@ module kanari_system::balance {
     }
 
     /// Increase supply: add `amount` to `s` and return a `Balance` for the newly minted amount.
-    public fun increase_supply<T>(s: &mut Supply<T>, amount: u64): Balance<T> {
-        // Ensure amount is non-zero for minting
+    public(friend) fun increase_supply<T>(s: &mut Supply<T>, amount: u64): Balance<T> {
         assert!(amount > 0, ERR_ZERO_AMOUNT);
-        
         let new_total = s.total + amount;
-        // Check for overflow
         assert!(new_total >= s.total, ERR_OVERFLOW);
         s.total = new_total;
         create<T>(amount)
@@ -92,10 +87,8 @@ module kanari_system::balance {
     }
 
     /// Decrease supply by `amount`. Useful for burning coins.
-    public fun decrease_supply<T>(s: &mut Supply<T>, amount: u64) {
-        // Ensure amount is non-zero
+    public(friend) fun decrease_supply<T>(s: &mut Supply<T>, amount: u64) {
         assert!(amount > 0, ERR_ZERO_AMOUNT);
-        // Ensure sufficient total supply
         assert!(s.total >= amount, ERR_INSUFFICIENT_BALANCE);
         s.total = s.total - amount;
     }
@@ -105,16 +98,14 @@ module kanari_system::balance {
         s.total
     }
 
-    
-
-    /// Merge two Balances together
-    public fun merge<T>(dst: &mut Balance<T>, src: Balance<T>) {
+    /// Merge two Balances together — package-internal
+    public(friend) fun merge<T>(dst: &mut Balance<T>, src: Balance<T>) {
         let value = destroy<T>(src);
         increase<T>(dst, value);
     }
 
-    /// Split the Balance into two
-    public fun split<T>(balance: &mut Balance<T>, amount: u64): Balance<T> {
+    /// Split the Balance into two — package-internal
+    public(friend) fun split<T>(balance: &mut Balance<T>, amount: u64): Balance<T> {
         decrease<T>(balance, amount);
         create<T>(amount)
     }
