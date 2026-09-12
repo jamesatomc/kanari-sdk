@@ -14,7 +14,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_new_denylist_is_empty() {
         let ctx = &mut tx_context::dummy();
-        let denylist: deny_list::DenyList<u64> = deny_list::new_denylist<u64>(ctx);
+        let denylist: deny_list::DenyList = deny_list::new_denylist(ctx);
         
         // Verify the addresses vector is empty
         assert!(deny_list::length(&denylist) == 0, 0);
@@ -24,7 +24,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_add_address_to_empty_list() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         
         // Create a dummy capability (using u64 as phantom type)
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
@@ -42,7 +42,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_add_multiple_addresses() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -65,7 +65,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_remove_existing_address() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -90,7 +90,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_remove_first_address() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -110,7 +110,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_remove_last_address() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -134,7 +134,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_add_duplicate_address_prevented() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -152,7 +152,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_mixed_duplicates_and_unique() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -181,7 +181,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_remove_from_empty_list() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -197,7 +197,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_remove_non_existent_address() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -218,7 +218,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_add_remove_cycle() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -239,7 +239,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_remove_all_addresses_sequentially() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -270,7 +270,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_contains_existing_address() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -286,7 +286,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_contains_after_removal() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         let addr1 = @0x1;
@@ -306,7 +306,7 @@ module kanari_system::deny_list_tests {
     #[test]
     fun test_with_full_length_addresses() {
         let ctx = &mut tx_context::dummy();
-        let denylist_ref = &mut deny_list::new_denylist<u64>(ctx);
+        let denylist_ref = &mut deny_list::new_denylist(ctx);
         let cap = deny_list::new_denycap_for_testing<u64>(ctx);
         
         // Use realistic full addresses

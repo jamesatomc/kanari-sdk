@@ -10,7 +10,7 @@ module kanari_system::table {
     const ETableNotEmpty: u64 = 1;
 
     /// A Table map that stores key-value pairs dynamically
-    struct Table<phantom K: copy + drop + store, phantom V: store> has key, store {
+    struct Table<phantom K: copy + drop + store, phantom V: store> has key, store, drop {
         id: UID,
         size: u64,
     }

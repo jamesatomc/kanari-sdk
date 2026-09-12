@@ -98,11 +98,8 @@ module kanari_system::transfer {
     /// Internal transfer that extracts UID for tracking
     native fun transfer_with_uid<T: key + store>(obj: T, recipient: address);
 
-    /// Share an object by returning it instead of transferring
-    /// The caller should handle storage. This is a workaround for object tracking.
-    public fun share_object<T: store>(obj: T): T {
-        obj
-    }
+    /// Share an object (make it a shared object readable by anyone).
+    public native fun share_object<T: key + store>(obj: T);
 
     #[test]
     fun test_total_amount() {

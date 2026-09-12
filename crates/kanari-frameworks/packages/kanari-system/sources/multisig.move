@@ -57,8 +57,8 @@ module kanari_system::multisig {
 
     struct WalletBalanceKey has copy, drop, store {}
     
-    /// Transaction proposal stored in the wallet
-    struct TransactionProposal has key, store, drop {
+    /// Transaction proposal — no drop to prevent censoring by silent drop
+    struct TransactionProposal has key, store {
         id: UID,
         wallet_id: object::ID,
         tx_type: u8,
@@ -814,15 +814,14 @@ module kanari_system::multisig {
         let wallet = create_wallet(owners, 1, &mut ctx);
         
         let desc = string::utf8(b"Remove last owner");
-        propose_remove_owner(
+        let proposal = propose_remove_owner(
             &wallet,
             @0x1,
             desc,
             &mut ctx,
         );
-        
-        // This line should never be reached due to expected failure
-        // But we need to consume wallet for the success path
+        let TransactionProposal { id, wallet_id: _, tx_type: _, proposer: _, target_address: _, amount: _, payload: _, description: _, approvers: _, executed: _, created_at: _ } = proposal;
+        object::delete(id);
         destroy_wallet(wallet);
     }
 

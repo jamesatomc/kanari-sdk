@@ -81,6 +81,9 @@ module kanari_system::object {
     // authorization has completed.
     public native fun save_object<T: key>(obj: &T);
 
+    /// Returns the ID of an object (first field UID). Used by hot-potato patterns like `borrow`.
+    public native fun id<T: key>(obj: &T): ID;
+
     /// Internal-only legacy loader retained for runtime compatibility.
     ///
     /// This function is intentionally not public. Arbitrary published modules must
