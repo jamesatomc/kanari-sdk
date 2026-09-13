@@ -1,6 +1,27 @@
 # Key and Signature Path Audit
 
-Last checked: 2026-08-09
+Last checked: 2026-09-10
+
+## Policy decision (2026-09-10): slh-dsa ships in default features
+
+The 2026-08-09 revision stated that `slh-dsa`/SPHINCS+ is available only
+behind the explicit `experimental-slh-dsa` feature. That statement is
+superseded:
+
+- `slh-dsa` is part of the default `pqc` feature set because on-chain
+  verification depends on it: `kanari-system-natives` wires
+  `verify_signature_sphincs` into the `sphincs_plus_sha256_robust` Move
+  native, and all workspace consumers build `kanari-crypto` with default
+  features. Removing it from defaults would silently disable a
+  consensus-level signature scheme — a far larger risk than shipping the
+  release-candidate provider.
+- Residual risk (upstream `slh-dsa 0.2.0-rc.5` unaudited) is accepted with a
+  kill-switch: every slh-dsa call site (`signatures/sphincs.rs`,
+  `keys/pqc.rs` generation + seed derivation, provider import) is
+  `#[cfg(feature = "slh-dsa")]`-gated with fail-closed fallbacks, so
+  dropping `"slh-dsa"` from the `pqc` feature set degrades gracefully
+  (explicit `GenerationFailed` / `InvalidFormat` errors, no silent fallback).
+- Revisit when upstream `slh-dsa` reaches a stable, audited release.
 
 This audit maps where `kanari-crypto` key and signature APIs are consumed
 outside the crate.
@@ -23,8 +44,15 @@ outside the crate.
 - Wallet/keystore compatibility tests cover legacy on-disk formats through public APIs.
 - `kanari-crypto` production PQC signing/verification now uses the maintained
   `ml-dsa` provider path by default.
-- `slh-dsa`/SPHINCS+ support is available only behind the explicit
-  `experimental-slh-dsa` feature while the upstream crate remains release-candidate/unaudited.
+- All 11 `CurveType`s (classical + PQC + hybrid) support deterministic BIP39
+  mnemonic derivation (`keypair_from_mnemonic`, new `keypair_from_seed`,
+  `import_from_seed_phrase`, HD `derive_keypair_from_path`). PQC sub-seeds are
+  SHAKE256 domain-separated per algorithm; behavior is frozen by
+  `tests/kat_test.rs` + `tests/fixtures/pqc_mnemonic_kat.json` (22 vectors),
+  and libFuzzer (`fuzz/key_generation`) plus proptest
+  (`prop_fuzz_pqc_mnemonic_derivation`) assert no-panic + determinism.
+  Known accepted trade-off: a hybrid key's classical half equals the
+  standalone classical key for the same mnemonic (linkable by design).
 - Hybrid/PQC dispatch preserves formatted key metadata so provider prefixes are not stripped before signing.
 - Direct, explicit-curve, keypair, and batch verification paths now share
   resource-exhaustion guards for oversized public-key/address text, messages,

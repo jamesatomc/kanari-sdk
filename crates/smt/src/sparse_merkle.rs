@@ -785,7 +785,9 @@ fn compute_sparse_root_parallel_byte(entries: &[(Vec<u8>, Vec<u8>)]) -> [u8; 32]
 
     for depth in (1..=PARALLEL_BUCKET_DEPTH).rev() {
         roots = roots
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| hash_node(&pair[0], &pair[1]))
             .collect();
         debug_assert_eq!(roots.len(), 1usize << (depth - 1));

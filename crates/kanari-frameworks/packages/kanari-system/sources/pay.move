@@ -18,9 +18,12 @@ module kanari_system::pay {
 
     /// Split coin `self` to two coins, one with balance `split_amount`,
     /// and the remaining balance is left is `self`.
+    /// SECURITY: `>=` (not `>`) so the full balance can be split out.
     public entry fun split<T>(
         self: &mut Coin<T>, split_amount: u64, ctx: &mut TxContext
     ) {
+        assert!(split_amount > 0, 1);
+        assert!(coin::value(self) >= split_amount, 2);
         keep(coin::split(self, split_amount, ctx), ctx)
     }
 
@@ -37,10 +40,12 @@ module kanari_system::pay {
     }
 
     /// Send `amount` units of `c` to `recipient`
-    /// Aborts with `EVALUE` if `amount` is greater than or equal to `amount`
     public entry fun split_and_transfer<T>(
         c: &mut Coin<T>, amount: u64, recipient: address, ctx: &mut TxContext
     ) {
+        assert!(amount > 0, 1);
+        assert!(recipient != @0x0, 2);
+        assert!(coin::value(c) >= amount, 3);
         transfer::public_transfer(coin::split(c, amount, ctx), recipient)
     }
 
@@ -80,7 +85,7 @@ module kanari_system::pay {
     /// Join a vector of `Coin` into a single object and transfer it to `receiver`.
     public entry fun join_vec_and_transfer<T>(coins: vector<Coin<T>>, receiver: address) {
         assert!(vector::length(&coins) > 0, ENoCoins);
-
+        assert!(receiver != @0x0, 1);
         let self = vector::pop_back(&mut coins);
         join_vec(&mut self, coins);
         transfer::public_transfer(self, receiver)

@@ -28,7 +28,7 @@
 // Section: imports
 
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
+use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
 
 // Section: boilerplate
@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -329284543;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 311792711;
 
 // Section: executor
 
@@ -148,6 +148,41 @@ fn wire__crate__api__derive_keypair_from_path_api_impl(
                         api_derivation_path,
                         api_curve_name,
                     )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__derive_keypair_from_seed_api_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "derive_keypair_from_seed_api",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_seed = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_curve_name = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::derive_keypair_from_seed_api(api_seed, api_curve_name)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -535,20 +570,21 @@ fn pde_ffi_dispatcher_primary_impl(
         1 => wire__crate__api__blake3_hash_api_impl(port, ptr, rust_vec_len, data_len),
         2 => wire__crate__api__derive_keypair_from_mnemonic_impl(port, ptr, rust_vec_len, data_len),
         3 => wire__crate__api__derive_keypair_from_path_api_impl(port, ptr, rust_vec_len, data_len),
-        4 => {
+        4 => wire__crate__api__derive_keypair_from_seed_api_impl(port, ptr, rust_vec_len, data_len),
+        5 => {
             wire__crate__api__derive_multiple_addresses_api_impl(port, ptr, rust_vec_len, data_len)
         }
-        5 => wire__crate__api__generate_keypair_api_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__generate_mnemonic_api_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__import_keypair_from_private_key_impl(
+        6 => wire__crate__api__generate_keypair_api_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__generate_mnemonic_api_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__import_keypair_from_private_key_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        8 => wire__crate__api__list_supported_curves_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__sign_message_api_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__verify_signature_api_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__list_supported_curves_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__sign_message_api_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__verify_signature_api_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -712,7 +748,7 @@ mod io {
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
-    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
+    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate
@@ -736,7 +772,7 @@ mod web {
     };
     use flutter_rust_bridge::for_generated::wasm_bindgen;
     use flutter_rust_bridge::for_generated::wasm_bindgen::prelude::*;
-    use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
+    use flutter_rust_bridge::for_generated::{Lifetimeable, Lockable, transform_result_dco};
     use flutter_rust_bridge::{Handler, IntoIntoDart};
 
     // Section: boilerplate

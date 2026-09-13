@@ -135,8 +135,7 @@ class WalletState extends ChangeNotifier {
     );
 
     if (data['mnemonic'] != null &&
-        data['mnemonic'].toString().isNotEmpty &&
-        !curve.isPostQuantum) {
+        data['mnemonic'].toString().isNotEmpty) {
       return KanariWallet.fromMnemonic(
         data['mnemonic'],
         curve: curve,

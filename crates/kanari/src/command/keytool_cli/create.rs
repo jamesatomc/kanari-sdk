@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use kanari_crypto::hd_wallet::derive_keypair_from_path;
-use kanari_crypto::keys::{CurveType, generate_keypair, generate_mnemonic};
+use kanari_crypto::keys::{CurveType, generate_mnemonic};
 use kanari_crypto::wallet::save_wallet;
 use kanari_types::error::KanariUnwrapExt;
 use move_core_types::account_address::AccountAddress;
@@ -19,7 +19,9 @@ pub struct CreateWallet {
     /// Password for wallet encryption
     #[arg(short, long)]
     pub password: String,
-    /// Curve type (ed25519, k256, p256, ed25519+dilithium3, k256+dilithium3)
+    /// Curve type (ed25519, k256, p256, ed25519+dilithium3, k256+dilithium3,
+    /// dilithium2, dilithium3, dilithium5, falcon512, falcon1024,
+    /// sphincs-plus-sha256-robust)
     #[arg(short, long, default_value = "ed25519")]
     pub curve: String,
     /// Number of seed words (12 or 24)
@@ -38,36 +40,30 @@ impl CreateWallet {
             "p256" | "secp256r1" => CurveType::P256,
             "ed25519+dilithium3" | "ed25519_dilithium3" => CurveType::Ed25519Dilithium3,
             "k256+dilithium3" | "k256_dilithium3" => CurveType::K256Dilithium3,
+            "dilithium2" => CurveType::Dilithium2,
+            "dilithium3" => CurveType::Dilithium3,
+            "dilithium5" => CurveType::Dilithium5,
+            "falcon512" => CurveType::Falcon512,
+            "falcon1024" => CurveType::Falcon1024,
+            "sphincs-plus-sha256-robust" => CurveType::SphincsPlusSha256Robust,
             other => {
                 eprintln!("Unknown curve '{}', falling back to Ed25519", other);
                 CurveType::Ed25519
             }
         };
 
-        // For classical curves we can derive from a mnemonic; for PQC/hybrid generate directly
-        let (private_key, address_str, seed_phrase, derivation_path) =
-            if curve_type.is_post_quantum() || curve_type.is_hybrid() {
-                let kp = generate_keypair(curve_type).context("Failed to generate keypair")?;
-                let zk = kp.export_private_key_secure();
-                (
-                    zk.to_string(),
-                    kp.get_address().to_string(),
-                    String::new(),
-                    None,
-                )
-            } else {
-                let mnemonic =
-                    generate_mnemonic(self.words).context("Failed to generate mnemonic")?;
-                let kp = derive_keypair_from_path(&mnemonic, "", &self.path, curve_type)
-                    .require("HD derivation failed")?;
-                let zk = kp.export_private_key_secure();
-                (
-                    zk.to_string(),
-                    kp.get_address().to_string(),
-                    mnemonic,
-                    Some(self.path.clone()),
-                )
-            };
+        // All curves (classical, PQC, hybrid) derive deterministically from
+        // a fresh mnemonic, so every wallet is backup-able via seed phrase.
+        let mnemonic = generate_mnemonic(self.words).context("Failed to generate mnemonic")?;
+        let kp = derive_keypair_from_path(&mnemonic, "", &self.path, curve_type)
+            .require("HD derivation failed")?;
+        let zk = kp.export_private_key_secure();
+        let (private_key, address_str, seed_phrase, derivation_path) = (
+            zk.to_string(),
+            kp.get_address().to_string(),
+            mnemonic,
+            Some(self.path.clone()),
+        );
 
         let address =
             AccountAddress::from_str(&address_str).context("Generated invalid address")?;

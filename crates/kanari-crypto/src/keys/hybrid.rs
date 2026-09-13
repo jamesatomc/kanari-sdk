@@ -6,8 +6,9 @@ use zeroize::Zeroizing;
 
 use super::{
     CurveType, KANAHYBRID_PREFIX, KeyError, KeyPair, classical, constant_time_starts_with,
-    extract_raw_key, pqc,
+    extract_raw_key, mnemonic::derive_mnemonic_seed, pqc,
 };
+use crate::signatures::ml_dsa_provider::ML_DSA_SEED_BYTES;
 
 pub fn generate_hybrid_ed25519_dilithium3_keypair() -> Result<KeyPair, KeyError> {
     let ed25519_pair = classical::generate_ed25519_keypair()?;
@@ -27,6 +28,46 @@ pub fn generate_hybrid_k256_dilithium3_keypair() -> Result<KeyPair, KeyError> {
         k256_pair.public_key,
         extract_raw_key(&k256_pair.private_key),
         &dilithium3_pair,
+        CurveType::K256Dilithium3,
+    )
+}
+
+/// Deterministically build an Ed25519+Dilithium3 hybrid keypair from 64 bytes
+/// of seed material (e.g. a BIP39 seed).
+///
+/// The classical half reuses the first 32 bytes exactly like standalone
+/// Ed25519 mnemonic derivation, so the classical component matches the plain
+/// Ed25519 key for the same seed. The Dilithium3 half uses domain-separated
+/// seed material so the two halves are cryptographically independent.
+pub(super) fn hybrid_ed25519_dilithium3_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    if seed.len() < 64 {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let classical_pair = classical::keypair_from_ed25519_raw(&seed[0..32], false)?;
+    let pqc_seed = derive_mnemonic_seed(seed, "Hybrid-Ed25519-Dilithium3/PQC", ML_DSA_SEED_BYTES);
+    let pqc_pair = pqc::dilithium3_keypair_from_seed(&pqc_seed)?;
+    build_hybrid_keypair(
+        classical_pair.public_key,
+        extract_raw_key(&classical_pair.private_key),
+        &pqc_pair,
+        CurveType::Ed25519Dilithium3,
+    )
+}
+
+/// Deterministically build a K256+Dilithium3 hybrid keypair from 64 bytes of
+/// seed material. Same construction guarantees as
+/// [`hybrid_ed25519_dilithium3_from_seed`].
+pub(super) fn hybrid_k256_dilithium3_from_seed(seed: &[u8]) -> Result<KeyPair, KeyError> {
+    if seed.len() < 64 {
+        return Err(KeyError::InvalidPrivateKey);
+    }
+    let classical_pair = classical::keypair_from_k256_raw(&seed[0..32], false)?;
+    let pqc_seed = derive_mnemonic_seed(seed, "Hybrid-K256-Dilithium3/PQC", ML_DSA_SEED_BYTES);
+    let pqc_pair = pqc::dilithium3_keypair_from_seed(&pqc_seed)?;
+    build_hybrid_keypair(
+        classical_pair.public_key,
+        extract_raw_key(&classical_pair.private_key),
+        &pqc_pair,
         CurveType::K256Dilithium3,
     )
 }

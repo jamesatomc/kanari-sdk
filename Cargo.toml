@@ -83,21 +83,21 @@ futures = "0.3.34"
 # Networking & Communication
 # ============================================================================
 ## P2P Networking
-libp2p-core = "0.43.2"
-libp2p-dcutr = "0.14.1"
-libp2p-gossipsub = "0.49.5"
-libp2p-identify = "0.47.0"
-libp2p-identity = { version = "0.2.14", features = ["ed25519", "peerid", "rand"] }
-libp2p-kad = "0.48.0"
-libp2p-noise = "0.46.1"
-libp2p-ping = "0.47.0"
-libp2p-relay = "0.21.1"
-libp2p-swarm = { version = "0.47.1", features = ["macros", "tokio"] }
-libp2p-tcp = { version = "0.44.1", features = ["tokio"] }
-libp2p-yamux = "0.47.0"
+libp2p-core = "0.44.0"
+libp2p-dcutr = "0.15.0"
+libp2p-gossipsub = "0.50.0"
+libp2p-identify = "0.48.0"
+libp2p-identity = { version = "0.3.0", features = ["ed25519", "peerid", "rand"] }
+libp2p-kad = "0.49.0"
+libp2p-noise = "0.47.0"
+libp2p-ping = "0.48.0"
+libp2p-relay = "0.22.0"
+libp2p-swarm = { version = "0.48.0", features = ["macros", "tokio"] }
+libp2p-tcp = { version = "0.45.0", features = ["tokio"] }
+libp2p-yamux = "0.48.0"
 
 ## HTTP/Web APIs
-reqwest = { version = "0.13.4", features = ["json"] }
+reqwest = { version = "0.13.5", features = ["json"] }
 axum = "0.8.9"
 tower-http = { version = "0.7.1", features = ["cors", "limit", "timeout"] }
 tower = { version = "0.5.3", features = ["limit", "util"] }
@@ -109,7 +109,7 @@ axum-client-ip = "1.3.1"                                                        
 serde = { version = "1.0.229", default-features = true, features = ["rc"] }
 serde_json = { version = "1.0.151", default-features = true }
 serde_yaml = { version = "0.9.34", default-features = true }
-toml = { version = "1.1.5", default-features = true }
+toml = { version = "1.1.6", default-features = true }
 
 ## Blockchain-specific serialization
 bcs = { version = "0.2.1" }
@@ -201,7 +201,7 @@ dirs = "7.0.0"                                                                  
 walkdir = "2.5.0"                                                                   # Directory traversal
 num_cpus = "1.17.0"                                                                 # CPU core detection
 regex = "1.13.1"                                                                    # Regular expressions for validation
-smallvec = "1.16.0"                                                                 # Stack-allocated vectors
+smallvec = "1.16.1"                                                                 # Stack-allocated vectors
 lazy_static = { version = "1.5.0", default-features = true }
 once_cell = "1.21.4"
 
@@ -225,7 +225,7 @@ data-encoding = "2.11.1"                                                        
 # Time & Date Handling
 # ============================================================================
 chrono = { version = "0.4.45", features = ["serde"] }
-uuid = { version = "1.26.0", features = ["v4", "serde"] }
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
 
 # ============================================================================
 # Mathematics & Numerics
@@ -265,7 +265,7 @@ syn = { version = "3.0.5", features = ["full"] }
 # ============================================================================
 # Miscellaneous Utilities
 # ============================================================================
-uniffi = { version = "0.32.0" }
+uniffi = { version = "0.32.1" }
 
 # ============================================================================
 
@@ -328,7 +328,7 @@ move-coverage = { path = "third_party/move/crates/move-coverage" }
 move-bytecode-verifier = { path = "third_party/move/crates/move-bytecode-verifier" }
 
 [patch.crates-io]
-libp2p-kad = { path = "third_party/patches/libp2p-kad-0.48.0" }
+# libp2p-kad = { path = "third_party/patches/libp2p-kad-0.48.0" }
 proc-macro-error2 = { path = "third_party/patches/proc-macro-error2-2.0.1" }
 
 

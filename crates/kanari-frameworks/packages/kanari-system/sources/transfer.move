@@ -18,14 +18,7 @@ module kanari_system::transfer {
         amount: u64,
     }
 
-    // ObjectStore: Global registry for transferred objects
-    // Stores objects by owner address for later retrieval
-    #[allow(unused_field)]
-    struct ObjectStore<T: key + store> has key {
-        id: UID,
-        inner: T,
-        owner: address,
-    }
+
 
     /// Create a transfer record with full validation
     /// Validates: amount > 0 AND from != to
@@ -48,18 +41,18 @@ module kanari_system::transfer {
         transfer.to
     }
 
-    /// Calculate total from multiple transfers
+    /// Calculate total from multiple transfers — aborts on overflow.
     public fun total_amount(transfers: &vector<Transfer>): u64 {
         let total = 0u64;
         let len = vector::length(transfers);
         let i = 0u64;
-        
         while (i < len) {
             let transfer = vector::borrow(transfers, i);
-            total = total + transfer.amount;
+            let new_total = total + transfer.amount;
+            assert!(new_total >= total, ERR_INVALID_AMOUNT);
+            total = new_total;
             i = i + 1;
         };
-        
         total
     }
 
@@ -88,18 +81,37 @@ module kanari_system::transfer {
         freeze_object(obj)
     }
 
-    /// Transfer an owned object to another address.
+    const EZeroRecipient: u64 = 3;
+    friend kanari_system::kanari;
+    friend kanari_system::clock;
+    /// Transfer an owned object to another address. Rejects zero address to prevent burning.
     public fun public_transfer<T: key + store>(obj: T, recipient: address) {
+        assert!(recipient != @0x0, EZeroRecipient);
         transfer_with_uid(obj, recipient);
+    }
+
+    /// System-only transfer to @0x0 for locking (e.g., fixed-supply TreasuryCap).
+    public(friend) fun public_transfer_to_system<T: key + store>(obj: T) {
+        transfer_with_uid(obj, @0x0);
     }
 
     /// Internal transfer that extracts UID for tracking
     native fun transfer_with_uid<T: key + store>(obj: T, recipient: address);
 
-    /// Share an object by returning it instead of transferring
-    /// The caller should handle storage. This is a workaround for object tracking.
-    public fun share_object<T: store>(obj: T): T {
-        obj
+    /// Share an object (make it a shared object readable by anyone).
+    public native fun share_object<T: key + store>(obj: T);
+
+    /// Share an object from outside its defining module
+    /// (Sui `public_share_object` API).
+    public fun public_share_object<T: key + store>(obj: T) {
+        share_object(obj)
+    }
+
+    /// Transfer ownership of `obj` (Sui `transfer` API).
+    /// Sui-exact semantics: no zero-address screen (Sui permits it).
+    /// Prefer `public_transfer` for the checked path.
+    public fun transfer<T: key + store>(obj: T, recipient: address) {
+        transfer_with_uid(obj, recipient)
     }
 
     #[test]

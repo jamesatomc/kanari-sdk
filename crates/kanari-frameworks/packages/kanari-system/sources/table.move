@@ -10,6 +10,8 @@ module kanari_system::table {
     const ETableNotEmpty: u64 = 1;
 
     /// A Table map that stores key-value pairs dynamically
+    /// SECURITY: `drop` removed — same reason as `Bag`: prevents orphaning
+    /// dynamic-field children via silent drop. Use `destroy_empty`.
     struct Table<phantom K: copy + drop + store, phantom V: store> has key, store {
         id: UID,
         size: u64,

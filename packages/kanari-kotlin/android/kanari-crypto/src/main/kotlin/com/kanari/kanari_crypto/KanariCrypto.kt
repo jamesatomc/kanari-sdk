@@ -7,6 +7,7 @@ import uniffi.kanari_kotlin.KeyPairData
 import uniffi.kanari_kotlin.blake3HashApi
 import uniffi.kanari_kotlin.deriveKeypairFromMnemonic as ffiDeriveKeypairFromMnemonic
 import uniffi.kanari_kotlin.deriveKeypairFromPathApi
+import uniffi.kanari_kotlin.deriveKeypairFromSeedApi
 import uniffi.kanari_kotlin.deriveMultipleAddressesApi
 import uniffi.kanari_kotlin.generateKeypairApi
 import uniffi.kanari_kotlin.generateMnemonicApi
@@ -50,6 +51,19 @@ object KanariCrypto {
         curveName: String = DEFAULT_CURVE,
     ): KeyPairModel = calculateWithLargeStack {
         deriveKeypairFromPathApi(mnemonic, derivationPath, curveName).toModel()
+    }
+
+    /**
+     * Derives a keypair deterministically from raw seed material.
+     * [seed] must hold at least 64 bytes (e.g. a BIP39 seed). All curves
+     * including post-quantum and hybrid types are supported.
+     */
+    suspend fun deriveKeypairFromSeed(
+        seed: ByteArray,
+        curveName: String = DEFAULT_CURVE,
+    ): KeyPairModel = calculateWithLargeStack {
+        require(seed.size >= 64) { "Seed must hold at least 64 bytes" }
+        deriveKeypairFromSeedApi(seed.toUByteList(), curveName).toModel()
     }
 
     suspend fun deriveMultipleAddresses(

@@ -19,9 +19,14 @@ fn main() {
         CurveType::Ed25519,
         CurveType::K256,
         CurveType::P256,
+        CurveType::Dilithium2,
         CurveType::Dilithium3,
+        CurveType::Dilithium5,
         CurveType::Falcon512,
+        CurveType::Falcon1024,
         CurveType::Ed25519Dilithium3,
+        CurveType::K256Dilithium3,
+        CurveType::SphincsPlusSha256Robust,
     ] {
         match bench_curve(curve) {
             Ok(result) => println!(

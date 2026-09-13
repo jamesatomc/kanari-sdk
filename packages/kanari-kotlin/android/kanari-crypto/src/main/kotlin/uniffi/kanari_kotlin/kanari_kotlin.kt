@@ -678,6 +678,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_kanari_kotlin_checksum_func_derive_keypair_from_path_api(
     ): Int
+    external fun uniffi_kanari_kotlin_checksum_func_derive_keypair_from_seed_api(
+    ): Int
     external fun uniffi_kanari_kotlin_checksum_func_derive_multiple_addresses_api(
     ): Int
     external fun uniffi_kanari_kotlin_checksum_func_generate_keypair_api(
@@ -710,6 +712,8 @@ internal object UniffiLib {
     external fun uniffi_kanari_kotlin_fn_func_derive_keypair_from_mnemonic(`mnemonic`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kanari_kotlin_fn_func_derive_keypair_from_path_api(`mnemonic`: RustBuffer.ByValue,`derivationPath`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_kanari_kotlin_fn_func_derive_keypair_from_seed_api(`seed`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_kanari_kotlin_fn_func_derive_multiple_addresses_api(`mnemonic`: RustBuffer.ByValue,`pathTemplate`: RustBuffer.ByValue,`curveName`: RustBuffer.ByValue,`count`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -844,34 +848,37 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_kanari_kotlin_checksum_func_blake3_hash_api() != 40879) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_blake3_hash_api() and 0xFFFF) != 40879) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_derive_keypair_from_mnemonic() != 64620) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_derive_keypair_from_mnemonic() and 0xFFFF) != 64620) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_derive_keypair_from_path_api() != 58579) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_derive_keypair_from_path_api() and 0xFFFF) != 58579) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_derive_multiple_addresses_api() != 5280) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_derive_keypair_from_seed_api() and 0xFFFF) != 26953) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_generate_keypair_api() != 14350) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_derive_multiple_addresses_api() and 0xFFFF) != 5280) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_generate_mnemonic_api() != 55169) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_generate_keypair_api() and 0xFFFF) != 14350) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_import_keypair_from_private_key() != 40818) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_generate_mnemonic_api() and 0xFFFF) != 55169) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_list_supported_curves() != 8770) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_import_keypair_from_private_key() and 0xFFFF) != 40818) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_sign_message_api() != 38481) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_list_supported_curves() and 0xFFFF) != 8770) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_kanari_kotlin_checksum_func_verify_signature_api() != 18576) {
+    if ((lib.uniffi_kanari_kotlin_checksum_func_sign_message_api() and 0xFFFF) != 38481) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_kanari_kotlin_checksum_func_verify_signature_api() and 0xFFFF) != 18576) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1316,6 +1323,18 @@ public object FfiConverterSequenceTypeKeyPairData: FfiConverterRustBuffer<List<K
         
         FfiConverterString.lower(`mnemonic`),
         FfiConverterString.lower(`derivationPath`),
+        FfiConverterString.lower(`curveName`),_status)
+}
+    )
+    }
+    
+ fun `deriveKeypairFromSeedApi`(`seed`: List<kotlin.UByte>, `curveName`: kotlin.String): KeyPairData {
+            return FfiConverterTypeKeyPairData.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_kanari_kotlin_fn_func_derive_keypair_from_seed_api(
+    
+        
+        FfiConverterSequenceUByte.lower(`seed`),
         FfiConverterString.lower(`curveName`),_status)
 }
     )

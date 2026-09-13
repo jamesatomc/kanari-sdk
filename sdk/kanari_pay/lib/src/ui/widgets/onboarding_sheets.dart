@@ -72,14 +72,13 @@ class _AppCurveSelectionSheetState extends State<AppCurveSelectionSheet> {
                 }).toList(),
                 onChanged: (val) => setState(() => _selectedCurve = val!),
               ),
-              if (!_selectedCurve.isPostQuantum) ...[
-                const SizedBox(height: AppUiTokens.cardPadding),
-                AppTextInput(
-                  controller: _derivationPathController,
-                  label: 'HD Path',
-                  hintText: KanariWallet.defaultDerivationPath,
-                ),
-              ],
+              // All curves support HD path derivation.
+              const SizedBox(height: AppUiTokens.cardPadding),
+              AppTextInput(
+                controller: _derivationPathController,
+                label: 'HD Path',
+                hintText: KanariWallet.defaultDerivationPath,
+              ),
             ],
           ),
           const SizedBox(height: 24),
@@ -91,11 +90,8 @@ class _AppCurveSelectionSheetState extends State<AppCurveSelectionSheet> {
               ),
             ),
             onPressed: () {
-              final derivationPath = _selectedCurve.isPostQuantum
-                  ? KanariWallet.defaultDerivationPath
-                  : _derivationPathController.text.trim();
-              if (!_selectedCurve.isPostQuantum &&
-                  !KanariWallet.isValidDerivationPath(derivationPath)) {
+              final derivationPath = _derivationPathController.text.trim();
+              if (!KanariWallet.isValidDerivationPath(derivationPath)) {
                 showAppErrorSnackBar(
                   context,
                   "Invalid HD path. Example: ${KanariWallet.defaultDerivationPath}",
@@ -235,8 +231,7 @@ class _AppImportWalletSheetState extends State<AppImportWalletSheet>
                 hintText: hintText,
                 maxLines: 3,
               ),
-              if (isMnemonic && !_curve.isPostQuantum) ...[
-                const SizedBox(height: AppUiTokens.cardPadding),
+              if (isMnemonic) ...[                const SizedBox(height: AppUiTokens.cardPadding),
                 AppTextInput(
                   controller: _derivationPathController,
                   label: 'HD Path',
@@ -264,14 +259,6 @@ class _AppImportWalletSheetState extends State<AppImportWalletSheet>
         isMnemonic
             ? 'Please enter your mnemonic phrase'
             : 'Please enter your private key',
-      );
-      return;
-    }
-
-    if (isMnemonic && _curve.isPostQuantum) {
-      showAppErrorSnackBar(
-        context,
-        'Post-quantum curves do not support mnemonic HD paths yet.',
       );
       return;
     }

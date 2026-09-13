@@ -209,7 +209,9 @@ fun KeyGenerationScreen(
                         curves = curves,
                         selectedCurve = selectedCurveInfo?.name ?: defaultCurve,
                         onCurveSelected = { name -> selectedCurveInfo = curves.find { it.name == name } })
-                    if (selectedTab == 0 && selectedCurveInfo?.isPostQuantum == false) {
+                    // All curves (classical, PQC, hybrid) support deterministic
+                    // mnemonic/path derivation.
+                    if (selectedTab == 0) {
                         Text(
                             "Mnemonic Length",
                             style = MaterialTheme.typography.labelLarge,
@@ -226,7 +228,7 @@ fun KeyGenerationScreen(
                         }
                     }
                     val showPath =
-                        (selectedTab == 0 && selectedCurveInfo?.isPostQuantum == false) || (selectedTab == 1 && importMethod == ImportMethod.RECOVERY_PHRASE)
+                        selectedTab == 0 || (selectedTab == 1 && importMethod == ImportMethod.RECOVERY_PHRASE)
                     if (showPath) OutlinedTextField(
                         value = derivationPath,
                         onValueChange = { derivationPath = it },
@@ -234,7 +236,7 @@ fun KeyGenerationScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     )
-                    if (selectedTab == 0 && selectedCurveInfo?.isPostQuantum == false) OutlinedTextField(
+                    if (selectedTab == 0) OutlinedTextField(
                         value = if (addressCount == 0) "" else addressCount.toString(),
                         onValueChange = { addressCount = it.toIntOrNull() ?: 0 },
                         label = { Text("Address Count") },
@@ -248,27 +250,21 @@ fun KeyGenerationScreen(
                     scope.launch {
                         isLoading = true
                         val currentCurve = selectedCurveInfo?.name ?: defaultCurve
-                        val supportsMnemonic = selectedCurveInfo?.isPostQuantum == false
                         runCatching {
                             if (selectedTab == 0) {
-                                if (!supportsMnemonic) {
-                                    val pair = KanariCrypto.generateKeypair(currentCurve)
-                                    null to listOf(pair)
-                                } else {
-                                    val words = KanariCrypto.generateMnemonic(wordCount)
-                                    val pairs = if (addressCount > 1) KanariCrypto.deriveMultipleAddresses(
-                                        words,
-                                        derivationPath,
-                                        currentCurve,
-                                        addressCount
-                                    ) else {
-                                    val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" }
-                                    val pair =
-                                        KanariCrypto.deriveKeypairFromPath(words, path, currentCurve)
-                                    listOf(pair)
-                                    }
-                                    words to pairs
+                                val words = KanariCrypto.generateMnemonic(wordCount)
+                                val pairs = if (addressCount > 1) KanariCrypto.deriveMultipleAddresses(
+                                    words,
+                                    derivationPath,
+                                    currentCurve,
+                                    addressCount
+                                ) else {
+                                val path = derivationPath.ifEmpty { "m/44'/0'/0'/0/0" }
+                                val pair =
+                                    KanariCrypto.deriveKeypairFromPath(words, path, currentCurve)
+                                listOf(pair)
                                 }
+                                words to pairs
                             } else {
                                 if (importMethod == ImportMethod.RECOVERY_PHRASE) {
                                     val path = derivationPath.ifEmpty { "m/44'/637'/0'/0/0" }

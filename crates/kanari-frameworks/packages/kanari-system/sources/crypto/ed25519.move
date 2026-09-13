@@ -15,12 +15,13 @@ module kanari_system::ed25519 {
         ED25519_SIG_LENGTH
     }
 
-    /// @param signature: 32-byte signature that is a point on the Ed25519 elliptic curve.
-    /// @param public_key: 32-byte signature that is a point on the Ed25519 elliptic curve.
+    /// @param signature: 64-byte signature over the Ed25519 curve.
+    /// @param public_key: 32-byte public key, a point on the Ed25519 elliptic curve.
     /// @param msg: The message that we test the signature against.
     ///
     /// If the signature is a valid Ed25519 signature of the message and public key, return true.
-    /// Otherwise, return false.
+    /// Otherwise, return false (fail-closed; malformed inputs return false
+    /// instead of aborting, so batched verification cannot be DoS-aborted).
     native public fun verify(signature: &vector<u8>, public_key: &vector<u8>, msg: &vector<u8>): bool;
 
     #[test]

@@ -13,6 +13,11 @@ module kanari_system::bcs {
     const ENotBool: u64 = 1;
     /// For when ULEB byte is out of range (or not found).
     const ELenOutOfRange: u64 = 2;
+    /// For when a BCS-declared vector length exceeds the Move-side cap.
+    const EVectorTooLong: u64 = 3;
+    /// Cap on BCS-peeled vectors to bound `push_back` loops / gas grief.
+    /// Largest legit blobs here are small (addresses, u64 lists); 10k is generous.
+    const MAX_BCS_VECTOR_LENGTH: u64 = 10000;
 
     /// A helper struct that saves resources on operations. For better
     /// vector performance, it stores reversed bytes of the BCS and
@@ -135,9 +140,15 @@ module kanari_system::bcs {
         total
     }
 
+    fun checked_vec_len(bcs: &mut BCS): u64 {
+        let len = peel_vec_length(bcs);
+        assert!(len <= MAX_BCS_VECTOR_LENGTH, EVectorTooLong);
+        len
+    }
+
     /// Peel a vector of `address` from serialized bytes.
     public fun peel_vec_address(bcs: &mut BCS): vector<address> {
-        let (len, i, res) = (peel_vec_length(bcs), 0, vector[]);
+        let (len, i, res) = (checked_vec_len(bcs), 0, vector[]);
         while (i < len) {
             v::push_back(&mut res, peel_address(bcs));
             i = i + 1;
@@ -147,7 +158,7 @@ module kanari_system::bcs {
 
     /// Peel a vector of `address` from serialized bytes.
     public fun peel_vec_bool(bcs: &mut BCS): vector<bool> {
-        let (len, i, res) = (peel_vec_length(bcs), 0, vector[]);
+        let (len, i, res) = (checked_vec_len(bcs), 0, vector[]);
         while (i < len) {
             v::push_back(&mut res, peel_bool(bcs));
             i = i + 1;
@@ -157,7 +168,7 @@ module kanari_system::bcs {
 
     /// Peel a vector of `u8` (eg string) from serialized bytes.
     public fun peel_vec_u8(bcs: &mut BCS): vector<u8> {
-        let (len, i, res) = (peel_vec_length(bcs), 0, vector[]);
+        let (len, i, res) = (checked_vec_len(bcs), 0, vector[]);
         while (i < len) {
             v::push_back(&mut res, peel_u8(bcs));
             i = i + 1;
@@ -167,7 +178,7 @@ module kanari_system::bcs {
 
     /// Peel a `vector<vector<u8>>` (eg vec of string) from serialized bytes.
     public fun peel_vec_vec_u8(bcs: &mut BCS): vector<vector<u8>> {
-        let (len, i, res) = (peel_vec_length(bcs), 0, vector[]);
+        let (len, i, res) = (checked_vec_len(bcs), 0, vector[]);
         while (i < len) {
             v::push_back(&mut res, peel_vec_u8(bcs));
             i = i + 1;
@@ -177,7 +188,7 @@ module kanari_system::bcs {
 
     /// Peel a vector of `u64` from serialized bytes.
     public fun peel_vec_u64(bcs: &mut BCS): vector<u64> {
-        let (len, i, res) = (peel_vec_length(bcs), 0, vector[]);
+        let (len, i, res) = (checked_vec_len(bcs), 0, vector[]);
         while (i < len) {
             v::push_back(&mut res, peel_u64(bcs));
             i = i + 1;
@@ -187,7 +198,7 @@ module kanari_system::bcs {
 
     /// Peel a vector of `u128` from serialized bytes.
     public fun peel_vec_u128(bcs: &mut BCS): vector<u128> {
-        let (len, i, res) = (peel_vec_length(bcs), 0, vector[]);
+        let (len, i, res) = (checked_vec_len(bcs), 0, vector[]);
         while (i < len) {
             v::push_back(&mut res, peel_u128(bcs));
             i = i + 1;
@@ -250,10 +261,8 @@ module kanari_system::bcs {
     #[test]
     #[expected_failure(abort_code = ELenOutOfRange)]
     fun test_uleb_len_fail() {
-        let value = vector[0xff, 0xff, 0xff, 0xff, 0xff];
-        let bytes = new(to_bytes(&value));
-        let _fail = peel_vec_length(&mut bytes);
-        abort 2 // TODO: make this test fail
+        let bytes = new(vector[0xff, 0xff, 0xff, 0xff, 0xff]);
+        peel_vec_length(&mut bytes);
     }
 
     #[test]

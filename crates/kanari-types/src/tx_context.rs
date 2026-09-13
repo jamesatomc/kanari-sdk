@@ -102,6 +102,8 @@ impl TxContextModule {
             epoch_timestamp_ms: "epoch_timestamp_ms",
             fresh_object_address: "fresh_object_address",
             derive_id: "derive_id",
+            gas_price: "gas_price",
+            sponsor: "sponsor",
         }
     }
 }
@@ -114,6 +116,8 @@ pub struct TxContextFunctions {
     pub epoch_timestamp_ms: &'static str,
     pub fresh_object_address: &'static str,
     pub derive_id: &'static str,
+    pub gas_price: &'static str,
+    pub sponsor: &'static str,
 }
 
 #[cfg(test)]

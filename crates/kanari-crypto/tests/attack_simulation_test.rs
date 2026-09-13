@@ -407,16 +407,34 @@ fn attack_simulation_rejects_hd_wallet_derivation_abuse() {
         Err(HdError::InvalidDerivationPath(_))
     ));
 
-    assert!(matches!(
-        derive_multiple_addresses(
-            &mnemonic,
-            "",
-            "m/44'/784'/0'/0'/{index}",
-            CurveType::Dilithium3,
-            1,
-        ),
-        Err(HdError::DerivationFailed(_))
-    ));
+    // PQC curves are intentionally supported via path-bound SHAKE256 derivation
+    // (BIP32 itself is secp256k1-specific): same mnemonic + template yields
+    // deterministic, index-distinct keys.
+    let batch = derive_multiple_addresses(
+        &mnemonic,
+        "",
+        "m/44'/784'/0'/0'/{index}",
+        CurveType::Dilithium3,
+        2,
+    )
+    .expect("PQC HD batch derivation should succeed");
+    assert_eq!(batch.len(), 2);
+    assert_ne!(
+        batch[0].address, batch[1].address,
+        "different indices must yield different PQC keys"
+    );
+    let repeat = derive_multiple_addresses(
+        &mnemonic,
+        "",
+        "m/44'/784'/0'/0'/{index}",
+        CurveType::Dilithium3,
+        1,
+    )
+    .expect("repeat PQC derivation should succeed");
+    assert_eq!(
+        batch[0].address, repeat[0].address,
+        "PQC HD derivation must be deterministic"
+    );
 
     assert!(matches!(
         derive_multiple_addresses(

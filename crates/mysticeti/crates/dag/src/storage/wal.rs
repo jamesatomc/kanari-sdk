@@ -17,6 +17,7 @@ use std::os::fd::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
 
+#[cfg(not(windows))]
 use memmap2::Mmap;
 #[cfg(not(windows))]
 use memmap2::MmapOptions;
@@ -241,7 +242,7 @@ impl WalReader {
     fn try_read(&self, position: WalPosition) -> io::Result<Option<(Tag, Bytes)>> {
         #[cfg(windows)]
         {
-            self.try_read_at(position)
+            self.try_read_cached(position)
         }
 
         #[cfg(not(windows))]
@@ -274,14 +275,46 @@ impl WalReader {
     }
 
     #[cfg(windows)]
-    fn try_read_at(&self, position: WalPosition) -> io::Result<Option<(Tag, Bytes)>> {
-        let mut header = [0u8; HEADER_LEN_BYTES_USIZE];
-        match read_exact_at(&self.file, &mut header, position.start)? {
-            ReadAt::Eof => return Ok(None),
-            ReadAt::Read => {}
+    fn map_offset(&self, offset: u64) -> io::Result<Bytes> {
+        // Windows has no mmap-backed cache: keep a snapshot of each touched
+        // region so that reads share ownership with the cached entry. This
+        // keeps `cleanup()` refcount semantics identical to unix (an entry is
+        // dropped once all readers holding slices of it are gone). The snapshot
+        // is refreshed whenever the file has grown past the cached content.
+        let mut maps = self.maps.lock();
+        let file_len = self.file.metadata()?.len();
+        let want_end = file_len.min(offset.saturating_add(MAP_SIZE));
+        let covered_end = maps
+            .get(&offset)
+            .map(|cached| offset + cached.len() as u64)
+            .unwrap_or(offset);
+        if covered_end < want_end {
+            let mut buf = vec![0u8; (want_end - offset) as usize];
+            match read_exact_at(&self.file, &mut buf, offset)? {
+                ReadAt::Eof => buf.clear(),
+                ReadAt::Read => {}
+            }
+            maps.insert(offset, Bytes::from(buf));
+        } else {
+            // Region entirely beyond EOF: cache empty so header reads observe
+            // "nothing written yet".
+            maps.entry(offset)
+                .or_insert_with(|| Bytes::from(Vec::new()));
+        }
+        Ok(maps.get(&offset).cloned().expect("region just cached"))
+    }
+
+    #[cfg(windows)]
+    fn try_read_cached(&self, position: WalPosition) -> io::Result<Option<(Tag, Bytes)>> {
+        let offset = offset(position.start);
+        let bytes = self.map_offset(offset)?;
+        let buf_offset = (position.start - offset) as usize;
+        if bytes.len() < buf_offset + HEADER_LEN_BYTES_USIZE {
+            // Beyond anything written so far (mirrors zero-filled unix pages).
+            return Ok(None);
         }
 
-        let (crc, len, tag) = Self::read_header(&header);
+        let (crc, len, tag) = Self::read_header(&bytes[buf_offset..]);
         if len == 0 {
             if crc == 0 {
                 return Ok(None);
@@ -294,7 +327,7 @@ impl WalReader {
                 ),
             ));
         }
-        if len < HEADER_LEN_BYTES || len > MAP_SIZE {
+        if !(HEADER_LEN_BYTES..=MAP_SIZE).contains(&len) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -303,23 +336,13 @@ impl WalReader {
                 ),
             ));
         }
-
-        let payload_len = (len - HEADER_LEN_BYTES) as usize;
-        let mut data = vec![0u8; payload_len];
-        match read_exact_at(&self.file, &mut data, position.start + HEADER_LEN_BYTES)? {
-            ReadAt::Eof => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!(
-                        "Unexpected EOF reading wal payload at position {}",
-                        position.start
-                    ),
-                ));
-            }
-            ReadAt::Read => {}
+        if bytes.len() < buf_offset + (len as usize) {
+            // Entry header is present but the payload is not fully written yet.
+            return Ok(None);
         }
 
-        let actual_crc = crc32fast::hash(&data) as u64;
+        let bytes = bytes.slice(buf_offset + HEADER_LEN_BYTES_USIZE..buf_offset + (len as usize));
+        let actual_crc = crc32fast::hash(bytes.as_ref()) as u64;
         if actual_crc != crc {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -330,14 +353,20 @@ impl WalReader {
             ));
         }
 
-        Ok(Some((tag, Bytes::from(data))))
+        Ok(Some((tag, bytes)))
     }
 
     // Attempts cleaning internal mem maps, returning number of retained maps
     // Map can be freed when all buffers linked to this portion of a file are dropped
     pub(super) fn cleanup(&self) -> usize {
         let mut maps = self.maps.lock();
+        // Drop cached regions no longer referenced by any live read buffer.
+        // The cached value type differs per platform (mmap on unix, Vec
+        // snapshot on Windows); retain entries whose backing is still shared.
+        #[cfg(not(windows))]
         maps.retain(|_k, v| v.downcast_mut::<Mmap>().is_none());
+        #[cfg(windows)]
+        maps.retain(|_k, v| v.downcast_mut::<Vec<u8>>().is_none());
         maps.len()
     }
 

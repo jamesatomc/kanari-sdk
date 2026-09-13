@@ -2,7 +2,6 @@
 name = "KanariSystem"
 
 [dependencies]
-# Use local Move standard library
 MoveStdlib = { local = "../move-stdlib" }
 
 [addresses]

@@ -24,6 +24,25 @@ pub fn generate_falcon1024_keypair_bytes() -> Result<(Vec<u8>, Zeroizing<Vec<u8>
     generate_keypair_bytes(10, "FN-DSA-1024")
 }
 
+/// Deterministically generate an FN-DSA-512 key pair from `seed`.
+///
+/// The seed is absorbed into SHAKE256 internally, so any seed length works;
+/// callers should pass at least 32 bytes of domain-separated entropy.
+pub fn generate_falcon512_keypair_bytes_from_seed(
+    seed: &[u8],
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), SignatureError> {
+    generate_keypair_bytes_from_seed(seed, 9, "FN-DSA-512")
+}
+
+/// Deterministically generate an FN-DSA-1024 key pair from `seed`.
+///
+/// See [`generate_falcon512_keypair_bytes_from_seed`] for seed requirements.
+pub fn generate_falcon1024_keypair_bytes_from_seed(
+    seed: &[u8],
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), SignatureError> {
+    generate_keypair_bytes_from_seed(seed, 10, "FN-DSA-1024")
+}
+
 pub fn sign_falcon512(secret_key_bytes: &[u8], message: &[u8]) -> Result<Vec<u8>, SignatureError> {
     sign(
         secret_key_bytes,
@@ -111,6 +130,31 @@ fn generate_keypair_bytes(
 
 #[cfg(not(feature = "falcon"))]
 fn generate_keypair_bytes(
+    _logn: u32,
+    label: &str,
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), SignatureError> {
+    Err(SignatureError::InvalidPrivateKey(format!(
+        "{label} requires falcon or pqc feature"
+    )))
+}
+
+#[cfg(feature = "falcon")]
+fn generate_keypair_bytes_from_seed(
+    seed: &[u8],
+    logn: u32,
+    label: &str,
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), SignatureError> {
+    let keypair = FnDsaKeyPair::generate_deterministic(seed, logn)
+        .map_err(|e| SignatureError::InvalidPrivateKey(format!("{label} keygen failed: {e}")))?;
+    Ok((
+        keypair.public_key().to_vec(),
+        Zeroizing::new(keypair.private_key().to_vec()),
+    ))
+}
+
+#[cfg(not(feature = "falcon"))]
+fn generate_keypair_bytes_from_seed(
+    _seed: &[u8],
     _logn: u32,
     label: &str,
 ) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), SignatureError> {

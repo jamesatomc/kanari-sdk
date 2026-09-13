@@ -11,6 +11,11 @@
 -  [Function `borrow`](#0x2_dynamic_field_borrow)
 -  [Function `remove`](#0x2_dynamic_field_remove)
 -  [Function `exists_`](#0x2_dynamic_field_exists_)
+-  [Function `exists_with_type`](#0x2_dynamic_field_exists_with_type)
+-  [Function `contains`](#0x2_dynamic_field_contains)
+-  [Function `add_if_absent`](#0x2_dynamic_field_add_if_absent)
+-  [Function `remove_if_exists`](#0x2_dynamic_field_remove_if_exists)
+-  [Function `replace`](#0x2_dynamic_field_replace)
 
 
 <pre><code><b>use</b> <a href="object.md#0x2_object">0x2::object</a>;
@@ -69,6 +74,41 @@ Aborts with <code><a href="dynamic_field.md#0x2_dynamic_field_EFieldAlreadyExist
 
 
 </details>
+
+<a name="0x2_dynamic_field_exists_with_type"></a>
+
+## Function `exists_with_type`
+
+Returns true only when the field exists with the requested value type.
+
+<pre><code><b>public</b> <b>native</b> <b>fun</b> exists_with_type&lt;Name: <b>copy</b> + drop + store, Value: store&gt;(
+    object: &<b>UID</b>, name: Name
+): bool;
+</code></pre>
+
+<a name="0x2_dynamic_field_contains"></a>
+
+## Function `contains`
+
+Convenience alias for checking whether a field name exists.
+
+<a name="0x2_dynamic_field_add_if_absent"></a>
+
+## Function `add_if_absent`
+
+Adds a field only when the name is unused and returns whether it was added.
+
+<a name="0x2_dynamic_field_remove_if_exists"></a>
+
+## Function `remove_if_exists`
+
+Removes an existing field and returns its value in an option.
+
+<a name="0x2_dynamic_field_replace"></a>
+
+## Function `replace`
+
+Replaces an existing field and returns the previous value.
 
 <a name="0x2_dynamic_field_borrow_mut"></a>
 

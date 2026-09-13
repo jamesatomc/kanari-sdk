@@ -846,6 +846,30 @@ impl Reference {
     pub fn write_ref(self, x: Value) -> PartialVMResult<()> {
         self.0.write_ref(x)
     }
+
+    /// Borrow the `idx`-th field of the struct behind this reference.
+    /// Used by framework natives (e.g. `borrow_uid`) that project a live
+    /// reference to a privileged first field such as an object's `UID`.
+    /// The returned reference keeps the same backing storage as `self`,
+    /// so it obeys the VM's regular borrow rules.
+    pub fn borrow_struct_field(&self, idx: usize) -> PartialVMResult<Value> {
+        match &self.0 {
+            ReferenceImpl::ContainerRef(r) => Ok(Value(r.borrow_elem(idx)?)),
+            ReferenceImpl::IndexedRef(r) => {
+                // Resolve one level: the indexed element must itself be a
+                // struct reference, then borrow its field.
+                match r.container_ref.borrow_elem(r.idx)? {
+                    ValueImpl::ContainerRef(r2) => Ok(Value(r2.borrow_elem(idx)?)),
+                    _ => Err(PartialVMError::new(
+                        StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR,
+                    )
+                    .with_message(
+                        "cannot borrow struct field through non-struct reference".to_string(),
+                    )),
+                }
+            }
+        }
+    }
 }
 
 /***************************************************************************************

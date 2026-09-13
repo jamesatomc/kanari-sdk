@@ -14,7 +14,7 @@ pub struct WalletInfo {
     #[arg(short, long)]
     pub password: String,
     /// Show private key and seed phrase (dangerous!)
-    #[arg(long, default_value = "false")]
+    #[arg(long, default_value = "true")]
     pub show_secrets: bool,
 }
 
@@ -60,8 +60,8 @@ impl WalletInfo {
                 eprintln!("   {}\n", wallet.seed_phrase.as_str());
             } else {
                 eprintln!("Seed Phrase:");
-                eprintln!("   Not available - Post-Quantum keys use direct generation");
-                eprintln!("   PQC algorithms don't support BIP39/BIP32 derivation\n");
+                eprintln!("   Not stored for this wallet (created with direct random generation).");
+                eprintln!("   All curves, including post-quantum ones, support BIP39 mnemonics.\n");
             }
 
             eprintln!("CRITICAL WARNING:");

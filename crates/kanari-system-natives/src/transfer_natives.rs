@@ -29,6 +29,7 @@ const TYPE_NAME_MAX_LEN: usize = 256;
 pub struct GasParameters {
     pub transfer_with_uid: TransferWithUidGasParameters,
     pub freeze_object: FreezeObjectGasParameters,
+    pub share_object: ShareObjectGasParameters,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,12 @@ pub struct FreezeObjectGasParameters {
     pub per_byte: InternalGasPerByte,
 }
 
+#[derive(Debug, Clone)]
+pub struct ShareObjectGasParameters {
+    pub base: InternalGas,
+    pub per_byte: InternalGasPerByte,
+}
+
 impl GasParameters {
     pub fn zeros() -> Self {
         Self {
@@ -51,6 +58,10 @@ impl GasParameters {
                 per_byte: 0.into(),
             },
             freeze_object: FreezeObjectGasParameters {
+                base: 0.into(),
+                per_byte: 0.into(),
+            },
+            share_object: ShareObjectGasParameters {
                 base: 0.into(),
                 per_byte: 0.into(),
             },
@@ -128,6 +139,7 @@ impl TransferredObjectsExt {
 pub fn make_all(gas_params: GasParameters) -> impl Iterator<Item = (String, NativeFunction)> {
     let transfer_params = gas_params.transfer_with_uid;
     let freeze_params = gas_params.freeze_object;
+    let share_params = gas_params.share_object;
 
     let transfer_with_uid: NativeFunction = Arc::new(move |context, ty_args, args| {
         native_transfer_with_uid(&transfer_params, context, ty_args, args)
@@ -135,9 +147,13 @@ pub fn make_all(gas_params: GasParameters) -> impl Iterator<Item = (String, Nati
     let freeze_object: NativeFunction = Arc::new(move |context, ty_args, args| {
         native_freeze_object(&freeze_params, context, ty_args, args)
     });
+    let share_object: NativeFunction = Arc::new(move |context, ty_args, args| {
+        native_share_object(&share_params, context, ty_args, args)
+    });
     make_module_natives([
         ("transfer_with_uid", transfer_with_uid),
         ("freeze_object", freeze_object),
+        ("share_object", share_object),
     ])
 }
 
@@ -253,5 +269,46 @@ fn native_freeze_object(
     };
     record_transferred_object(context, obj);
 
+    Ok(NR::ok(context.gas_used(), smallvec![]))
+}
+
+// transfer::share_object<T: key + store>(obj: T)
+// Shares the object (makes it a shared object readable by anyone)
+fn native_share_object(
+    gas_params: &ShareObjectGasParameters,
+    context: &mut NativeContext,
+    ty_args: Vec<Type>,
+    mut arguments: VecDeque<move_vm_types::values::Value>,
+) -> PartialVMResult<NativeResult> {
+    use move_vm_types::natives::function::NativeResult as NR;
+
+    expect_native_signature(arguments.len(), 1, ty_args.len(), 1)?;
+
+    let obj_val = arguments.pop_back().ok_or_else(|| {
+        PartialVMError::new(move_core_types::vm_status::StatusCode::INTERNAL_TYPE_ERROR)
+            .with_message("Missing object argument".to_string())
+    })?;
+
+    let ty = &ty_args[0];
+    let type_tag = context.type_to_type_tag(ty)?;
+    let type_str = format!("{}", type_tag);
+    if type_str.len() > TYPE_NAME_MAX_LEN {
+        return Ok(NR::err(context.gas_used(), E_TYPE_NAME_TOO_LONG));
+    }
+    native_charge_gas_early_exit!(context, gas_params.base);
+    let obj_data = serialize_object_data(context, ty, &obj_val)?;
+    let data_len = obj_data.len() as u64;
+    native_charge_gas_early_exit!(context, gas_params.per_byte * NumBytes::new(data_len));
+    let object_id_hex = object_id_hex_from_data(&obj_data)?;
+    // Shared objects are persisted as not-frozen but with no single owner (treated as shared)
+    let obj = TransferredObject {
+        object_id: object_id_hex,
+        object_type: type_str,
+        recipient: AccountAddress::ZERO,
+        data: obj_data,
+        should_persist: true,
+        is_frozen: false,
+    };
+    record_transferred_object(context, obj);
     Ok(NR::ok(context.gas_used(), smallvec![]))
 }

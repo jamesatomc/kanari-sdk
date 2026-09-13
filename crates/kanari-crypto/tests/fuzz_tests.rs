@@ -6,6 +6,7 @@
 
 use kanari_crypto::{
     CurveType, decrypt_data, encrypt_data, generate_keypair, hash_data, is_password_strong,
+    keypair_from_mnemonic, keypair_from_seed,
     signatures::{sign_message, verify_signature},
 };
 use proptest::prelude::*;
@@ -185,8 +186,8 @@ fn prop_fuzz_password_validation() {
 #[test]
 fn prop_fuzz_key_generation() {
     proptest!(crypto_fuzz_config(), |(curve_selector: u8)| {
-        // Map to different curve types
-        let curve_type = match curve_selector % 9 {
+        // Map to different curve types (all 11 supported types)
+        let curve_type = match curve_selector % 11 {
             0 => CurveType::K256,
             1 => CurveType::P256,
             2 => CurveType::Ed25519,
@@ -194,8 +195,10 @@ fn prop_fuzz_key_generation() {
             4 => CurveType::Dilithium3,
             5 => CurveType::Dilithium5,
             6 => CurveType::SphincsPlusSha256Robust,
-            7 => CurveType::Ed25519Dilithium3,
-            8 => CurveType::K256Dilithium3,
+            7 => CurveType::Falcon512,
+            8 => CurveType::Falcon1024,
+            9 => CurveType::Ed25519Dilithium3,
+            10 => CurveType::K256Dilithium3,
             _ => return Ok(()),
         };
 
@@ -218,6 +221,77 @@ fn prop_fuzz_key_generation() {
             prop_assert!(!parsed_addr.is_empty(), "Parsed address should not be empty");
         } else {
             panic!("Tagged address should always be parseable");
+        }
+    });
+}
+
+/// Fuzz deterministic PQC/hybrid derivation from seeds and mnemonics.
+///
+/// Covers the new derivation paths: arbitrary 64+ byte seeds must never panic,
+/// must be deterministic, and distinct curves must not collide. Arbitrary
+/// strings fed as mnemonics must return Ok or Err but never panic.
+#[test]
+fn prop_fuzz_pqc_mnemonic_derivation() {
+    proptest!(crypto_fuzz_config(), |(curve_selector: u8, seed: Vec<u8>)| {
+        prop_assume!(seed.len() <= 256);
+
+        let curve_type = match curve_selector % 11 {
+            0 => CurveType::K256,
+            1 => CurveType::P256,
+            2 => CurveType::Ed25519,
+            3 => CurveType::Dilithium2,
+            4 => CurveType::Dilithium3,
+            5 => CurveType::Dilithium5,
+            6 => CurveType::SphincsPlusSha256Robust,
+            7 => CurveType::Falcon512,
+            8 => CurveType::Falcon1024,
+            9 => CurveType::Ed25519Dilithium3,
+            10 => CurveType::K256Dilithium3,
+            _ => return Ok(()),
+        };
+
+        // Short seeds must be rejected, never panic
+        if seed.len() < 64 {
+            prop_assert!(keypair_from_seed(&seed, curve_type).is_err());
+            return Ok(());
+        }
+
+        // Valid-length seeds: derivation succeeds, is deterministic, well-formed
+        let kp = keypair_from_seed(&seed, curve_type)
+            .expect("64+ byte seed must derive successfully");
+        prop_assert!(kp.address.starts_with("0x"));
+        prop_assert!(!kp.public_key.is_empty());
+        if curve_type.is_post_quantum() {
+            prop_assert!(kp.pqc_public_key.is_some());
+        }
+        let kp2 = keypair_from_seed(&seed, curve_type).expect("repeat derivation");
+        prop_assert_eq!(kp.address, kp2.address, "Derivation must be deterministic");
+        prop_assert_eq!(kp.public_key, kp2.public_key);
+    });
+
+    // Arbitrary strings as mnemonic input: Ok or Err, never a panic.
+    proptest!(crypto_fuzz_config(), |(curve_selector: u8, words in proptest::collection::vec("[a-z]{1,8}", 0..30))| {
+        let curve_type = match curve_selector % 11 {
+            0 => CurveType::K256,
+            1 => CurveType::P256,
+            2 => CurveType::Ed25519,
+            3 => CurveType::Dilithium2,
+            4 => CurveType::Dilithium3,
+            5 => CurveType::Dilithium5,
+            6 => CurveType::SphincsPlusSha256Robust,
+            7 => CurveType::Falcon512,
+            8 => CurveType::Falcon1024,
+            9 => CurveType::Ed25519Dilithium3,
+            10 => CurveType::K256Dilithium3,
+            _ => return Ok(()),
+        };
+        let phrase = words.join(" ");
+        // Must not panic regardless of validity
+        if let Ok(kp) = keypair_from_mnemonic(&phrase, curve_type) {
+            prop_assert!(kp.address.starts_with("0x"));
+            // And a repeat derivation agrees
+            let kp2 = keypair_from_mnemonic(&phrase, curve_type).expect("repeat");
+            prop_assert_eq!(kp.address, kp2.address);
         }
     });
 }

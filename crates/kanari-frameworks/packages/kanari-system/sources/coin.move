@@ -29,19 +29,19 @@ module kanari_system::coin {
     // --- Data Structures ---
 
     /// Coin resource wrapper with balance
-    struct Coin<phantom T> has key, store, drop {
+    struct Coin<phantom T> has key, store {
         id: object::UID,
         balance: Balance<T>,
     }
 
     /// Capability allowing the bearer to mint and burn coins
-    struct TreasuryCap<phantom T> has key, store, drop {
+    struct TreasuryCap<phantom T> has key, store {
         id: object::UID,
         total_supply: u64, // Tracking total supply directly in the cap
     }
 
     /// Metadata resource for a currency (stored as an object with UID)
-    struct CoinMetadata<phantom T> has key, store, drop {
+    struct CoinMetadata<phantom T> has key, store {
         id: object::UID,
         decimals: u8,
         name: string::String,
@@ -54,9 +54,14 @@ module kanari_system::coin {
 
     // --- Public Functions ---
 
+    const ESymbolEmpty: u64 = 7;
+    const ESymbolTooLong: u64 = 8;
+    const ENameEmpty: u64 = 9;
+
     /// Create a new currency with TreasuryCap for minting control and return the
     /// TreasuryCap and the Metadata object. Callers may transfer/freeze the
     /// returned objects as appropriate for their use-case.
+    /// Security: validates symbol/name, enforces one-time witness consumption.
     public fun create_currency<T: drop>(
         witness: T,
         decimals: u8,
@@ -66,18 +71,19 @@ module kanari_system::coin {
         icon_url: option::Option<url::Url>,
         ctx: &mut TxContext,
     ): (TreasuryCap<T>, CoinMetadata<T>) {
-        // 1. Consume the witness type
+        // Consume the one-time witness — only the module that defines `T` can provide it.
         let _ = witness;
         
-        // Basic safety checks for decimals
-        assert!(decimals <= 27, EINVALID_DECIMALS); 
+        assert!(decimals <= 9, EINVALID_DECIMALS); // Sui-compatible: max 9 decimals 
+        assert!(vector::length(&symbol_bytes) > 0, ESymbolEmpty);
+        assert!(vector::length(&symbol_bytes) <= 10, ESymbolTooLong);
+        assert!(vector::length(&name_bytes) > 0, ENameEmpty);
+        assert!(vector::length(&name_bytes) <= 50, ENameEmpty);
 
-        // Convert byte literals into string types
         let symbol = ascii::string(symbol_bytes);
         let name = string::utf8(name_bytes);
         let description = string::utf8(description_bytes);
 
-        // 2. Create the Capability and Metadata, explicitly specifying the generic type T
         let treasury_cap = TreasuryCap<T> { id: object::new(ctx), total_supply: 0 };
         let metadata = CoinMetadata<T> { 
             id: object::new(ctx), 
@@ -88,7 +94,6 @@ module kanari_system::coin {
             icon_url 
         };
 
-        // Return the newly-created capability and metadata.
         (treasury_cap, metadata)
     }
 
@@ -104,7 +109,11 @@ module kanari_system::coin {
         ctx: &mut TxContext,
     ): (TreasuryCap<T>, kanari_system::deny_list::DenyCap<T>, CoinMetadata<T>) {
         let _ = witness;
-        assert!(decimals <= 27, EINVALID_DECIMALS);
+        assert!(decimals <= 9, EINVALID_DECIMALS); // Sui-compatible: max 9 decimals
+        assert!(vector::length(&symbol_bytes) > 0, ESymbolEmpty);
+        assert!(vector::length(&symbol_bytes) <= 10, ESymbolTooLong);
+        assert!(vector::length(&name_bytes) > 0, ENameEmpty);
+        assert!(vector::length(&name_bytes) <= 50, ENameEmpty);
 
         let symbol = ascii::string(symbol_bytes);
         let name = string::utf8(name_bytes);
@@ -125,12 +134,12 @@ module kanari_system::coin {
 
     /// Mint new coins using TreasuryCap
     /// Returns the newly minted Coin<T>.
+    /// Sui-compatible: zero amounts are allowed (overflow still aborts).
     public fun mint<T>(
         cap: &mut TreasuryCap<T>,
         amount: u64,
         ctx: &mut TxContext,
     ): Coin<T> {
-        assert!(amount > 0, EZERO_AMOUNT);
         let new_total = cap.total_supply + amount;
         assert!(new_total >= cap.total_supply, EOVERFLOW);
         cap.total_supply = new_total;
@@ -141,19 +150,31 @@ module kanari_system::coin {
         }
     }
 
-    /// Mint and transfer to recipient
-    public fun mint_and_transfer<T>(
+    /// Mint some amount of T as a `Balance` and increase total supply (Sui API).
+    public fun mint_balance<T>(cap: &mut TreasuryCap<T>, amount: u64): Balance<T> {
+        let new_total = cap.total_supply + amount;
+        assert!(new_total >= cap.total_supply, EOVERFLOW);
+        cap.total_supply = new_total;
+        object::save_object(cap);
+        kanari_system::balance::create<T>(amount)
+    }
+
+    /// Mint and transfer to recipient.
+    /// SECURITY: rejects `@0x0` early so freshly minted value can't be burned
+    /// to the zero address by mistake (transfer would abort anyway).
+    public entry fun mint_and_transfer<T>(
         cap: &mut TreasuryCap<T>,
         amount: u64,
         recipient: address,
         ctx: &mut TxContext,
     ) {
+        assert!(recipient != @0x0, EInvalidArg);
         let coin = mint(cap, amount, ctx);
         transfer::public_transfer(coin, recipient);
     }
 
     /// Burn coins, decreasing total supply
-    public fun burn<T>(cap: &mut TreasuryCap<T>, coin: Coin<T>): u64 {
+    public entry fun burn<T>(cap: &mut TreasuryCap<T>, coin: Coin<T>): u64 {
         let Coin { id: _, balance } = coin;
         let value = kanari_system::balance::destroy<T>(balance);
         assert!(cap.total_supply >= value, EUNDERFLOW);
@@ -186,6 +207,29 @@ module kanari_system::coin {
         kanari_system::balance::value(&coin.balance)
     }
 
+    /// Get immutable reference to the balance of a coin (Sui API).
+    public fun balance<T>(coin: &Coin<T>): &Balance<T> {
+        &coin.balance
+    }
+
+    /// Get a mutable reference to the balance of a coin (Sui API).
+    public fun balance_mut<T>(coin: &mut Coin<T>): &mut Balance<T> {
+        &mut coin.balance
+    }
+
+    /// Take a `Coin` worth of `value` from a `Balance` (Sui API).
+    public fun take<T>(balance: &mut Balance<T>, value: u64, ctx: &mut TxContext): Coin<T> {
+        Coin {
+            id: object::new(ctx),
+            balance: kanari_system::balance::split(balance, value),
+        }
+    }
+
+    /// Put a `Coin<T>` into a `Balance<T>` (Sui API).
+    public fun put<T>(balance: &mut Balance<T>, coin: Coin<T>) {
+        kanari_system::balance::join(balance, into_balance(coin));
+    }
+
     /// Create a zero-value Coin<T> (useful for testing and as a starting point)
     public fun zero<T>(ctx: &mut TxContext): Coin<T> {
         Coin {
@@ -205,7 +249,9 @@ module kanari_system::coin {
     }
 
     /// Join two coins together (adds the balance of 'other' into 'coin').
-    public fun join<T>(coin: &mut Coin<T>, other: Coin<T>) {
+    /// Sui-compatible `public entry` so it is callable both from Move and as
+    /// a transaction entry.
+    public entry fun join<T>(coin: &mut Coin<T>, other: Coin<T>) {
         let Coin { id: _, balance } = other;
         kanari_system::balance::merge(&mut coin.balance, balance);
         object::save_object(coin);
@@ -245,44 +291,124 @@ module kanari_system::coin {
 
 
     // ==========================================
-    // 🟢 Functions to update CoinMetadata
+    //  Functions to update CoinMetadata
     // ==========================================
 
-    /// Update the icon URL for the given coin type. 
+    /// Update the icon URL for the given coin type.
     /// Only the holder of the TreasuryCap can perform this action.
-    public fun update_icon_url<T>(
+    /// Sui-compatible signature: takes `ascii::String`, wraps with `new_unsafe`.
+    public entry fun update_icon_url<T>(
         _treasury: &TreasuryCap<T>,
         metadata: &mut CoinMetadata<T>,
-        url: option::Option<url::Url>
+        url: ascii::String
     ) {
-        metadata.icon_url = url;
+        metadata.icon_url = option::some(url::new_unsafe(url));
+        object::save_object(metadata);
     }
 
     /// Update the name for the given coin type.
-    public fun update_name<T>(
+    public entry fun update_name<T>(
         _treasury: &TreasuryCap<T>,
         metadata: &mut CoinMetadata<T>,
         name: string::String
     ) {
+        assert!(string::length(&name) > 0, ENameEmpty);
         metadata.name = name;
+        object::save_object(metadata);
     }
 
     /// Update the symbol for the given coin type.
-    public fun update_symbol<T>(
+    public entry fun update_symbol<T>(
         _treasury: &TreasuryCap<T>,
         metadata: &mut CoinMetadata<T>,
         symbol: ascii::String
     ) {
+        assert!(ascii::length(&symbol) > 0, ESymbolEmpty);
+        assert!(ascii::length(&symbol) <= 10, ESymbolTooLong);
         metadata.symbol = symbol;
+        object::save_object(metadata);
     }
 
     /// Update the description for the given coin type.
-    public fun update_description<T>(
+    public entry fun update_description<T>(
         _treasury: &TreasuryCap<T>,
         metadata: &mut CoinMetadata<T>,
         description: string::String
     ) {
         metadata.description = description;
+        object::save_object(metadata);
     }
-    
+
+    // === Get coin metadata fields for on-chain consumption (Sui API) ===
+
+    public fun get_decimals<T>(metadata: &CoinMetadata<T>): u8 {
+        metadata.decimals
+    }
+
+    public fun get_name<T>(metadata: &CoinMetadata<T>): string::String {
+        metadata.name
+    }
+
+    public fun get_symbol<T>(metadata: &CoinMetadata<T>): ascii::String {
+        metadata.symbol
+    }
+
+    public fun get_description<T>(metadata: &CoinMetadata<T>): string::String {
+        metadata.description
+    }
+
+    public fun get_icon_url<T>(metadata: &CoinMetadata<T>): option::Option<url::Url> {
+        metadata.icon_url
+    }
+
+    // === Regulated coin: deny-list helpers (Sui v1 names) ===
+
+    /// Adds the given address to the deny list (Sui `coin::deny_list_add` API).
+    public fun deny_list_add<T>(
+        deny_list: &mut kanari_system::deny_list::DenyList<T>,
+        deny_cap: &kanari_system::deny_list::DenyCap<T>,
+        addr: address,
+        ctx: &mut TxContext,
+    ) {
+        kanari_system::deny_list::deny_list_add(deny_list, deny_cap, addr, ctx);
+    }
+
+    /// Removes an address from the deny list (Sui `coin::deny_list_remove` API).
+    public fun deny_list_remove<T>(
+        deny_list: &mut kanari_system::deny_list::DenyList<T>,
+        deny_cap: &kanari_system::deny_list::DenyCap<T>,
+        addr: address,
+        ctx: &mut TxContext,
+    ) {
+        kanari_system::deny_list::deny_list_remove(deny_list, deny_cap, addr, ctx);
+    }
+
+    /// Returns true iff the given address is denied (Sui `coin::deny_list_contains` API).
+    public fun deny_list_contains<T>(
+        deny_list: &kanari_system::deny_list::DenyList<T>,
+        addr: address,
+    ): bool {
+        kanari_system::deny_list::contains(deny_list, addr)
+    }
+
+    // === Test-only helpers (Sui API) ===
+
+    #[test_only]
+    /// Mint coins of any type for testing purposes only (Sui API).
+    public fun mint_for_testing<T>(value: u64, ctx: &mut TxContext): Coin<T> {
+        Coin { id: object::new(ctx), balance: kanari_system::balance::create_for_testing(value) }
+    }
+
+    #[test_only]
+    /// Burn coins of any type for testing purposes only (Sui API).
+    public fun burn_for_testing<T>(coin: Coin<T>): u64 {
+        let Coin { id: _, balance } = coin;
+        kanari_system::balance::destroy_for_testing(balance)
+    }
+
+    #[test_only]
+    /// Create a `TreasuryCap` for any `Coin` for testing purposes (Sui API).
+    public fun create_treasury_cap_for_testing<T>(ctx: &mut TxContext): TreasuryCap<T> {
+        TreasuryCap { id: object::new(ctx), total_supply: 0 }
+    }
 }
