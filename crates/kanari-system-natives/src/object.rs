@@ -9,6 +9,7 @@ use move_vm_runtime::native_functions::NativeContext;
 use move_vm_runtime::native_functions::NativeFunction;
 use move_vm_types::natives::function::NativeResult;
 use move_vm_types::natives::function::PartialVMResult;
+use move_vm_types::values::Value;
 use smallvec::smallvec;
 use std::collections::VecDeque;
 use std::str::FromStr;
@@ -29,6 +30,7 @@ pub struct GasParameters {
     pub borrow_global: BorrowGlobalGasParameters,
     pub borrow_global_mut: BorrowGlobalMutGasParameters,
     pub object_id: ObjectIdGasParameters,
+    pub borrow_uid: BorrowUidGasParameters,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +61,11 @@ pub struct ObjectIdGasParameters {
     pub base: InternalGas,
 }
 
+#[derive(Debug, Clone)]
+pub struct BorrowUidGasParameters {
+    pub base: InternalGas,
+}
+
 impl GasParameters {
     pub fn zeros() -> Self {
         Self {
@@ -76,6 +83,7 @@ impl GasParameters {
                 per_byte_loaded: 0.into(),
             },
             object_id: ObjectIdGasParameters { base: 0.into() },
+            borrow_uid: BorrowUidGasParameters { base: 0.into() },
         }
     }
 }
@@ -209,6 +217,7 @@ pub fn make_all(gas_params: GasParameters) -> impl Iterator<Item = (String, Nati
     let borrow_params = gas_params.borrow_global.clone();
     let borrow_mut_params = gas_params.borrow_global_mut.clone();
     let id_params = gas_params.object_id.clone();
+    let borrow_uid_params = gas_params.borrow_uid.clone();
 
     let save_object: NativeFunction = Arc::new(move |context, ty_args, args| {
         native_save_object(&save_params, context, ty_args, args)
@@ -225,12 +234,16 @@ pub fn make_all(gas_params: GasParameters) -> impl Iterator<Item = (String, Nati
     let object_id: NativeFunction = Arc::new(move |context, ty_args, args| {
         native_object_id(&id_params, context, ty_args, args)
     });
+    let borrow_uid: NativeFunction = Arc::new(move |context, ty_args, args| {
+        native_borrow_uid(&borrow_uid_params, context, ty_args, args)
+    });
     make_module_natives([
         ("save_object", save_object),
         ("delete_impl", delete_impl),
         ("borrow_global", borrow_global),
         ("borrow_global_mut", borrow_global_mut),
         ("id", object_id),
+        ("borrow_uid", borrow_uid),
     ])
 }
 
@@ -516,6 +529,31 @@ fn native_object_id(
     let addr = AccountAddress::from_bytes(&addr_bytes).unwrap_or(AccountAddress::ZERO);
     let id_struct = Value::struct_(Struct::pack(vec![Value::address(addr)]));
     Ok(NR::ok(context.gas_used(), smallvec![id_struct]))
+}
+
+/// Native function: borrow_uid<T: key>(obj: &T): &UID
+/// Returns a live reference to the first field of an object struct, which by
+/// framework convention is always its `UID`. The Move bytecode verifier of
+/// chains with privileged objects enforces this layout; here the VM runtime
+/// type-checks the returned reference against `&UID`, so borrowing a struct
+/// whose first field is not a `UID` aborts instead of producing an
+/// unsound reference.
+fn native_borrow_uid(
+    gas_params: &BorrowUidGasParameters,
+    context: &mut NativeContext,
+    ty_args: Vec<move_vm_types::loaded_data::runtime_types::Type>,
+    mut arguments: VecDeque<Value>,
+) -> PartialVMResult<NativeResult> {
+    use move_vm_types::natives::function::NativeResult as NR;
+    use move_vm_types::pop_arg;
+    use move_vm_types::values::values_impl::Reference;
+
+    native_charge_gas_early_exit!(context, gas_params.base);
+    expect_native_signature(arguments.len(), 1, ty_args.len(), 1)?;
+
+    let obj_ref = pop_arg!(arguments, Reference);
+    let uid_ref = obj_ref.borrow_struct_field(0)?;
+    Ok(NR::ok(context.gas_used(), smallvec![uid_ref]))
 }
 
 #[cfg(test)]

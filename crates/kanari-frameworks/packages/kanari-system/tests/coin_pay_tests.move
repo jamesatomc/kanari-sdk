@@ -51,12 +51,13 @@ module kanari_system::coin_pay_tests {
     }
 
     #[test]
-    #[expected_failure(location = kanari_system::coin, abort_code = 3)]
-    fun mint_zero_aborts() {
+    fun mint_zero_allowed_like_sui() {
         let ctx = &mut tx_context::dummy();
         let (cap, metadata) = new_currency(ctx);
-        let bad = coin::mint(&mut cap, 0, ctx);
-        transfer::public_transfer(bad, @0x1);
+        let zero_coin = coin::mint(&mut cap, 0, ctx);
+        assert!(coin::value(&zero_coin) == 0, 0);
+        assert!(coin::total_supply(&cap) == 0, 1);
+        coin::destroy_zero(zero_coin);
         transfer::public_transfer(cap, @0x1);
         transfer::public_transfer(metadata, @0x1);
     }

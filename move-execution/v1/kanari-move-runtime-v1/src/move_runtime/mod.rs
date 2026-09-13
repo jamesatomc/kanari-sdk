@@ -7,6 +7,7 @@ use anyhow::{Context, Result, ensure};
 use kanari_crypto::hash_data_blake3;
 use kanari_system_natives::dynamic_field::DynamicFieldsExt;
 use kanari_system_natives::event::EventsExt;
+use kanari_system_natives::tx_context::TxInfoExt;
 use kanari_system_natives::object::{
     BorrowedObjectsExt, DeletedObjectsExt, LoadedObjectsExt, SavedObjectsExt,
 };
@@ -1447,6 +1448,14 @@ impl MoveRuntime {
             .tracing_clone_with_overlay(state_overlay.clone());
         let mut session =
             self.create_session_with_resolver(&vm_guard, resolver, state_overlay.clone());
+
+        // Share per-transaction info (gas price, sponsor) with `tx_context`
+        // natives. `gas_info` is `(gas_limit, gas_price)`; absence means the
+        // natives fall back to defaults (0 / none).
+        session.get_native_extensions().add(TxInfoExt {
+            gas_price: gas_info.map(|(_, price)| price),
+            sponsor: None,
+        });
         let mut deterministic_reads = std::collections::BTreeSet::from([format!(
             "module:{}:{}",
             module_id.address().to_hex_literal(),

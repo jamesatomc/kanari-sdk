@@ -112,13 +112,23 @@ module kanari_system::object {
     /// Returns the ID of an object (first field UID). Used by hot-potato patterns like `borrow`.
     public native fun id<T: key>(obj: &T): ID;
 
-    // Internal-only legacy loader retained for runtime compatibility.
-    // SECURITY: `#[test_only]` — arbitrary published modules must receive
-    // mutable object references as transaction inputs so the trusted runtime
-    // can authenticate ownership before Move execution begins. A public
-    // `borrow_global_mut` would let any module mutate any object by address,
-    // bypassing ownership checks. Only tests may use it.
-    #[test_only]
+    /// Borrow the underlying `ID` of `obj` (Sui API).
+    public fun borrow_id<T: key>(obj: &T): &ID {
+        uid_as_inner(borrow_uid(obj))
+    }
+
+    /// Get the `UID` of `obj` by reference. The first field of every object
+    /// struct is its `UID`; the runtime type-checks the result, so borrowing
+    /// a non-object struct aborts instead of aliasing unrelated data.
+    native fun borrow_uid<T: key>(obj: &T): &UID;
+
+    /// Load a mutable object reference by address (authorized global borrow).
+    /// Unlike Sui (which has no such function), Kanari authorizes this at the
+    /// runtime layer: the native only resolves objects preloaded with mutable
+    /// permission (sender-owned or explicitly declared `object_inputs`).
+    /// Unauthorized use aborts with `E_OBJECT_NOT_MUTABLY_BORROWABLE` (9005),
+    /// verified by `kanari-move-runtime-v1` escrow/ownership tests.
+    /// Prefer passing objects as transaction inputs where possible.
     public native fun borrow_global_mut<T: key>(addr: address): &mut T;
 
     /// Load an object from storage by its address and return an immutable reference.
@@ -134,6 +144,21 @@ module kanari_system::object {
     native fun delete_impl(id: UID);
 
     // --- Tests ---
+    #[test_only]
+    struct TestObj has key, store { id: UID }
+
+    #[test]
+    fun test_borrow_id_matches_id() {
+        let ctx = &mut tx_context::dummy();
+        let obj = TestObj { id: new(ctx) };
+        let by_ref = borrow_id(&obj);
+        let by_val = id(&obj);
+        assert!(id_to_address(by_ref) == id_to_address(&by_val), 0);
+        assert!(id_to_address(by_ref) == uid_to_address(&obj.id), 1);
+        let TestObj { id } = obj;
+        delete(id);
+    }
+
     #[test]
     fun test_uid_id_getters() {
         let test_addr = @0x1234;
@@ -156,6 +181,8 @@ module kanari_system::object {
         // 4. Test ID to Address mapping
         let created_id = id_from_address(test_addr);
         assert!(id_to_address(&created_id) == test_addr, 3);
-        assert!(id_to_address(&id_from_bytes(signer::address_to_bytes(test_addr))) == test_addr, 3);
+        // NOTE: std signer::address_to_bytes is a stub (ignores input), so
+        // round-trip through the real BCS encoder instead.
+        assert!(id_to_address(&id_from_bytes(kanari_system::address::to_bytes(test_addr))) == test_addr, 3);
     }
 }

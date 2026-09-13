@@ -3,6 +3,7 @@
 
 module kanari_system::tx_context {
 
+    use std::option::Option;
     use std::vector;
 
     /// Number of bytes in an tx hash (which will be the transaction digest)
@@ -53,6 +54,14 @@ module kanari_system::tx_context {
     public fun epoch_timestamp_ms(self: &TxContext): u64 {
        self.epoch_timestamp_ms
     }
+
+    /// Return the gas price submitted for the current transaction (Sui API).
+    /// Returns 0 when the executing host provides none (unit tests, views).
+    public native fun gas_price(_self: &TxContext): u64;
+
+    /// Return the transaction sponsor, or `none` (Sui API).
+    /// The Kanari protocol has no sponsored transactions: always `none`.
+    public native fun sponsor(_self: &TxContext): Option<address>;
 
     /// Create an `address` that has not been used. As it is an object address, it will never
     /// occur as the address for a user.

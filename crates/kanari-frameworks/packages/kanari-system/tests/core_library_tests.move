@@ -108,4 +108,13 @@ module kanari_system::core_library_tests {
         assert!(tx_context::epoch(ctx) == 10, 46);
         assert!(tx_context::epoch_timestamp_ms(ctx) == 1734, 47);
     }
+
+    #[test]
+    fun tx_context_gas_and_sponsor_defaults_in_tests() {
+        let ctx = &mut tx_context::dummy();
+        // No gas submitted in unit tests: native falls back to 0.
+        assert!(tx_context::gas_price(ctx) == 0, 50);
+        // Kanari protocol has no sponsored transactions.
+        assert!(std::option::is_none(&tx_context::sponsor(ctx)), 51);
+    }
 }
