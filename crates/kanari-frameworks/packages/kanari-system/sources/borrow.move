@@ -18,7 +18,9 @@ module kanari_system::borrow {
     }
 
     /// A hot potato making sure the object is put back once borrowed.
-    struct Borrow has drop {
+    /// SECURITY: must NOT have `drop`/`store`/`key` — otherwise the borrower
+    /// could drop the hot potato and keep `T` without calling `put_back`.
+    struct Borrow {
         ref: address,
         obj: ID
     }

@@ -3,14 +3,11 @@
 
 module kanari_system::tx_context {
 
-    #[test_only]
     use std::vector;
 
-    #[test_only]
     /// Number of bytes in an tx hash (which will be the transaction digest)
     const TX_HASH_LENGTH: u64 = 32;
 
-    #[test_only]
     /// Expected an tx hash of length 32, but found a different length
     const EBadTxHashLength: u64 = 0;
 
@@ -76,7 +73,23 @@ module kanari_system::tx_context {
 
     /// Derive an object id.
     /// Hashes `tx_hash || ids_created` to produce a unique object address.
+    /// NOTE: the Rust native does not check length; pass a 32-byte digest.
+    /// `fresh_object_address` always does (VM-provided `tx_hash`). Direct
+    /// callers with a malformed hash get a derived address that is only
+    /// meaningful off-chain — use `TX_HASH_LENGTH` + `assert_tx_hash_len`.
     native public fun derive_id(tx_hash: vector<u8>, ids_created: u64): address;
+
+    /// Checked wrapper: aborts unless `tx_hash` is 32 bytes.
+    /// Prefer this for direct calls outside `fresh_object_address`.
+    public fun derive_id_checked(tx_hash: vector<u8>, ids_created: u64): address {
+        assert!(vector::length(&tx_hash) == TX_HASH_LENGTH, EBadTxHashLength);
+        derive_id(tx_hash, ids_created)
+    }
+
+    /// Abort unless `tx_hash` is a valid 32-byte digest.
+    public fun assert_tx_hash_len(tx_hash: &vector<u8>) {
+        assert!(vector::length(tx_hash) == TX_HASH_LENGTH, EBadTxHashLength);
+    }
 
 
     // ==== test-only functions ====

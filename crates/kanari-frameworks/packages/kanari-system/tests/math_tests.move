@@ -98,4 +98,23 @@ module kanari_system::math_tests {
     fun test_mul_div_round_up_zero_denominator() {
         math::mul_div_round_up_u64(10, 20, 0);
     }
+
+    #[test]
+    #[expected_failure(location = kanari_system::math, abort_code = math::E_DIVIDE_BY_ZERO)]
+    fun test_mul_div_u64_zero_denominator() {
+        math::mul_div_u64(10, 20, 0);
+    }
+
+    #[test]
+    #[expected_failure(location = kanari_system::math, abort_code = math::E_RESULT_OVERFLOW)]
+    fun test_mul_div_u64_result_overflow() {
+        // (U64MAX * U64MAX) / 1 does not fit in u64 — must abort, not truncate.
+        math::mul_div_u64(18446744073709551615, 18446744073709551615, 1);
+    }
+
+    #[test]
+    #[expected_failure(location = kanari_system::math, abort_code = math::E_RESULT_OVERFLOW)]
+    fun test_mul_div_round_up_u64_result_overflow() {
+        math::mul_div_round_up_u64(18446744073709551615, 18446744073709551615, 1);
+    }
 }

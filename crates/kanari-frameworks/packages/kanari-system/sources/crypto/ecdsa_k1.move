@@ -220,6 +220,10 @@ module kanari_system::ecdsa_k1 {
         use std::vector;
         use std::hash;
 
+        // SECURITY: check 65-byte length before `borrow_mut(sig, 64)` —
+        // previously a short `sig` aborted with a generic vector OOB instead
+        // of `ErrorInvalidSignature`.
+        assert!(vector::length(&sig) == 65, ErrorInvalidSignature);
         // Normalize the last byte of the signature to be 0 or 1.
         let v = vector::borrow_mut(&mut sig, 64);
         if (*v == 27) {

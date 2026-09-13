@@ -6,6 +6,9 @@ module kanari_system::url {
     use std::vector;
 
     const E_INVALID_URL: u64 = 0;
+    /// Max URL length to bound gas / storage DoS.
+    const MAX_URL_LENGTH: u64 = 2048;
+    const E_URL_TOO_LONG: u64 = 1;
 
     /// Standard Uniform Resource Locator (URL) string.
     struct Url has store, copy, drop {
@@ -13,7 +16,9 @@ module kanari_system::url {
         url: String,
     }
 
-    /// Create a `Url`, with no validation
+    /// Create a `Url` with no validation.
+    /// SECURITY: `new_unsafe` bypasses scheme checks — only use for
+    /// already-trusted or non-network identifiers. Prefer `new`.
     public fun new_unsafe(url: String): Url {
         Url { url }
     }
@@ -28,6 +33,7 @@ module kanari_system::url {
     /// Create a URL after validating its scheme and characters.
     public fun new(url: String): Url {
         assert!(is_valid(&url), E_INVALID_URL);
+        assert!((ascii::length(&url) as u64) <= MAX_URL_LENGTH, E_URL_TOO_LONG);
         Url { url }
     }
 
@@ -60,10 +66,14 @@ module kanari_system::url {
         if (i >= length) {
             return false
         };
+        if (length > MAX_URL_LENGTH) {
+            return false
+        };
         let cursor = i;
         while (cursor < length) {
             let character = *vector::borrow(bytes, cursor);
-            if (character == 32 || character == 9 || character == 10 || character == 13) {
+            // Reject whitespace, C0 controls, and DEL — prevents header/CRLF injection.
+            if (character <= 32 || character == 127) {
                 return false
             };
             cursor = cursor + 1;
@@ -76,8 +86,12 @@ module kanari_system::url {
         self.url
     }
 
-    /// Update the inner URL
+    /// Update the inner URL.
+    /// SECURITY: validates the new value — previously this bypassed `is_valid`,
+    /// letting callers swap a validated `https://` URL for `javascript:`/`data:` etc.
     public fun update(self: &mut Url, url: String) {
+        assert!(is_valid(&url), E_INVALID_URL);
+        assert!((ascii::length(&url) as u64) <= MAX_URL_LENGTH, E_URL_TOO_LONG);
         self.url = url;
     }
 }

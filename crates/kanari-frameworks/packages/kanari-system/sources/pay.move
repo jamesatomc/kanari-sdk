@@ -18,11 +18,12 @@ module kanari_system::pay {
 
     /// Split coin `self` to two coins, one with balance `split_amount`,
     /// and the remaining balance is left is `self`.
+    /// SECURITY: `>=` (not `>`) so the full balance can be split out.
     public entry fun split<T>(
         self: &mut Coin<T>, split_amount: u64, ctx: &mut TxContext
     ) {
         assert!(split_amount > 0, 1);
-        assert!(coin::value(self) > split_amount, 2);
+        assert!(coin::value(self) >= split_amount, 2);
         keep(coin::split(self, split_amount, ctx), ctx)
     }
 

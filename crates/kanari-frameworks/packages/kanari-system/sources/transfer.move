@@ -101,6 +101,19 @@ module kanari_system::transfer {
     /// Share an object (make it a shared object readable by anyone).
     public native fun share_object<T: key + store>(obj: T);
 
+    /// Share an object from outside its defining module
+    /// (Sui `public_share_object` API).
+    public fun public_share_object<T: key + store>(obj: T) {
+        share_object(obj)
+    }
+
+    /// Transfer ownership of `obj` (Sui `transfer` API).
+    /// Sui-exact semantics: no zero-address screen (Sui permits it).
+    /// Prefer `public_transfer` for the checked path.
+    public fun transfer<T: key + store>(obj: T, recipient: address) {
+        transfer_with_uid(obj, recipient)
+    }
+
     #[test]
     fun test_total_amount() {
         let transfers = vector::empty<Transfer>();

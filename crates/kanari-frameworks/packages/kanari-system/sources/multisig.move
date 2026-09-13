@@ -163,10 +163,27 @@ module kanari_system::multisig {
         wallet
     }
 
+    /// Event emitted on deposits for off-chain indexing.
+    struct DepositEvent has copy, drop {
+        wallet_id: address,
+        depositor: address,
+        amount: u64,
+        new_balance: u64,
+    }
+
+    /// Event emitted when the threshold changes.
+    struct ThresholdChangedEvent has copy, drop {
+        wallet_id: address,
+        old_threshold: u64,
+        new_threshold: u64,
+    }
+
     /// Deposit KANARI into the multisig wallet.
     /// Security: caller must own `funds`; amount must be >0 to prevent dust DoS.
-    public fun deposit(wallet: &mut MultisigWallet, funds: coin::Coin<KANARI>) {
-        assert!(coin::value(&funds) > 0, E_INSUFFICIENT_BALANCE);
+    public fun deposit(wallet: &mut MultisigWallet, funds: coin::Coin<KANARI>, ctx: &TxContext) {
+        let amount = coin::value(&funds);
+        assert!(amount > 0, E_INSUFFICIENT_BALANCE);
+        let depositor = tx_context::sender(ctx);
         if (dynamic_object_field::exists_(&wallet.id, WalletBalanceKey {})) {
             coin::join(
                 dynamic_object_field::borrow_mut<WalletBalanceKey, coin::Coin<KANARI>>(
@@ -180,28 +197,43 @@ module kanari_system::multisig {
             dynamic_object_field::add(&mut wallet.id, WalletBalanceKey {}, funds);
             object::save_object(wallet);
         };
+        event::emit(DepositEvent {
+            wallet_id: object::uid_address(&wallet.id),
+            depositor,
+            amount,
+            new_balance: balance(wallet),
+        });
     }
 
     /// Initialize custody storage for a wallet created before balance storage existed.
+    /// SECURITY: only an owner may initialize — otherwise anyone with a `&mut`
+    /// (e.g. via a shared-object path) could attach storage and grief accounting.
     public fun initialize_balance(wallet: &mut MultisigWallet, ctx: &mut TxContext) {
+        assert!(is_owner(wallet, tx_context::sender(ctx)), E_NOT_OWNER);
         if (!dynamic_object_field::exists_(&wallet.id, WalletBalanceKey {})) {
             dynamic_object_field::add(
                 &mut wallet.id,
                 WalletBalanceKey {},
                 coin::zero<KANARI>(ctx),
             );
+            object::save_object(wallet);
         };
     }
 
+    const E_BALANCE_NOT_INITIALIZED: u64 = 16;
+
+    /// SECURITY: aborts when custody storage is missing instead of returning 0 —
+    /// a silent 0 masks uninitialized wallets and can make unfunded proposals
+    /// look funded down the line. Call `initialize_balance` first.
     public fun balance(wallet: &MultisigWallet): u64 {
-        if (dynamic_object_field::exists_(&wallet.id, WalletBalanceKey {})) {
-            coin::value(dynamic_object_field::borrow<WalletBalanceKey, coin::Coin<KANARI>>(
-                &wallet.id,
-                WalletBalanceKey {},
-            ))
-        } else {
-            0
-        }
+        assert!(
+            dynamic_object_field::exists_(&wallet.id, WalletBalanceKey {}),
+            E_BALANCE_NOT_INITIALIZED
+        );
+        coin::value(dynamic_object_field::borrow<WalletBalanceKey, coin::Coin<KANARI>>(
+            &wallet.id,
+            WalletBalanceKey {},
+        ))
     }
 
     #[test_only]
@@ -528,6 +560,9 @@ module kanari_system::multisig {
             let new_owner = kanari_system::address::from_bytes(proposal.payload);
             assert!(new_owner != @0x0, E_ZERO_ADDRESS);
             assert!(!is_owner(wallet, new_owner), E_DUPLICATE_OWNER);
+            // SECURITY: re-enforce cap — otherwise repeated ADD_OWNER proposals
+            // can grow owners beyond MAX_OWNERS (create-time check bypass).
+            assert!(vector::length(&wallet.owners) < MAX_OWNERS, E_TOO_MANY_OWNERS);
             vector::push_back(&mut wallet.owners, new_owner);
             assert!(wallet.threshold <= (vector::length(&wallet.owners) as u64), E_INVALID_THRESHOLD);
             object::save_object(wallet);
@@ -547,7 +582,15 @@ module kanari_system::multisig {
                 i = i + 1;
             };
             if (wallet.threshold > (vector::length(&wallet.owners) as u64)) {
+                let old_threshold = wallet.threshold;
                 wallet.threshold = (vector::length(&wallet.owners) as u64);
+                // SECURITY: previously silent — auto-lowered threshold must be
+                // visible off-chain, otherwise signers overestimate security.
+                event::emit(ThresholdChangedEvent {
+                    wallet_id,
+                    old_threshold,
+                    new_threshold: wallet.threshold,
+                });
             };
             object::save_object(wallet);
             emit_owner_changed_event(wallet_id, 1, owner_to_remove);
@@ -555,8 +598,14 @@ module kanari_system::multisig {
             let new_threshold = decode_u64(&proposal.payload);
             assert!(new_threshold > 0, E_INVALID_THRESHOLD);
             assert!(new_threshold <= (vector::length(&wallet.owners) as u64), E_INVALID_THRESHOLD);
+            let old = wallet.threshold;
             wallet.threshold = new_threshold;
             object::save_object(wallet);
+            event::emit(ThresholdChangedEvent {
+                wallet_id,
+                old_threshold: old,
+                new_threshold,
+            });
         } else {
             assert!(false, E_INVALID_TRANSACTION_TYPE);
         };
@@ -566,9 +615,14 @@ module kanari_system::multisig {
         object::save_object(wallet);
     }
 
+    const E_MALFORMED_PAYLOAD: u64 = 15;
     fun decode_u64(bytes: &vector<u8>): u64 {
         let mut_bcs = kanari_system::bcs::new(*bytes);
-        kanari_system::bcs::peel_u64(&mut mut_bcs)
+        let v = kanari_system::bcs::peel_u64(&mut mut_bcs);
+        // SECURITY: reject trailing bytes — otherwise `threshold || garbage`
+        // payloads are malleable and decode ambiguously.
+        assert!(vector::length(&kanari_system::bcs::into_remainder_bytes(mut_bcs)) == 0, E_MALFORMED_PAYLOAD);
+        v
     }
     
     /// Emit owner changed event

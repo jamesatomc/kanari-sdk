@@ -9,7 +9,10 @@ module kanari_system::bag {
     // Attempted to destroy a non-empty bag
     const EBagNotEmpty: u64 = 1;
 
-    struct Bag has key, store, drop {
+    /// SECURITY: `drop` removed — a Bag with `drop` could be silently dropped
+    /// together with its dynamic fields, orphaning child objects.
+    /// Use `destroy_empty` to explicitly delete only empty bags.
+    struct Bag has key, store {
         /// the ID of this bag
         id: UID,
         /// the number of key-value pairs in the bag

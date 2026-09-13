@@ -10,7 +10,10 @@ module kanari_system::deny_list {
     use kanari_system::object;
     use kanari_system::tx_context::TxContext;
 
-    struct DenyList has key, store, drop {
+    /// SECURITY: `DenyList<phantom T>` is bound to its `DenyCap<T>` type.
+    /// Previously `DenyList` was non-generic, so *any* `DenyCap<T>` could
+    /// add/remove *any* list — cross-currency deny-list confusion.
+    struct DenyList<phantom T> has key, store, drop {
         id: object::UID,
         addresses: vector<address>,
     }
@@ -19,17 +22,17 @@ module kanari_system::deny_list {
         id: object::UID,
     }
 
-    public fun denylist_id(d: &DenyList): address {
+    public fun denylist_id<T>(d: &DenyList<T>): address {
         object::uid_address(&d.id)
     }
 
-    public fun new_denylist(ctx: &mut TxContext): DenyList {
+    public fun new_denylist<T>(ctx: &mut TxContext): DenyList<T> {
         DenyList { id: object::new(ctx), addresses: vector::empty<address>() }
     }
 
     #[test_only]
-    public fun new_denylist_for_testing<T>(ctx: &mut TxContext): DenyList {
-        new_denylist(ctx)
+    public fun new_denylist_for_testing<T>(ctx: &mut TxContext): DenyList<T> {
+        new_denylist<T>(ctx)
     }
 
     /// Create a DenyCap while constructing a regulated currency.  Keeping this
@@ -47,7 +50,7 @@ module kanari_system::deny_list {
     }
 
     #[test_only]
-    public fun destroy_for_testing(d: DenyList) {
+    public fun destroy_for_testing<T>(d: DenyList<T>) {
         let DenyList { id, addresses: _ } = d;
         object::delete(id);
     }
@@ -62,7 +65,7 @@ module kanari_system::deny_list {
     const EDenyListFull: u64 = 3;
     const MAX_DENY_LIST_SIZE: u64 = 1000;
 
-    public fun deny_list_add<T>(d: &mut DenyList, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
+    public fun deny_list_add<T>(d: &mut DenyList<T>, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
         assert!(addr != @0x0, EZeroAddress);
         assert!(vector::length(&d.addresses) < MAX_DENY_LIST_SIZE, EDenyListFull);
         let len = vector::length(&d.addresses);
@@ -75,7 +78,7 @@ module kanari_system::deny_list {
         object::save_object(d);
     }
 
-    public fun deny_list_remove<T>(d: &mut DenyList, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
+    public fun deny_list_remove<T>(d: &mut DenyList<T>, _cap: &DenyCap<T>, addr: address, _ctx: &mut TxContext) {
         assert!(addr != @0x0, EZeroAddress);
         let len = vector::length(&d.addresses);
         let i = 0;
@@ -90,12 +93,13 @@ module kanari_system::deny_list {
     }
 
     #[test_only]
-    public fun length(d: &DenyList): u64 {
+    public fun length<T>(d: &DenyList<T>): u64 {
         vector::length(&d.addresses)
     }
 
-    #[test_only]
-    public fun contains(d: &DenyList, addr: address): bool {
+    /// Returns true iff `addr` is on the list. Public (not just test-only)
+    /// so `coin::deny_list_contains` (Sui API) can use it on-chain.
+    public fun contains<T>(d: &DenyList<T>, addr: address): bool {
         let len = vector::length(&d.addresses);
         let i = 0;
         while (i < len) {
@@ -106,7 +110,7 @@ module kanari_system::deny_list {
     }
 
     #[test_only]
-    public fun get_address_at(d: &DenyList, index: u64): address {
+    public fun get_address_at<T>(d: &DenyList<T>, index: u64): address {
         *vector::borrow(&d.addresses, index)
     }
 }

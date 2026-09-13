@@ -33,10 +33,17 @@ module kanari_system::math {
     // Move Functions (Convenience functions on the Move VM)
     // =================================================================
 
-    /// Helper: Calculate (x * y) / z for u64 
-    /// Converts to u128 for Native calculation to prevent Overflow, then converts back to u64
+    const E_RESULT_OVERFLOW: u64 = 3;
+    const U64_MAX_U128: u128 = 18446744073709551615;
+
+    /// Helper: Calculate (x * y) / z for u64
+    /// Converts to u128 for Native calculation to prevent Overflow, then converts back to u64.
+    /// SECURITY: aborts on `z == 0` and when the 128-bit result does not fit in u64
+    /// (previously silently truncated via `as u64`).
     public fun mul_div_u64(x: u64, y: u64, z: u64): u64 {
+        assert!(z > 0, E_DIVIDE_BY_ZERO);
         let result = mul_div_u128((x as u128), (y as u128), (z as u128));
+        assert!(result <= U64_MAX_U128, E_RESULT_OVERFLOW);
         (result as u64)
     }
 
@@ -66,21 +73,24 @@ module kanari_system::math {
     // Advanced DeFi Security (Preventing Pool Loss)
     // =================================================================
 
-    /// Multiply and divide with round up for u64 
+    /// Multiply and divide with round up for u64
     /// (Commonly used when calculating the Amount In a user must pay into the Pool to get the desired Amount Out)
+    /// SECURITY: aborts on overflow of the rounded result (previously wrapped).
     public fun mul_div_round_up_u64(x: u64, y: u64, z: u64): u64 {
         let x_128 = (x as u128);
         let y_128 = (y as u128);
         let z_128 = (z as u128);
         assert!(z_128 > 0, E_DIVIDE_BY_ZERO);
-        
+
         let prod = x_128 * y_128;
         let res = prod / z_128;
-        
+
         // If there is a remainder, immediately round up by +1
         if (prod % z_128 == 0) {
+            assert!(res <= U64_MAX_U128, E_RESULT_OVERFLOW);
             (res as u64)
         } else {
+            assert!(res + 1 <= U64_MAX_U128, E_RESULT_OVERFLOW);
             ((res + 1) as u64)
         }
     }

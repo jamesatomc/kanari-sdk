@@ -10,6 +10,10 @@ module kanari_system::vec_set {
 
     /// This key does not exist in the map
     const EKeyDoesNotExist: u64 = 1;
+    /// Set exceeds the max size cap
+    const ESetTooLarge: u64 = 2;
+    /// All ops are O(N); cap size to bound gas grief on attacker-grown sets.
+    const MAX_VEC_SET_SIZE: u64 = 1000;
 
     /// A set data structure backed by a vector. The set is guaranteed not to
     /// contain duplicate keys. All operations are O(N) in the size of the set
@@ -34,6 +38,7 @@ module kanari_system::vec_set {
     /// Aborts if `key` is already present in `self`.
     public fun insert<K: copy + drop>(self: &mut VecSet<K>, key: K) {
         assert!(!contains(self, &key), EKeyAlreadyExists);
+        assert!(size(self) < MAX_VEC_SET_SIZE, ESetTooLarge);
         vector::push_back(&mut self.contents, key)
     }
 
